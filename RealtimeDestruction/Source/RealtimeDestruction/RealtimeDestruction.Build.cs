@@ -85,5 +85,16 @@ public class RealtimeDestruction : ModuleRules
 				}
 			);
 		}
+
+		// PostBuild: Copy plugin to LyraStarterGame
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			string SourcePath = @"$(ProjectDir)\Plugins\RealtimeDestruction";
+			string DestPath = @"$(ProjectDir)\..\LyraStarterGame\Plugins\RealtimeDestruction";
+
+			PostBuildSteps.Add($"xcopy /E /Y /I \"{SourcePath}\\Source\" \"{DestPath}\\Source\\\"");
+			PostBuildSteps.Add($"xcopy /Y \"{SourcePath}\\RealtimeDestruction.uplugin\" \"{DestPath}\\\"");
+			PostBuildSteps.Add("echo [PostBuild] RealtimeDestruction plugin copied to LyraStarterGame!");
+		}
 	}
 }
