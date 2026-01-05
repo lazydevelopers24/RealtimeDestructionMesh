@@ -200,7 +200,7 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 	Op.bIsPenetration = bIsPenetration;
 
 	// 기존 단일 메시 로직
-	if (ChunkMeshes.Num() == 0)
+	if (CellMeshComponents.Num() == 0)
 	{
 		// Add operation to queue
 		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal);
@@ -218,7 +218,7 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 		* 기존 구조는 BooleanProcessor에 캐싱된 OwnerComponent에서 FDynamicMesh3를 가져와서 연산하는 방식이었음
 		* 파괴 요청 시 CellMesh 넘겨줘야함
 		*/
-		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshes[Op.Request.ChunkIndex].Get());
+		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, CellMeshComponents[Op.Request.ChunkIndex].Get());
 	}
 
 	return Op.OpId;
@@ -1256,12 +1256,12 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 		}
 	}
 
-	for (int32 i = 0; i < ChunkMeshes.Num(); i++)
+	for (int32 i = 0; i < CellMeshComponents.Num(); i++)
 	{
-		ChunkIndexMap.Add(ChunkMeshes[i].Get(), i);
+		ChunkIndexMap.Add(CellMeshComponents[i].Get(), i);
 	}
 
-	int32 NumBits = (ChunkMeshes.Num() + 63) / 64;
+	int32 NumBits = (CellMeshComponents.Num() + 63) / 64;
 	ChunkBusyBits.Init(0ULL, NumBits);
 }
 

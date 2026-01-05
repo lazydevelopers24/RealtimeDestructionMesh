@@ -7,6 +7,7 @@
 #include <atomic>
 #include "DynamicMesh/DynamicMesh3.h"
 
+class UDynamicMeshComponent;
 ////////////////////////////////////////
 /******** forward declaration ********/
 namespace UE::Geometry

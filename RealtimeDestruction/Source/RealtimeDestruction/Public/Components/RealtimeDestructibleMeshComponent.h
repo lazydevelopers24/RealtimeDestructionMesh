@@ -87,6 +87,9 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	/** RTT 측정용 클라이언트 전송 시간 (클라이언트에서만 설정) */
 	UPROPERTY()
 	double ClientSendTime = 0.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="RealtimeDestructibleMesh")
+	int32 ChunkIndex = INDEX_NONE;
 };
 
 USTRUCT(BlueprintType)
