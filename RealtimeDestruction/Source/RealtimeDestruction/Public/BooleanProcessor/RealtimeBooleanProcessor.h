@@ -199,6 +199,7 @@ public:
 	void SetWorkInFlight(bool bEnabled) { bWorkInFlight = bEnabled; }
 
 	bool IsStale(int32 Gen) const { return Gen != BooleanGeneration.load(); }
+	bool IsStaleForChunk(int32 Gen, int32 ChunkIndex) const { return Gen != BooleanGenerations[ChunkIndex].load(); }
 
 	bool IsHoleMax() const { return CurrentHoleCount >= MaxHoleCount; }	
 
@@ -255,7 +256,12 @@ private:
 	 * 위 경우에서 메시가 새로 갱신되었는데 이전의 불리언 연산값을 반영하는 결과가 발생할 수 있음
 	 * 3번 단계에서 BooleanGeneration을 증가시키고 GT에서 Stale 검사를 하면 방어 가능
 	 */
+	// deprecated_realdestruction
+	// Legacy 코드, 기존의 단일 메시에 대한 Gen 관리용 멤버 변수
+	// Chunk 안정화 후 제거
 	std::atomic<int32>BooleanGeneration = 0;
+	// Chunk용
+	TArray<std::atomic<int32>> BooleanGenerations;
 
 	// Destruction Settings
 	// 프로세서를 소유한 컴포넌트로부터 받아옴

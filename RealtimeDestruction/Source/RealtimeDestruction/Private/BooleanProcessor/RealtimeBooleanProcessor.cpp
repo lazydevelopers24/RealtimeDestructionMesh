@@ -95,6 +95,12 @@ bool FRealtimeBooleanProcessor::Initialize(URealtimeDestructibleMeshComponent* O
 	
 	OwnerComponent->SettingAsyncOption(bEnableParallel, bEnableMultiWorkers);
 
+	int32 ChunkNum = OwnerComponent->GetChunkNum();
+	if (ChunkNum > 0)
+	{
+		BooleanGenerations.SetNumZeroed(ChunkNum);
+	}
+
 	LifeTime = MakeShared<FProcessorLifeTime, ESPMode::ThreadSafe>();
 	LifeTime->bAlive.store(true);
 	LifeTime->Processor.store(this);
@@ -753,8 +759,11 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 			{
 				continue;
 			}
-
-			// 배열에 주소를 저장해서 순서 유지
+			
+			/*
+			 * 맵에 주소가 없다 == 처음 들어온 Chunk
+			 * 처음 들어온 Chunk를 순서배열에 저장해서 순서 유지
+			 */			
 			if (!OpMap.Contains(TargetMesh))
 			{
 				OrderArray.Add(TargetMesh);
@@ -766,7 +775,7 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 				Batch.Reserve(MaxBatchSize);
 			}
 		
-			Batch.Add(MoveTemp(Op));			
+			Batch.Add(MoveTemp(Op));
 			DebugCount--;
 		}
 	};
@@ -805,7 +814,7 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 					}
 					else
 					{
-						const int32 Gen = ++BooleanGeneration;
+						const int32 Gen = ++BooleanGenerations[ChunkIndex];
 						StartBooleanWorkerAsyncForChunk(MoveTemp(*Batch), Gen);
 					}
 				}
@@ -817,6 +826,7 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 				 */
 				if (FBulletHoleBatch* Batch = OpMap.Find(TargetMesh))
 				{
+					UE_LOG(LogTemp, Warning, TEXT("Retry %d"), ChunkIndex);
 					Batch->ChunkIndex = ChunkIndex;
 					EnqueueRetryOps(Queue, MoveTemp(*Batch), TargetMesh, ChunkIndex, DebugCount);
 				}
@@ -1226,7 +1236,8 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				return;
 			}
 
-			if (Processor->IsStale(Gen))
+			const int32 ChunkIndex = Batch.ChunkIndex;
+			if (Processor->IsStaleForChunk(Gen, ChunkIndex))
 			{
 				SafeClearBusyBit();
 				return;
@@ -1240,8 +1251,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			}
 			
 			
-			// 타겟메시 복사
-			const int32 ChunkIndex = Batch.ChunkIndex;
+			// 타겟메시 복사			
 			FDynamicMesh3 WorkMesh;
 			if (!OwnerComponent->GetChunkMesh(WorkMesh, ChunkIndex))
 			{
@@ -1264,7 +1274,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			FDynamicMesh3 CombinedToolMesh;
 			for (int32 i = 0; i < BatchCount; i++)
 			{
-				if (Processor->IsStale(Gen))
+				if (Processor->IsStaleForChunk(Gen, ChunkIndex))
 				{
 					SafeClearBusyBit();
 					return;
@@ -1312,12 +1322,13 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 					break;
 				}
 			}
+			UE_LOG(LogTemp, Warning, TEXT("[Union] UnionCount %d BatchCount %d"), UnionCount, BatchCount);
 
 			FDynamicMeshAABBTree3 WorkMeshAABBTree(&WorkMesh);
 			bool bSubtractSuccess = false;
 			if (bCombinedValid && CombinedToolMesh.TriangleCount() > 0)
 			{
-				if (Processor->IsStale(Gen))
+				if (Processor->IsStaleForChunk(Gen, ChunkIndex))
 				{
 					SafeClearBusyBit();
 					return;
@@ -1326,19 +1337,19 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				/*
 				 * 실제 교차하는 지 검사
 				 */
-				// FAxisAlignedBox3d ToolBounds = CombinedToolMesh.GetBounds();
-				// if (ToolBounds.Volume() <= KINDA_SMALL_NUMBER)
-				// {
-				// 	SafeClearBusyBit();
-				// 	return;
-				// }
-				//
-				// bool bIsOverlap = WorkMeshAABBTree.TestIntersection(&CombinedToolMesh, ToolBounds);
-				// if (!bIsOverlap)
-				// {
-				// 	SafeClearBusyBit();
-				// 	return;
-				// }
+				FAxisAlignedBox3d ToolBounds = CombinedToolMesh.GetBounds();
+				if (ToolBounds.Volume() <= KINDA_SMALL_NUMBER)
+				{
+					SafeClearBusyBit();
+					return;
+				}
+				
+				bool bIsOverlap = WorkMeshAABBTree.TestIntersection(&CombinedToolMesh, ToolBounds);
+				if (!bIsOverlap)
+				{
+					SafeClearBusyBit();
+					return;
+				}
 
 				double CurrentSubDuration = FPlatformTime::Seconds();
 				
@@ -1367,7 +1378,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			// 메시 단순화
 			if (bSubtractSuccess)
 			{
-				if (Processor->IsStale(Gen))
+				if (Processor->IsStaleForChunk(Gen, ChunkIndex))
 				{
 					SafeClearBusyBit();
 					return;
@@ -1401,7 +1412,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 						return;
 					}
 
-					if (Processor->IsStale(Gen))
+					if (Processor->IsStaleForChunk(Gen, ChunkIndex))
 					{
 						return;
 					}

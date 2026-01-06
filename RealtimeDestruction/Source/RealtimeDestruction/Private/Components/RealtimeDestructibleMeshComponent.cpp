@@ -231,7 +231,10 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 		* 기존 구조는 BooleanProcessor에 캐싱된 OwnerComponent에서 FDynamicMesh3를 가져와서 연산하는 방식이었음
 		* 파괴 요청 시 CellMesh 넘겨줘야함
 		*/
-		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, CellMeshComponents[Op.Request.ChunkIndex].Get());
+		if (Op.Request.ChunkIndex != INDEX_NONE)
+		{
+			BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, CellMeshComponents[Op.Request.ChunkIndex].Get());
+		}
 
 		if (!bEnableMultiWorkers)
 		{
@@ -1399,6 +1402,13 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 			// [추가] 이번 프레임에 쌓인 요청이 있다면 여기서 처리 시작!
 			// 이 함수는 내부적으로 큐가 비었거나 워커가 꽉 찼으면 즉시 리턴하므로 비용이 매우 저렴합니다.
 			BooleanProcessor->KickProcessIfNeeded();
+		}
+	}
+	else
+	{
+		if (GetChunkNum() > 0)
+		{
+			BooleanProcessor->KickProcessIfNeededPerChunk();
 		}
 	}
 

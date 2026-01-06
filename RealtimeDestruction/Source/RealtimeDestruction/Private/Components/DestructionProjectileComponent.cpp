@@ -130,7 +130,7 @@ void UDestructionProjectileComponent::OnProjectileHit(
 		else
 		{
 			UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequestForCell %d"), ChunkNum);
-			ProcessDestructionRequestForCell(DestructComp, Hit);
+			ProcessDestructionRequestForChunk(DestructComp, Hit);
 		}
 	}
 	else
@@ -248,7 +248,7 @@ void UDestructionProjectileComponent::ProcessDestructionRequest(
 	}
 }
 
-void UDestructionProjectileComponent::ProcessDestructionRequestForCell(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit)
+void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit)
 {
 	if (!DestructComp)
 	{
@@ -261,200 +261,213 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForCell(URealtime
 		return;
 	}
 
-	// 여기까지 진입
-// 경계(Seam)부분 처리 코드
-#pragma region
-	// float ToolRadius = ToolShape == EDestructionToolShape::Cylinder ? CylinderRadius : SphereRadius;
-	// // 오버랩 영역에 여유분 추가
-	// float OverlappedRadius = ToolRadius * 1.1f;
-	//
-	// TArray<UPrimitiveComponent*> OverlappedComp;
-	// TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes;
-	// ObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECollisionChannel::ECC_WorldStatic));
-	// // 분리된 파편 물리 연산 시 필요
-	// ObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECollisionChannel::ECC_WorldDynamic));
-	//
-	// // 자신과 겹치는 경우 제외
-	// TArray<AActor*> ActorToIgnore;
-	// ActorToIgnore.Add(Owner);
-	//
-	// UKismetSystemLibrary::SphereOverlapComponents(
-	// 	this, Hit.ImpactPoint, OverlappedRadius, ObjectTypes,
-	// 	nullptr, ActorToIgnore, OverlappedComp);
-	//
-	// // 중복 방지용 Set
-	// TSet<int32> Targets;
-	// // 직접 피격된 청크 반드시 포함
-	// int32 HitChunkIndex = DestructComp->GetChunkIndex(Hit.GetComponent());
-	// if (HitChunkIndex != INDEX_NONE)
-	// {
-	// 	Targets.Add(HitChunkIndex);
-	// }
-	//
-	// const FBox ToolBounds = FBox::BuildAABB(Hit.ImpactPoint, FVector(OverlappedRadius));
-	// for (auto* PrimitiveComponent : OverlappedComp)
-	// {
-	// 	// 같은 액터가 아니면 생략
-	// 	if (PrimitiveComponent->GetOwner() != Owner)
-	// 	{
-	// 		continue;
-	// 	}
-	//
-	// 	// 오버랩된 청크 인덱스
-	// 	int32 OverlappedChunkIndex = DestructComp->GetChunkIndex(PrimitiveComponent);
-	// 	if (OverlappedChunkIndex == INDEX_NONE || Targets.Contains(OverlappedChunkIndex))
-	// 	{
-	// 		continue;
-	// 	}
-	//
-	// 	// 오버랩된 청크와 발사체의 Box끼리 검사
-	// 	// Box vs Box 검사, Box vs Spherer가 정확하지만 성능 우선 
-	// 	if (!PrimitiveComponent->Bounds.GetBox().Intersect(ToolBounds))
-	// 	{
-	// 		continue;
-	// 	}
-	//
-	// 	Targets.Add(OverlappedChunkIndex);
-	// }
-	//
-	// APawn* InstigatorPawn = Owner->GetInstigator();
-	// APlayerController* PC = InstigatorPawn ? Cast<APlayerController>(InstigatorPawn->GetController()) : nullptr;
-	// UDestructionNetworkComponent* NetworkComp = PC ? PC->FindComponentByClass<UDestructionNetworkComponent>() : nullptr;
-	// for (int32 TargetIndex : Targets)
-	// {
-	// 	FRealtimeDestructionRequest Request;
-	// 	Request.ImpactPoint = Hit.ImpactPoint;
-	// 	Request.ImpactNormal = Hit.ImpactNormal;
-	//
-	// 	if (!ToolMeshPtr.IsValid())
-	// 	{
-	// 		if (!EnsureToolMesh())
-	// 		{
-	// 			UE_LOG(LogTemp, Warning, TEXT("DestructionProjectileComponent: Tool mesh is invalid."));
-	// 		}
-	// 	}
-	// 	Request.ToolMeshPtr = ToolMeshPtr;
-	// 	Request.ToolShape = ToolShape;
-	//
-	// 	SetShapeParameters(Request);
-	//
-	// 	
-	//
-	// 	if (NetworkComp)
-	// 	{
-	// 		// NetworkComp가 서버/클라이언트/스탠드얼론 모두 처리
-	// 		NetworkComp->RequestDestruction(DestructComp, Request);
-	// 	}
-	// 	else
-	// 	{
-	// 		// NetworkComp가 없으면 로컬에서 직접 처리 (스탠드얼론 또는 설정 오류)
-	// 		DestructComp->RequestDestruction(Request);
-	// 	}
-	//
-	// 	// 즉시 피드백 표시 (데칼, 파티클) - 모든 네트워크 모드에서 로컬로 스폰
-	// 	if (bShowImmediateFeedback)
-	// 	{
-	// 		SpawnImmediateFeedback(Hit);
-	// 	}
-	//
-	// 	// 이벤트 브로드캐스트
-	// 	OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
-	//
-	// 	// 투사체 제거
-	// 	if (bDestroyOnHit)
-	// 	{
-	// 		Owner->Destroy();
-	// 	}
-	// }
-#pragma endregion
+	float ToolRadius = ToolShape == EDestructionToolShape::Cylinder ? CylinderRadius : SphereRadius;
+	// 오버랩 영역에 여유분 추가
+	float OverlappedRadius = ToolRadius * 1.1f;
+	
+	TArray<UPrimitiveComponent*> OverlappedComp;
+	TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes;
+	ObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECollisionChannel::ECC_WorldStatic));
+	// 분리된 파편 물리 연산 시 필요
+	ObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECollisionChannel::ECC_WorldDynamic));
+	
+	// 자신과 겹치는 경우 제외
+	TArray<AActor*> ActorToIgnore;
+	ActorToIgnore.Add(Owner);
 
-	// 파괴 요청 생성
-	FRealtimeDestructionRequest Request;
-	Request.ImpactPoint = Hit.ImpactPoint;
-	Request.ImpactNormal = Hit.ImpactNormal;
-	Request.ChunkIndex = DestructComp->GetChunkIndex(Hit.GetComponent());
-
-	if (!ToolMeshPtr.IsValid())
+	/*	 
+	 * OverlappedRadiusa의 안에 있는 ObjectTypes의 컴포넌트 수집해서 오버랩 검사
+	 */
+	UKismetSystemLibrary::SphereOverlapComponents(
+		this, Hit.ImpactPoint, OverlappedRadius, ObjectTypes,
+		nullptr, ActorToIgnore, OverlappedComp);
+	
+	// 중복 방지용 Set
+	TSet<int32> Targets;
+	
+	// 직접 피격된 청크 반드시 포함
+	int32 HitChunkIndex = DestructComp->GetChunkIndex(Hit.GetComponent());
+	if (HitChunkIndex != INDEX_NONE)
 	{
-		if (!EnsureToolMesh())
+		Targets.Add(HitChunkIndex);
+	}
+
+	AActor* TargetActor = DestructComp->GetOwner();
+	const FBox ToolBounds = FBox::BuildAABB(Hit.ImpactPoint, FVector(OverlappedRadius));
+	for (auto* PrimitiveComponent : OverlappedComp)
+	{
+		// 같은 액터가 아니면 생략
+		if (PrimitiveComponent->GetOwner() != TargetActor)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("DestructionProjectileComponent: Tool mesh is invalid."));
-		}	
-	}	
-	Request.ToolMeshPtr = ToolMeshPtr;
-	Request.ToolShape = ToolShape;
+			continue;
+		}
+	
+		// 오버랩된 청크 인덱스
+		int32 OverlappedChunkIndex = DestructComp->GetChunkIndex(PrimitiveComponent);
+		if (OverlappedChunkIndex == INDEX_NONE || Targets.Contains(OverlappedChunkIndex))
+		{
+			continue;
+		}
+	
+		// 오버랩된 청크와 발사체의 Box끼리 검사
+		// Box vs Box 검사, Box vs Spherer가 정확하지만 성능 우선 
+		if (!PrimitiveComponent->Bounds.GetBox().Intersect(ToolBounds))
+		{
+			continue;
+		}
 
-	SetShapeParameters(Request);
-
-	// 처리 시간 측정 시작
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
+		// if (GetWorld())
+		// {
+		// 	DrawDebugBox(GetWorld(), ToolBounds.GetCenter(), ToolBounds.GetExtent() + FVector(0.5f), FColor::Red,
+		// 		false, 2.0f, 0, 2.5f);
+		// 	DrawDebugBox(GetWorld(), PrimitiveComponent->Bounds.GetBox().GetCenter(),
+		// 		PrimitiveComponent->Bounds.GetBox().GetExtent() + FVector(0.5f), FColor::Blue, false,
+		// 		2.0f, 0, 2.5f);
+		// }
+		
+		Targets.Add(OverlappedChunkIndex);
 	}
 	
-	const double StartTime = FPlatformTime::Seconds();
-
-	// FPS 영향 측정을 위한 파괴 전 FPS 기록
-	float FPSBefore = 0.0f;
-	if (UDestructionDebugger* Debugger = World->GetSubsystem<UDestructionDebugger>())
-	{
-		FPSBefore = Debugger->GetCurrentFPS();
-	}
-
-	// Instigator(Pawn) → PlayerController → NetworkComp 찾기
 	APawn* InstigatorPawn = Owner->GetInstigator();
 	APlayerController* PC = InstigatorPawn ? Cast<APlayerController>(InstigatorPawn->GetController()) : nullptr;
 	UDestructionNetworkComponent* NetworkComp = PC ? PC->FindComponentByClass<UDestructionNetworkComponent>() : nullptr;
-
-	if (NetworkComp)
+	for (int32 TargetIndex : Targets)
 	{
-		// NetworkComp가 서버/클라이언트/스탠드얼론 모두 처리
-		NetworkComp->RequestDestruction(DestructComp, Request);
-	}
-	else
-	{
-		// NetworkComp가 없으면 로컬에서 직접 처리 (스탠드얼론 또는 설정 오류)
-		DestructComp->RequestDestruction(Request);
+		FRealtimeDestructionRequest Request;
+		Request.ImpactPoint = Hit.ImpactPoint;
+		Request.ImpactNormal = Hit.ImpactNormal;
+		Request.ChunkIndex = TargetIndex;
+
+		UE_LOG(LogTemp, Warning, TEXT("Seam %d"), Request.ChunkIndex);
+		if (!ToolMeshPtr.IsValid())
+		{
+			if (!EnsureToolMesh())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("DestructionProjectileComponent: Tool mesh is invalid."));
+			}
+		}
+		Request.ToolMeshPtr = ToolMeshPtr;
+		Request.ToolShape = ToolShape;
+	
+		SetShapeParameters(Request);
+	
+		if (NetworkComp)
+		{
+			// NetworkComp가 서버/클라이언트/스탠드얼론 모두 처리
+			NetworkComp->RequestDestruction(DestructComp, Request);
+		}
+		else
+		{
+			// NetworkComp가 없으면 로컬에서 직접 처리 (스탠드얼론 또는 설정 오류)
+			DestructComp->RequestDestruction(Request);
+		}
+	
+		// 즉시 피드백 표시 (데칼, 파티클) - 모든 네트워크 모드에서 로컬로 스폰
+		if (bShowImmediateFeedback)
+		{
+			SpawnImmediateFeedback(Hit);
+		}
+	
+		// 이벤트 브로드캐스트
+		OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
+	
+		// 투사체 제거
+		if (bDestroyOnHit)
+		{
+			Owner->Destroy();
+		}
 	}
 
-	// 처리 시간 측정 종료 (밀리초 단위)
-	const float ProcessTimeMs = static_cast<float>((FPlatformTime::Seconds() - StartTime) * 1000.0);
-
-	// FPS 영향 기록 (파괴 후 FPS와 비교)
-	if (UDestructionDebugger* Debugger = World->GetSubsystem<UDestructionDebugger>())
-	{
-		float FPSAfter = Debugger->GetCurrentFPS();
-		Debugger->RecordFPSImpact(FPSBefore, FPSAfter);
-	}
-
-	// 즉시 피드백 표시 (데칼, 파티클) - 모든 네트워크 모드에서 로컬로 스폰
-	if (bShowImmediateFeedback)
-	{
-		SpawnImmediateFeedback(Hit);
-	}
-
-	// 디버거에 파괴 기록
-	if (UDestructionDebugger* Debugger = World->GetSubsystem<UDestructionDebugger>())
-	{
-		Debugger->RecordDestruction(
-			Hit.ImpactPoint,
-			Hit.ImpactNormal,
-			HoleRadius,
-			Owner->GetInstigator(),
-			Hit.GetActor(),
-			ProcessTimeMs
-		);
-	}
-
-	// 이벤트 브로드캐스트
-	OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
-
-	// 투사체 제거
-	if (bDestroyOnHit)
-	{
-		Owner->Destroy();
-	}
+	/*
+	 * deprecated_realdestruction
+	 */
+	// 파괴 요청 생성
+	// FRealtimeDestructionRequest Request;
+	// Request.ImpactPoint = Hit.ImpactPoint;
+	// Request.ImpactNormal = Hit.ImpactNormal;
+	// Request.ChunkIndex = DestructComp->GetChunkIndex(Hit.GetComponent());
+	//
+	// if (!ToolMeshPtr.IsValid())
+	// {
+	// 	if (!EnsureToolMesh())
+	// 	{
+	// 		UE_LOG(LogTemp, Warning, TEXT("DestructionProjectileComponent: Tool mesh is invalid."));
+	// 	}	
+	// }	
+	// Request.ToolMeshPtr = ToolMeshPtr;
+	// Request.ToolShape = ToolShape;
+	//
+	// SetShapeParameters(Request);
+	//
+	// // 처리 시간 측정 시작
+	// UWorld* World = GetWorld();
+	// if (!World)
+	// {
+	// 	return;
+	// }
+	//
+	// const double StartTime = FPlatformTime::Seconds();
+	//
+	// // FPS 영향 측정을 위한 파괴 전 FPS 기록
+	// float FPSBefore = 0.0f;
+	// if (UDestructionDebugger* Debugger = World->GetSubsystem<UDestructionDebugger>())
+	// {
+	// 	FPSBefore = Debugger->GetCurrentFPS();
+	// }
+	//
+	// // Instigator(Pawn) → PlayerController → NetworkComp 찾기
+	// APawn* InstigatorPawn = Owner->GetInstigator();
+	// APlayerController* PC = InstigatorPawn ? Cast<APlayerController>(InstigatorPawn->GetController()) : nullptr;
+	// UDestructionNetworkComponent* NetworkComp = PC ? PC->FindComponentByClass<UDestructionNetworkComponent>() : nullptr;
+	//
+	// if (NetworkComp)
+	// {
+	// 	// NetworkComp가 서버/클라이언트/스탠드얼론 모두 처리
+	// 	NetworkComp->RequestDestruction(DestructComp, Request);
+	// }
+	// else
+	// {
+	// 	// NetworkComp가 없으면 로컬에서 직접 처리 (스탠드얼론 또는 설정 오류)
+	// 	DestructComp->RequestDestruction(Request);
+	// }
+	//
+	// // 처리 시간 측정 종료 (밀리초 단위)
+	// const float ProcessTimeMs = static_cast<float>((FPlatformTime::Seconds() - StartTime) * 1000.0);
+	//
+	// // FPS 영향 기록 (파괴 후 FPS와 비교)
+	// if (UDestructionDebugger* Debugger = World->GetSubsystem<UDestructionDebugger>())
+	// {
+	// 	float FPSAfter = Debugger->GetCurrentFPS();
+	// 	Debugger->RecordFPSImpact(FPSBefore, FPSAfter);
+	// }
+	//
+	// // 즉시 피드백 표시 (데칼, 파티클) - 모든 네트워크 모드에서 로컬로 스폰
+	// if (bShowImmediateFeedback)
+	// {
+	// 	SpawnImmediateFeedback(Hit);
+	// }
+	//
+	// // 디버거에 파괴 기록
+	// if (UDestructionDebugger* Debugger = World->GetSubsystem<UDestructionDebugger>())
+	// {
+	// 	Debugger->RecordDestruction(
+	// 		Hit.ImpactPoint,
+	// 		Hit.ImpactNormal,
+	// 		HoleRadius,
+	// 		Owner->GetInstigator(),
+	// 		Hit.GetActor(),
+	// 		ProcessTimeMs
+	// 	);
+	// }
+	//
+	// // 이벤트 브로드캐스트
+	// OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
+	//
+	// // 투사체 제거
+	// if (bDestroyOnHit)
+	// {
+	// 	Owner->Destroy();
+	// }
 }
 
 bool UDestructionProjectileComponent::EnsureToolMesh()
