@@ -180,9 +180,6 @@ void UDestructionNetworkComponent::ServerApplyDestruction_Implementation(
 		);
 	}
 
-	// 영향받는 Chunk 계산
-	TArray<uint8> AffectedChunks = DestructComp->FindAffectedChunks(ModifiedRequest.ImpactPoint, ModifiedRequest.ShapeParams.Radius);
-
 	// 리슨서버만: 호스트 화면에 파괴 표시
 	if (World && World->GetNetMode() == NM_ListenServer)
 	{
@@ -210,8 +207,8 @@ void UDestructionNetworkComponent::ServerApplyDestruction_Implementation(
 		if (DestructComp->bUseCompactMulticast)
 		{
 			TArray<FCompactDestructionOp> CompactOps;
-			// AffectedChunks 포함하여 압축
-			CompactOps.Add(FCompactDestructionOp::Compress(Op.Request, 0, AffectedChunks));
+			// 클라이언트가 계산한 ChunkIndex 포함하여 압축
+			CompactOps.Add(FCompactDestructionOp::Compress(Op.Request, 0));
 			DestructComp->MulticastApplyOpsCompact(CompactOps);
 		}
 		else
@@ -272,9 +269,6 @@ void UDestructionNetworkComponent::ServerApplyDestructionCompact_Implementation(
 		);
 	}
 
-	// 영향받는 Chunk 계산
-	TArray<uint8> AffectedChunks = DestructComp->FindAffectedChunks(Request.ImpactPoint, Request.ShapeParams.Radius);
-
 	// 리슨서버만: 호스트 화면에 파괴 표시
 	if (World && World->GetNetMode() == NM_ListenServer)
 	{
@@ -302,8 +296,8 @@ void UDestructionNetworkComponent::ServerApplyDestructionCompact_Implementation(
 		if (DestructComp->bUseCompactMulticast)
 		{
 			TArray<FCompactDestructionOp> CompactOps;
-			// AffectedChunks 포함하여 압축
-			CompactOps.Add(FCompactDestructionOp::Compress(Op.Request, 0, AffectedChunks));
+			// 클라이언트가 계산한 ChunkIndex 포함하여 압축
+			CompactOps.Add(FCompactDestructionOp::Compress(Op.Request, 0));
 			DestructComp->MulticastApplyOpsCompact(CompactOps);
 		}
 		else

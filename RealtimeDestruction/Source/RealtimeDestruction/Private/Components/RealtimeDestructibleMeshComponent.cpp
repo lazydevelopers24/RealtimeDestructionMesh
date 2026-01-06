@@ -27,7 +27,7 @@
 
 bool URealtimeDestructibleMeshComponent::bIsTraceEnabled = false;
 
-FCompactDestructionOp FCompactDestructionOp::Compress(const FRealtimeDestructionRequest& Request, int32 Seq, const TArray<uint8>& InAffectedChunkIds)
+FCompactDestructionOp FCompactDestructionOp::Compress(const FRealtimeDestructionRequest& Request, int32 Seq)
 {
 	FCompactDestructionOp Compact;
 
@@ -45,8 +45,10 @@ FCompactDestructionOp FCompactDestructionOp::Compress(const FRealtimeDestruction
 	Compact.ToolShape = Request.ToolShape;
 	Compact.ShapeParams = Request.ShapeParams;
 
-	// 영향받는 Chunk ID 복사
-	Compact.AffectedChunkIds = InAffectedChunkIds;
+	// ChunkIndex 저장 (클라이언트가 계산한 값)
+	Compact.ChunkIndex = (Request.ChunkIndex >= 0 && Request.ChunkIndex < 256)
+		? static_cast<uint8>(Request.ChunkIndex)
+		: 0;
 
 	return Compact;
 }
@@ -76,6 +78,9 @@ FRealtimeDestructionRequest FCompactDestructionOp::Decompress() const
 		Request.Depth = ShapeParams.Height;
 		break;
 	}
+
+	// ChunkIndex 복원 (클라이언트가 계산한 값)
+	Request.ChunkIndex = static_cast<int32>(ChunkIndex);
 
 	return Request;
 }
@@ -2505,50 +2510,6 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 //////////////////////////////////////////////////////////////////////////
 // Server Validation (서버 검증)
 //////////////////////////////////////////////////////////////////////////
-
-TArray<uint8> URealtimeDestructibleMeshComponent::FindAffectedChunks(const FVector& ImpactPoint, float Radius) const//코드 확인 필요
-{
-	TArray<uint8> AffectedChunks;
-
-	// Cell 메시가 없으면 빈 배열 반환
-	if (!bUseCellMeshes || CellMeshComponents.Num() == 0)
-	{
-		return AffectedChunks;
-	}
-
-	// 파괴 영역 Sphere
-	const FSphere DestructionSphere(ImpactPoint, Radius);
-
-	// 각 Chunk(CellMeshComponent)와 충돌 검사
-	for (int32 i = 0; i < CellMeshComponents.Num(); i++)
-	{
-		if (!CellMeshComponents[i])
-		{
-			continue;
-		}
-
-		// CellBounds 사용 (있으면)
-		FBox ChunkBounds;
-		if (CellBounds.IsValidIndex(i))
-		{
-			// 로컬 바운드를 월드 좌표로 변환
-			ChunkBounds = CellBounds[i].TransformBy(GetComponentTransform());
-		}
-		else
-		{
-			// CellBounds 없으면 컴포넌트 바운드 사용
-			ChunkBounds = CellMeshComponents[i]->Bounds.GetBox();
-		}
-
-		// Sphere-AABB 충돌 검사
-		if (FMath::SphereAABBIntersection(DestructionSphere, ChunkBounds))
-		{
-			AffectedChunks.Add(static_cast<uint8>(i));
-		}
-	}
-
-	return AffectedChunks;
-}
 
 bool URealtimeDestructibleMeshComponent::ValidateDestructionRequest(
 	const FRealtimeDestructionRequest& Request,

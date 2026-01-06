@@ -151,12 +151,12 @@ struct REALTIMEDESTRUCTION_API FCompactDestructionOp
 	UPROPERTY()
 	FDestructionToolShapeParams ShapeParams;
 
-	// 영향받는 Chunk ID 목록 (서버가 계산, 보통 1-4개)
+	// Chunk Index (클라이언트가 계산, 1 byte)
 	UPROPERTY()
-	TArray<uint8> AffectedChunkIds;
+	uint8 ChunkIndex = 0;
 
 	// 압축
-	static FCompactDestructionOp Compress(const FRealtimeDestructionRequest& Request, int32 Seq, const TArray<uint8>& InAffectedChunkIds = TArray<uint8>());
+	static FCompactDestructionOp Compress(const FRealtimeDestructionRequest& Request, int32 Seq);
 
 	// 압축 해제
 	FRealtimeDestructionRequest Decompress() const;
@@ -332,14 +332,6 @@ public:
 	 */
 	bool ValidateDestructionRequest(const FRealtimeDestructionRequest& Request, APlayerController* RequestingPlayer, EDestructionRejectReason& OutReason);
 
-	/**
-	 * 영향받는 Chunk ID 목록 계산
-	 * @param ImpactPoint 충돌 위치 (월드 좌표)
-	 * @param Radius 파괴 반경
-	 * @return 영향받는 Chunk ID 배열
-	 */
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Network")
-	TArray<uint8> FindAffectedChunks(const FVector& ImpactPoint, float Radius) const;
 
 	/** 서버 검증: 사거리 설정 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Validation")
@@ -404,7 +396,7 @@ public:
 	
 	/** Clustering 변수 */
 	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
-	UBulletClusterComponent* BulletClusterComponent;
+	TObjectPtr<UBulletClusterComponent> BulletClusterComponent;
 	
 	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
 	bool bEnableClustering;
