@@ -14,7 +14,13 @@
 #include "FractureSettings.h"
 #include "FractureEngineFracturing.h"
 
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
+
 #include <ThirdParty/skia/skia-simplify.h>
+
+#include "BulletClusterComponent.h"
 
 //////////////////////////////////////////////////////////////////////////
 // FCompactDestructionOp 구현 (언리얼 내장 NetQuantize 사용)
@@ -313,6 +319,11 @@ bool URealtimeDestructibleMeshComponent::ApplyOpImmediate(const FRealtimeDestruc
 
 // Projectile에서 호출해줌
 bool URealtimeDestructibleMeshComponent::RequestDestruction(const FRealtimeDestructionRequest& Request)
+{ 
+	return ExecuteDestructionInternal(Request);
+}
+
+bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealtimeDestructionRequest& Request)
 {
 	if (CurrentHoleCount >= MaxHoleCount)
 	{
@@ -341,7 +352,7 @@ bool URealtimeDestructibleMeshComponent::RequestDestruction(const FRealtimeDestr
 			/*
 			 * deprecated_realdestruction
 			 */
-			 // Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
+			// Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
 			FVector Offset = Request.ImpactNormal * (-AdjustPenetration * 0.5f);
 			PenetrationRequest.ImpactPoint = Request.ImpactPoint + Offset;
 			PenetrationRequest.ToolShape = EDestructionToolShape::Cylinder;
@@ -1179,6 +1190,23 @@ void URealtimeDestructibleMeshComponent::UpdateDebugInfo()
 #endif
 }
 
+void URealtimeDestructibleMeshComponent::SetSourceMeshEnabled(bool bEnabled)
+{
+	SetVisibility(bEnabled, false);
+	if (bEnabled)
+	{
+		SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics); 
+		
+	}
+	else
+	{
+		SetCollisionEnabled(ECollisionEnabled::NoCollision); 
+	}
+	SetComponentTickEnabled(bEnabled);
+	
+	// 물리 상태 강제 갱신
+	RecreatePhysicsState();
+}
 void URealtimeDestructibleMeshComponent::OnRegister()
 {
 	Super::OnRegister();
@@ -1191,7 +1219,7 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 	if (SourceStaticMesh && !bIsInitialized)
 	{
 		InitializeFromStaticMeshInternal(SourceStaticMesh, false);
-	}
+	} 
 }
 
 void URealtimeDestructibleMeshComponent::InitializeComponent()
@@ -1263,6 +1291,12 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 
 	int32 NumBits = (CellMeshComponents.Num() + 63) / 64;
 	ChunkBusyBits.Init(0ULL, NumBits);
+
+	// 런타임 시작 시 CellGraph가 구축되지 않았으면 구축
+	if (bCellMeshesValid && !CellGraph.IsGraphBuilt())
+	{
+		BuildCellGraph();
+	}
 }
 
 void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -1599,7 +1633,7 @@ int32 URealtimeDestructibleMeshComponent::BuildCellMeshesFromGeometryCollection(
 		UE_LOG(LogTemp, Warning, TEXT("BuildCellMeshesFromGeometryCollection: No transforms in GeometryCollection."));
 		return 0;
 	}
-
+	 
 	// Geometry Group에서 실제 메시 데이터 가져오기
 	const TManagedArray<FVector3f>& Vertices = GC.Vertex;
 	const TManagedArray<int32>& BoneMap = GC.BoneMap;
@@ -1692,20 +1726,20 @@ int32 URealtimeDestructibleMeshComponent::BuildCellMeshesFromGeometryCollection(
 	{
 		const TArray<int32>& MyVertexIndices = VertexIndicesByTransform[TransformIdx];
 		const TArray<FTriangleData>& MyTriangles = TrianglesByTransform[TransformIdx];
-
-		// 빈 조각 스킵
-		if (MyVertexIndices.Num() == 0 || MyTriangles.Num() == 0)
+		 
+		// 빈 조각 + 첫 번째 스킵
+		if (TransformIdx == 0 || MyVertexIndices.Num() == 0 || MyTriangles.Num() == 0)
 		{
 			CellMeshComponents.Add(nullptr);
 			continue;
 		}
 
-		// DynamicMeshComponent 생성
-
+		// DynamicMeshComponent 생성 ( RF_Transactional : Ctrl Z 지원) )
 		UDynamicMeshComponent* CellComp = NewObject<UDynamicMeshComponent>(
 			GetOwner(),
 			UDynamicMeshComponent::StaticClass(),
-			*FString::Printf(TEXT("Cell_%d"), TransformIdx)
+			*FString::Printf(TEXT("Cell_%d"), TransformIdx),
+			RF_Transactional
 		);
 
 		if (!CellComp)
@@ -1715,10 +1749,15 @@ int32 URealtimeDestructibleMeshComponent::BuildCellMeshesFromGeometryCollection(
 			continue;
 		}
 
-		// Compoment기본 설정
-		CellComp->SetupAttachment(this);
-		CellComp->SetRelativeTransform(FTransform::Identity);
 
+		// Compoment기본 설정
+		//CellComp->SetupAttachment(this);
+		if (AActor* Owner = GetOwner())
+		{
+			CellComp->SetupAttachment(Owner->GetRootComponent());
+		}
+		//CellComp->SetRelativeTransform(FTransform::Identity);
+			 
 		// Collision 설정
 		CellComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
@@ -1847,12 +1886,53 @@ int32 URealtimeDestructibleMeshComponent::BuildCellMeshesFromGeometryCollection(
 				}
 			}
 		}
+		 
+
+		// [핵심 해결책 1] 이 컴포넌트는 에디터 레벨 인스턴스의 일부라고 명시합니다.
+// 이 설정이 없으면 Actor를 움직일 때마다 컴포넌트가 초기화되거나 연결이 끊깁니다.
+		CellComp->CreationMethod = EComponentCreationMethod::Instance;
+
+		// [핵심 해결책 2] 부착 대상을 명확히 합니다.
+		// Actor의 Root보다는, 현재 부서지고 있는 '이 컴포넌트(this)'에 붙이는 것이 
+		// 계층 구조상 더 안전하며, 부모의 Transform을 그대로 상속받기 좋습니다.
+		CellComp->SetupAttachment(this);
+		// 만약 이미 Register된 상태라면 SetupAttachment 대신 아래를 사용하세요:
+		// CellComp->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+
+		// 위치 초기화 (부모 기준 0,0,0 = 부모와 겹침)
+		CellComp->SetRelativeTransform(FTransform::Identity);
+
+
+		// 등록 
+		CellComp->RegisterComponent();
 
 		// 메시 변경 알림
 		CellComp->NotifyMeshUpdated();
-		CellComp->MarkRenderStateDirty();
-		// 등록 
-		CellComp->RegisterComponent();
+#if WITH_EDITOR
+		// 에디터에게 이 컴포넌트 관리를 위임
+		if (AActor* Owner = GetOwner())
+		{
+			Owner->AddInstanceComponent(CellComp);
+		}
+#endif
+		//CellComp->AttachToComponent(this, FAttachmentTransformRules::SnapToTargetIncludingScale);
+//		if (AActor* Owner = GetOwner())
+//		{
+//			USceneComponent* AttachTarget = Owner->GetRootComponent();
+//			if (AttachTarget)
+//			{
+//				CellComp->AttachToComponent(AttachTarget, FAttachmentTransformRules::KeepRelativeTransform);
+//				CellComp->SetRelativeTransform(FTransform::Identity);
+//			}
+//#if WITH_EDITOR
+//			// 에디터에서 인스턴스 컴포넌트로 등록 (Details 패널에 표시됨) 
+//			Owner->AddInstanceComponent(CellComp);
+//			 
+//			// 에디터에서 컴포넌트 트리 갱신
+//			//CellComp->MarkRenderStateDirty();
+//#endif
+//
+//		}
 
 		CellMeshComponents.Add(CellComp);
 		++ExtractedCount;
@@ -1919,11 +1999,124 @@ int32 URealtimeDestructibleMeshComponent::BuildCellMeshesFromGeometryCollection(
 				Mesh.Clear();
 				});
 		}
+		//SetVisibility(false, false);
+		SetSourceMeshEnabled(false);
 
 		NotifyMeshUpdated();
 		MarkRenderStateDirty();
+
+		// CellGraph 및 StructuralIntegritySystem 초기화
+		BuildCellGraph();
+
+#if WITH_EDITOR
+		// 에디터 뷰포트 및 Details 패널 갱신
+		if (AActor* Owner = GetOwner())
+		{
+			Owner->Modify();
+
+			// 에디터 뷰포트 갱신 강제
+			if (GEditor)
+			{
+				GEditor->RedrawLevelEditingViewports(true);
+			}
+		}
+
+#endif
 	}
 	return ExtractedCount;
+}
+
+bool URealtimeDestructibleMeshComponent::BuildCellGraph()
+{
+	// 1. 사전 조건 검사
+	if (!bCellMeshesValid || CellMeshComponents.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("BuildCellGraph: Cell meshes not valid. Call BuildCellMeshesFromGeometryCollection first."));
+		return false;
+	}
+
+	if (SliceCount.X <= 0 || SliceCount.Y <= 0 || SliceCount.Z <= 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("BuildCellGraph: Invalid SliceCount (%d, %d, %d)"),
+			SliceCount.X, SliceCount.Y, SliceCount.Z);
+		return false;
+	}
+
+	const int32 ExpectedChunkCount = SliceCount.X * SliceCount.Y * SliceCount.Z;
+	if (CellMeshComponents.Num() != ExpectedChunkCount)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("BuildCellGraph: Chunk count mismatch. Expected %d (from SliceCount), got %d"),
+			ExpectedChunkCount, CellMeshComponents.Num());
+		return false;
+	}
+
+	// 2. SourceStaticMesh 바운드 가져오기
+	FBox MeshBounds(ForceInit);
+	if (SourceStaticMesh)
+	{
+		MeshBounds = SourceStaticMesh->GetBoundingBox();
+	}
+	else
+	{
+		// SourceStaticMesh가 없으면 모든 Cell 메시에서 바운드 계산
+		for (const UDynamicMeshComponent* CellComp : CellMeshComponents)
+		{
+			if (CellComp)
+			{
+				MeshBounds += CellComp->Bounds.GetBox();
+			}
+		}
+	}
+
+	if (!MeshBounds.IsValid)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("BuildCellGraph: Failed to compute mesh bounds"));
+		return false;
+	}
+
+	// 3. 그리드 인덱스 -> 청크 ID 매핑 생성
+	// GeometryCollection 분할 순서가 그리드 순서와 동일하다고 가정
+	TArray<int32> ChunkIdByGridIndex;
+	ChunkIdByGridIndex.SetNum(ExpectedChunkCount);
+	for (int32 i = 0; i < ExpectedChunkCount; ++i)
+	{
+		ChunkIdByGridIndex[i] = i;
+	}
+
+	// 4. 분할 평면 생성
+	CellGraph.Reset();
+	CellGraph.BuildDivisionPlanesFromGrid(MeshBounds, SliceCount, ChunkIdByGridIndex);
+
+	// 5. 청크 메시 포인터 배열 생성
+	TArray<FDynamicMesh3*> ChunkMeshes;
+	ChunkMeshes.SetNum(CellMeshComponents.Num());
+	for (int32 i = 0; i < CellMeshComponents.Num(); ++i)
+	{
+		if (CellMeshComponents[i])
+		{
+			ChunkMeshes[i] = CellMeshComponents[i]->GetMesh();
+		}
+		else
+		{
+			ChunkMeshes[i] = nullptr;
+		}
+	}
+
+	// 6. 그래프 구축
+	const float PlaneTolerance = 0.1f;
+	const float RectTolerance = 0.1f;
+	CellGraph.BuildGraph(ChunkMeshes, PlaneTolerance, RectTolerance, FloorHeightThreshold);
+
+	// 7. IntegritySystem 초기화
+	FStructuralIntegrityInitData InitData = CellGraph.BuildInitDataFromGraph();
+	FStructuralIntegritySettings Settings;
+	IntegritySystem.Reset();
+	IntegritySystem.Initialize(InitData, Settings);
+
+	UE_LOG(LogTemp, Log, TEXT("BuildCellGraph: Built graph with %d nodes, %d anchors"),
+		CellGraph.GetNodeCount(), IntegritySystem.GetAnchorCount());
+
+	return CellGraph.IsGraphBuilt();
 }
 
 FBox URealtimeDestructibleMeshComponent::CalculateCellBounds(int32 CellId) const
@@ -1973,6 +2166,8 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, SourceStaticMesh))
 	{
+		UE_LOG(LogTemp, Log, TEXT("PostEditChangeProperty Mesh Name: %s"), *SourceStaticMesh.GetName());
+
 		// 기존 CellMeshComponents 정리
 		for (UDynamicMeshComponent* Comp : CellMeshComponents)
 		{
@@ -2107,7 +2302,56 @@ void URealtimeDestructibleMeshComponent::AutoFractureAndAssign()
 
 	// Cell 메시 빌드
 	int32 CellCount = BuildCellMeshesFromGeometryCollection();
+
+	if (AActor* Owner = GetOwner())
+	{
+		Owner->Modify(); 
+		Owner->RerunConstructionScripts();
+	}
+
 	return;
+}
+void URealtimeDestructibleMeshComponent::RevertFracture()
+{
+	// Cell로 나눠진 상태가 아니면  return
+	if (!bUseCellMeshes && CellMeshComponents.Num() == 0)
+	{
+		return;
+	}
+
+	// Ctrl Z를 위한 Snap Shot
+	if (AActor* Owner = GetOwner())
+	{
+		Owner->Modify();
+		this->Modify();
+	}
+
+	// 생성된 Cell Components
+	for (UDynamicMeshComponent* Cell : CellMeshComponents)
+	{
+		if (Cell)
+		{
+			Cell->DestroyComponent();
+		}
+	}
+
+	CellMeshComponents.Empty();
+	CellBounds.Empty();
+
+	// 원본 메쉬로 데이터 리셋 
+	bUseCellMeshes = false;
+	bCellMeshesValid = false;
+	//SetVisibility(true, true);
+	SetSourceMeshEnabled(true);
+
+	ResetToSourceMesh();
+
+	// Editor 강제 갱신
+	if (AActor* Owner = GetOwner())
+	{
+		Owner->RerunConstructionScripts();
+	} 
+
 }
 #endif
 
@@ -2118,10 +2362,11 @@ FRealtimeDestructibleMeshComponentInstanceData::FRealtimeDestructibleMeshCompone
 	if (SourceComponent)
 	{
 		SavedSourceStaticMesh = SourceComponent->SourceStaticMesh;
-		bSavedIsInitialized = SourceComponent->bIsInitialized;
-
-		UE_LOG(LogTemp, Log, TEXT("InstanceData 저장: %s"),
-			SavedSourceStaticMesh ? *SavedSourceStaticMesh->GetName() : TEXT("None"));
+		bSavedIsInitialized = SourceComponent->bIsInitialized; 
+		bSavedUseCellMeshes = SourceComponent->bUseCellMeshes;
+		bSavedCellMeshesValid = SourceComponent->bCellMeshesValid;
+	
+		SavedCellComponents = SourceComponent->CellMeshComponents;
 	}
 }
 
@@ -2129,17 +2374,47 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 	UActorComponent* Component,
 	const ECacheApplyPhase CacheApplyPhase)
 {
+	UE_LOG(LogTemp, Warning, TEXT("ApplyToComponent"));
 	Super::ApplyToComponent(Component, CacheApplyPhase);
 
 	if (URealtimeDestructibleMeshComponent* DestructComp = Cast<URealtimeDestructibleMeshComponent>(Component))
 	{
 		// BP 기본값 대신 저장된 인스턴스 값으로 복원
-		DestructComp->SourceStaticMesh = SavedSourceStaticMesh;
+		DestructComp->SourceStaticMesh = SavedSourceStaticMesh; 
 
-		UE_LOG(LogTemp, Log, TEXT("InstanceData 복원: %s"),
-			SavedSourceStaticMesh ? *SavedSourceStaticMesh->GetName() : TEXT("None"));
+		// Cell 모드 상태 복원
+		DestructComp->bUseCellMeshes = bSavedUseCellMeshes;
+		DestructComp->bCellMeshesValid = bSavedCellMeshesValid;
+		DestructComp->CellMeshComponents = SavedCellComponents;
 
-		// 메시 재초기화
+		for (int32 i = DestructComp->CellMeshComponents.Num() - 1; i >= 0; --i)
+		{
+			UDynamicMeshComponent* Cell = DestructComp->CellMeshComponents[i];
+
+			// 유효한 Cell만 처리
+			if (Cell && Cell->IsValidLowLevel())
+			{
+				// 이미 붙어있다면 패스, 아니라면 다시 붙임
+				if (Cell->GetAttachParent() != DestructComp)
+				{
+				  	// 새로 생성된 컴포넌트(DestructComp)에 자식들을 다시 붙여줍니다.
+					// KeepRelativeTransform을 써야 원래 위치(로컬 좌표)를 유지합니다.
+					Cell->AttachToComponent(DestructComp, FAttachmentTransformRules::KeepRelativeTransform);
+				}
+			}
+			else
+			{
+				// 유효하지 않은 컴포넌트는 배열에서 제거
+				DestructComp->CellMeshComponents.RemoveAt(i);
+			} 
+		}
+		// Cell 모드가 활성화 되어 있고, 유효하면 재초기화 스킵
+		if (bSavedUseCellMeshes && bSavedCellMeshesValid)
+		{
+			return;
+		}
+
+		// Cell 모드가 아닐 때, 메시 재초기화
 		if (SavedSourceStaticMesh)
 		{
 			DestructComp->bIsInitialized = false;  // 강제 재초기화
@@ -2150,5 +2425,7 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 
 TStructOnScope<FActorComponentInstanceData> URealtimeDestructibleMeshComponent::GetComponentInstanceData() const
 {
+	UE_LOG(LogTemp, Warning, TEXT("GetComponentInstanceData"));
+
 	return MakeStructOnScope<FActorComponentInstanceData, FRealtimeDestructibleMeshComponentInstanceData>(this);
-}
+}	

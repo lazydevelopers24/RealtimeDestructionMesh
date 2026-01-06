@@ -6,6 +6,8 @@
 #include "Components/DynamicMeshComponent.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "DestructionTypes.h"
+#include "StructuralIntegrity/RealDestructCellGraph.h"
+#include "StructuralIntegrity/StructuralIntegritySystem.h"
 #include "RealtimeDestructibleMeshComponent.generated.h"
 
 class UGeometryCollection;
@@ -15,6 +17,8 @@ class UStaticMeshComponent;
 class UMaterialInterface;
 class FLifetimeProperty;
 class FRealtimeBooleanProcessor;
+
+class UBulletClusterComponent;
 
 //////////////////////////////////////////////////////////////////////////
 // Enum Types
@@ -183,6 +187,16 @@ public:
 	// 필요한 다른 프로퍼티도 저장 가능
 	UPROPERTY()
 	bool bSavedIsInitialized = false;
+
+	UPROPERTY()
+	bool bSavedUseCellMeshes = false;
+
+	UPROPERTY()
+	bool bSavedCellMeshesValid = false;
+
+
+	UPROPERTY() 
+	TArray<TObjectPtr<UDynamicMeshComponent>> SavedCellComponents;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -237,6 +251,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	bool RequestDestruction(const FRealtimeDestructionRequest& Request);
 
+	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
+	bool ExecuteDestructionInternal(const FRealtimeDestructionRequest& Request);
+	
 	// Options
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Options")
 	void SetBooleanOptions(const FGeometryScriptMeshBooleanOptions& Options);
@@ -342,6 +359,17 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "RealtimeDestructibleMesh|Events")
 	FOnDestructError OnError;
 
+	
+	/** Clustering 변수 */
+	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	UBulletClusterComponent* BulletClusterComponent;
+	
+	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	bool bEnableClustering;
+	
+	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	float ClusteringThreshold;
+	
 public:
 	/** 데이터 유지를 위한 함수 */
 	virtual TStructOnScope<FActorComponentInstanceData> GetComponentInstanceData() const override;
@@ -395,6 +423,7 @@ public:
 	FTimerHandle CollisionUpdateTimerHandle;
 
 	/*************************************************/
+	void SetSourceMeshEnabled(bool bSwitch);
 protected:
 	//////////////////////////////////////////////////////////////////////////
 	// Mesh Settings
@@ -574,6 +603,12 @@ protected:
 	/** Cell 메시가 유효한지 (빌드 완료 여부) */
 	bool bCellMeshesValid = false;
 
+	/** Cell 연결 그래프 (기하학적 연결성 관리) */
+	FRealDestructCellGraph CellGraph;
+
+	/** 구조적 무결성 시스템 (Anchor 연결성 분석) */
+	FStructuralIntegritySystem IntegritySystem;
+
 public:
 	/**
 	 * GeometryCollection에서 DynamicMesh 추출
@@ -586,6 +621,24 @@ public:
 	/** Cell 메시 유효 여부 */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
 	bool IsCellMeshesValid() const { return bCellMeshesValid; }
+
+	/**
+	 * CellGraph 및 StructuralIntegritySystem 초기화
+	 * BuildCellMeshesFromGeometryCollection 내부에서 자동 호출됨
+	 * @return 그래프 구축 성공 여부
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh")
+	bool BuildCellGraph();
+
+	/** CellGraph 초기화 상태 확인 */
+	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
+	bool IsCellGraphBuilt() const { return CellGraph.IsGraphBuilt(); }
+
+	/** CellGraph 조회 (읽기 전용) */
+	const FRealDestructCellGraph& GetCellGraph() const { return CellGraph; }
+
+	/** StructuralIntegritySystem 조회 (읽기 전용) */
+	const FStructuralIntegritySystem& GetIntegritySystem() const { return IntegritySystem; }
 
 	//[deprecated]
 	/** Cell 개수 반환 */
@@ -605,6 +658,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
 	float SliceAngleVariation = 0.3f;
 
+	/** 바닥 Anchor 감지 Z 높이 임계값 (cm, MeshBounds.Min.Z 기준 상대값) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh", meta = (ClampMin = "0.0"))
+	float FloorHeightThreshold = 10.0f;
+
 #if WITH_EDITOR
 	/**
 	 * SourceStatic 메쉬로부터 GC를 생성, FracturedGeometryCollection에 저장합니다.
@@ -612,6 +669,11 @@ public:
 	 */
 	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh")
 	void AutoFractureAndAssign();
+
+	/** 파괴전 Mesh의 상태로 되돌리기 */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh")
+	void RevertFracture();
+
 #endif
 protected:
 

@@ -7,27 +7,23 @@
 
 /**
  * 구조적 무결성 시스템 초기화 데이터
- * FCellStructureData 대신 필요한 데이터만 전달
+ *
+ * CellGraph로부터 변환된 연결성 그래프 정보만 포함.
+ * Cell의 기하학적 정보(위치, 삼각형)는 CellGraph가 보유.
  */
 struct REALTIMEDESTRUCTION_API FStructuralIntegrityInitData
 {
 	// Cell별 이웃 Cell ID 목록 (그래프 연결성)
 	TArray<TArray<int32>> CellNeighbors;
 
-	// Cell별 위치 (Anchor 감지, 질량 중심 계산용)
-	TArray<FVector> CellPositions;
-
-	// Cell별 삼각형 ID 목록 (분리 그룹 메시 추출용)
-	TArray<TArray<int32>> CellTriangles;
+	// Anchor로 지정할 Cell ID 목록 (CellGraph에서 판정)
+	TArray<int32> AnchorCellIds;
 
 	int32 GetCellCount() const { return CellNeighbors.Num(); }
 
 	bool IsValid() const
 	{
-		const int32 Count = CellNeighbors.Num();
-		return Count > 0 &&
-			CellPositions.Num() == Count &&
-			CellTriangles.Num() == Count;
+		return CellNeighbors.Num() > 0;
 	}
 };
 
@@ -61,7 +57,7 @@ public:
 
 	/**
 	 * 초기화 데이터로부터 시스템 초기화
-	 * @param InitData - Cell 연결성, 위치, 삼각형 정보
+	 * @param InitData - Cell 연결성 그래프 및 Anchor 정보
 	 * @param Settings - 구조적 무결성 설정
 	 */
 	void Initialize(const FStructuralIntegrityInitData& InitData, const FStructuralIntegritySettings& Settings);
@@ -92,13 +88,6 @@ public:
 	 * @param bIsAnchor - true면 Anchor로 설정
 	 */
 	void SetAnchors(const TArray<int32>& CellIds, bool bIsAnchor);
-
-	/**
-	 * 바닥면 Cell 자동 감지하여 Anchor 설정
-	 * Z좌표가 가장 낮은 Cell들 중 HeightThreshold 이내의 Cell을 Anchor로 설정
-	 * @param HeightThreshold - 바닥 기준 높이 임계값
-	 */
-	void AutoDetectFloorAnchors(float HeightThreshold);
 
 	/** Anchor 목록 조회 (스레드 안전) */
 	TArray<int32> GetAnchorCellIds() const;
@@ -142,9 +131,6 @@ public:
 
 	/** 파괴된 Cell ID 목록 (네트워크 동기화용) */
 	TArray<int32> GetDestroyedCellIds() const;
-
-	/** Cell의 월드 좌표 */
-	FVector GetCellWorldPosition(int32 CellId) const;
 
 	//=========================================================================
 	// 강제 상태 설정 (네트워크 동기화용)
@@ -192,23 +178,9 @@ private:
 	/**
 	 * 분리된 Cell들을 연결 그룹으로 묶기
 	 * @param DetachedCellIds - 분리된 Cell ID 목록
-	 * @return 그룹 목록
+	 * @return 그룹 목록 (CellIds만 포함, 기하학적 정보는 CellGraph에서 조회)
 	 */
 	TArray<FDetachedCellGroup> BuildDetachedGroups(const TArray<int32>& DetachedCellIds);
-
-	/**
-	 * 그룹의 질량 중심 계산
-	 * @param CellIds - Cell ID 목록
-	 * @return 질량 중심 좌표
-	 */
-	FVector CalculateCenterOfMass(const TArray<int32>& CellIds) const;
-
-	/**
-	 * 그룹에 포함된 삼각형 ID 수집
-	 * @param CellIds - Cell ID 목록
-	 * @return 삼각형 ID 목록
-	 */
-	TArray<int32> CollectTriangleIds(const TArray<int32>& CellIds) const;
 
 	//=========================================================================
 	// 데이터
@@ -220,14 +192,8 @@ private:
 	// 런타임 데이터
 	FStructuralIntegrityData Data;
 
-	// Cell 연결성 (Initialize 시 복사)
+	// Cell 연결성 (Initialize 시 복사, DisconnectCells로 동적 수정 가능)
 	TArray<TArray<int32>> CellNeighbors;
-
-	// Cell 위치 (Initialize 시 복사)
-	TArray<FVector> CellPositions;
-
-	// Cell별 삼각형 ID (Initialize 시 복사)
-	TArray<TArray<int32>> CellTriangles;
 
 	// 초기화 상태
 	bool bInitialized = false;

@@ -16,42 +16,25 @@ void FStructuralIntegritySystem::Initialize(const FStructuralIntegrityInitData& 
 		return;
 	}
 
-	// 데이터 복사
+	// 연결성 그래프 복사
 	CellNeighbors = InitData.CellNeighbors;
-	CellPositions = InitData.CellPositions;
-	CellTriangles = InitData.CellTriangles;
 
 	Settings = InSettings;
 
 	const int32 CellCount = InitData.GetCellCount();
 	Data.Initialize(CellCount);
 
+	// Anchor 설정 (CellGraph에서 판정된 결과)
+	for (int32 AnchorId : InitData.AnchorCellIds)
+	{
+		if (Data.IsValidCellId(AnchorId))
+		{
+			Data.AnchorCellIds.Add(AnchorId);
+		}
+	}
+
 	NextGroupId = 0;
 	bInitialized = true;
-
-	// 자동 Anchor 감지
-	if (Settings.bAutoDetectFloorAnchors && CellCount > 0)
-	{
-		// 가장 낮은 Z 좌표 찾기
-		float MinZ = MAX_flt;
-		for (int32 CellId = 0; CellId < CellCount; ++CellId)
-		{
-			MinZ = FMath::Min(MinZ, CellPositions[CellId].Z);
-		}
-
-		// FloorHeightThreshold를 절대값으로 해석 (이제 VoxelSize 개념 없음)
-		const float ActualThreshold = Settings.FloorHeightThreshold;
-
-		for (int32 CellId = 0; CellId < CellCount; ++CellId)
-		{
-			if (CellPositions[CellId].Z - MinZ <= ActualThreshold)
-			{
-				Data.AnchorCellIds.Add(CellId);
-			}
-		}
-
-		Data.InvalidateCache();
-	}
 }
 
 void FStructuralIntegritySystem::Reset()
@@ -60,8 +43,6 @@ void FStructuralIntegritySystem::Reset()
 
 	Data.Reset();
 	CellNeighbors.Reset();
-	CellPositions.Reset();
-	CellTriangles.Reset();
 	bInitialized = false;
 	NextGroupId = 0;
 }
@@ -113,38 +94,6 @@ void FStructuralIntegritySystem::SetAnchors(const TArray<int32>& CellIds, bool b
 			{
 				Data.AnchorCellIds.Remove(CellId);
 			}
-		}
-	}
-
-	Data.InvalidateCache();
-}
-
-void FStructuralIntegritySystem::AutoDetectFloorAnchors(float HeightThreshold)
-{
-	FWriteScopeLock WriteLock(DataLock);
-
-	const int32 CellCount = Data.GetCellCount();
-	if (CellCount == 0 || CellPositions.Num() != CellCount)
-	{
-		return;
-	}
-
-	// 가장 낮은 Z 좌표 찾기
-	float MinZ = MAX_flt;
-	for (int32 CellId = 0; CellId < CellCount; ++CellId)
-	{
-		MinZ = FMath::Min(MinZ, CellPositions[CellId].Z);
-	}
-
-	// 기존 Anchor 초기화
-	Data.AnchorCellIds.Reset();
-
-	// 임계값 이내의 Cell을 Anchor로 설정
-	for (int32 CellId = 0; CellId < CellCount; ++CellId)
-	{
-		if (CellPositions[CellId].Z - MinZ <= HeightThreshold)
-		{
-			Data.AnchorCellIds.Add(CellId);
 		}
 	}
 
@@ -278,18 +227,6 @@ TArray<int32> FStructuralIntegritySystem::GetDestroyedCellIds() const
 {
 	FReadScopeLock ReadLock(DataLock);
 	return Data.DestroyedCellIds.Array();
-}
-
-FVector FStructuralIntegritySystem::GetCellWorldPosition(int32 CellId) const
-{
-	FReadScopeLock ReadLock(DataLock);
-
-	if (!Data.IsValidCellId(CellId) || CellId >= CellPositions.Num())
-	{
-		return FVector::ZeroVector;
-	}
-
-	return CellPositions[CellId];
 }
 
 //=========================================================================
@@ -490,69 +427,13 @@ TArray<FDetachedCellGroup> FStructuralIntegritySystem::BuildDetachedGroups(const
 			}
 		}
 
-		// 그룹 속성 계산
+		// 그룹 속성: CellIds만 설정
+		// CenterOfMass, TriangleIds는 CellGraph에서 조회하여 상위 레벨에서 채움
 		Group.CellIds.Sort(); // 결정론적 순서
-		Group.CenterOfMass = CalculateCenterOfMass(Group.CellIds);
 		Group.ApproximateMass = static_cast<float>(Group.CellIds.Num());
-		Group.TriangleIds = CollectTriangleIds(Group.CellIds);
 
 		Groups.Add(MoveTemp(Group));
 	}
 
 	return Groups;
-}
-
-FVector FStructuralIntegritySystem::CalculateCenterOfMass(const TArray<int32>& CellIds) const
-{
-	if (CellIds.Num() == 0 || CellPositions.Num() == 0)
-	{
-		return FVector::ZeroVector;
-	}
-
-	FVector Sum = FVector::ZeroVector;
-
-	for (int32 CellId : CellIds)
-	{
-		if (CellId >= 0 && CellId < CellPositions.Num())
-		{
-			Sum += CellPositions[CellId];
-		}
-	}
-
-	return Sum / static_cast<float>(CellIds.Num());
-}
-
-TArray<int32> FStructuralIntegritySystem::CollectTriangleIds(const TArray<int32>& CellIds) const
-{
-	TArray<int32> TriangleIds;
-
-	if (CellTriangles.Num() == 0)
-	{
-		return TriangleIds;
-	}
-
-	for (int32 CellId : CellIds)
-	{
-		if (CellId >= 0 && CellId < CellTriangles.Num())
-		{
-			const TArray<int32>& CellTris = CellTriangles[CellId];
-			TriangleIds.Append(CellTris);
-		}
-	}
-
-	// 중복 제거 및 정렬 (결정론적)
-	TriangleIds.Sort();
-
-	// 중복 제거
-	int32 WriteIndex = 0;
-	for (int32 i = 0; i < TriangleIds.Num(); ++i)
-	{
-		if (i == 0 || TriangleIds[i] != TriangleIds[WriteIndex - 1])
-		{
-			TriangleIds[WriteIndex++] = TriangleIds[i];
-		}
-	}
-	TriangleIds.SetNum(WriteIndex);
-
-	return TriangleIds;
 }

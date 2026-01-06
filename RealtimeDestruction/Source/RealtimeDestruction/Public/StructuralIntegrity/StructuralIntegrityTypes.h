@@ -11,15 +11,17 @@
 UENUM(BlueprintType)
 enum class ECellStructuralState : uint8
 {
-	Intact,      // 온전함
-	Damaged,     // 손상됨 (연결 유지)
-	Destroyed,   // 파괴됨 (연결 끊김)
-	Detached     // 분리됨 (Anchor 없음, 떨어질 예정)
+	Intact,      // 온전함 - Anchor에 연결된 상태
+	Destroyed,   // 파괴됨 - Cell이 파괴되어 그래프에서 제거됨
+	Detached     // 분리됨 - Anchor와의 연결이 끊어져 떨어질 예정
 };
 
 /**
  * 분리된 조각 그룹
- * Anchor와의 연결이 끊어진 Cell들의 집합
+ *
+ * Anchor와의 연결이 끊어진 Cell들의 집합.
+ * IntegritySystem은 CellIds만 채우고, 기하학적 정보(CenterOfMass, TriangleIds)는
+ * 상위 레벨에서 CellGraph를 통해 채운다.
  */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FDetachedCellGroup
@@ -30,11 +32,11 @@ struct REALTIMEDESTRUCTION_API FDetachedCellGroup
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	int32 GroupId = INDEX_NONE;
 
-	// 포함된 Cell ID 목록
+	// 포함된 Cell ID 목록 (IntegritySystem이 채움)
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	TArray<int32> CellIds;
 
-	// 그룹의 질량 중심 (파편 스폰 위치)
+	// 그룹의 질량 중심 (상위 레벨에서 CellGraph를 통해 채움)
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	FVector CenterOfMass = FVector::ZeroVector;
 
@@ -42,28 +44,20 @@ struct REALTIMEDESTRUCTION_API FDetachedCellGroup
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	float ApproximateMass = 0.0f;
 
-	// 포함된 삼각형 ID 목록 (메쉬 추출용)
+	// 포함된 삼각형 ID 목록 (상위 레벨에서 CellGraph를 통해 채움)
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	TArray<int32> TriangleIds;
 };
 
 /**
  * 구조적 무결성 설정
+ *
+ * Anchor 감지는 CellGraph에서 담당하므로 여기서는 성능/동작 관련 설정만 포함.
  */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FStructuralIntegritySettings
 {
 	GENERATED_BODY()
-
-	// Anchor 자동 감지: 바닥면 Cell들을 Anchor로
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StructuralIntegrity|Anchor")
-	bool bAutoDetectFloorAnchors = true;
-
-	// Anchor 감지 높이 임계값 (단위: cm)
-	// 바닥 Z좌표로부터 이 높이 이내의 Cell들을 Anchor로 설정
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StructuralIntegrity|Anchor",
-		meta = (EditCondition = "bAutoDetectFloorAnchors", ClampMin = "0.0"))
-	float FloorHeightThreshold = 10.0f;
 
 	// 연결성 체크를 비동기로 실행할 Cell 임계값
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StructuralIntegrity|Performance",
