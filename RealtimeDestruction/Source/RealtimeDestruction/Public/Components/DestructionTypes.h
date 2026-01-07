@@ -62,8 +62,8 @@ struct REALTIMEDESTRUCTION_API FUnionFind
 
     UPROPERTY()
     TArray<int32> Parent;
-    
-    UPROPERTY() 
+
+    UPROPERTY()
     TArray<int32> Rank;
 
     void Init(int32 Count)
@@ -131,14 +131,14 @@ struct REALTIMEDESTRUCTION_API FBulletCluster
     FVector Center = FVector::ZeroVector;
 
     UPROPERTY()
-    FVector Normal= FVector::UpVector;
-    
+    FVector Normal = FVector::UpVector;
+
     UPROPERTY()
     float Radius = 0.0f;
-    
+
     UPROPERTY()
     TArray<FVector> MemberPoints;
-    
+
     UPROPERTY()
     TArray<FVector> MemberNormals;
 
@@ -165,8 +165,10 @@ struct REALTIMEDESTRUCTION_API FBulletCluster
         MemberPoints.Add(Point);
         MemberNormals.Add(InNormal);
         MemberRadius.Add(InRadius);
-         
-        // Normal?  
+
+        // Normal
+        Normal += InNormal;
+        Normal = Normal.GetSafeNormal();
 
         // Center, Radius 확장 
         float Dist = FVector::Dist(Center, Point);
@@ -176,18 +178,30 @@ struct REALTIMEDESTRUCTION_API FBulletCluster
             return;
         }
 
-        float NewRaidus = (Radius + Dist + InRadius) * 0.5f;
+        float NewRadius = (Radius + Dist + InRadius) * 0.5f;
 
         if (Dist > KINDA_SMALL_NUMBER)
         {
             FVector Dir = (Point - Center).GetSafeNormal();
 
-            Center += Dir * (NewRaidus - Radius);
+            Center += Dir * (NewRadius - Radius);
         }
 
-        Radius = NewRaidus;
+        Radius = NewRadius;
 
     }
-     
+
+    float PredictRadius(const FVector& Point, float InRadius) const
+    {
+        float Dist = FVector::Dist(Center, Point);
+
+        if (Dist + InRadius <= Radius)
+        {
+            return Radius;
+        }
+
+        return (Radius + Dist + InRadius);
+    }
+
 };
 

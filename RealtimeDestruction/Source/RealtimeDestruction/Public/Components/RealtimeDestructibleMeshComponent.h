@@ -92,7 +92,7 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	UPROPERTY()
 	double ClientSendTime = 0.0;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="RealtimeDestructibleMesh")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	int32 ChunkIndex = INDEX_NONE;
 };
 
@@ -198,8 +198,13 @@ public:
 	UPROPERTY()
 	bool bSavedCellMeshesValid = false;
 
+	UPROPERTY()
+	FIntVector SavedSliceCount = FIntVector::ZeroValue;
 
-	UPROPERTY() 
+	UPROPERTY()
+	bool bSavedShowCellGraphDebug = false;
+
+	UPROPERTY()
 	TArray<TObjectPtr<UDynamicMeshComponent>> SavedCellComponents;
 };
 
@@ -257,7 +262,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	bool ExecuteDestructionInternal(const FRealtimeDestructionRequest& Request);
-	
+
+	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Clustering")
+	void RegisterForClustering(const FRealtimeDestructionRequest& Request);
+
 	// Options
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Options")
 	void SetBooleanOptions(const FGeometryScriptMeshBooleanOptions& Options);
@@ -393,21 +401,29 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "RealtimeDestructibleMesh|Events")
 	FOnDestructError OnError;
 
-	
+
 	/** Clustering 변수 */
-	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
 	TObjectPtr<UBulletClusterComponent> BulletClusterComponent;
-	
-	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
-	bool bEnableClustering;
-	
-	UPROPERTY(BlueprintReadWrite, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
-	float ClusteringThreshold;
-	
-public:
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	bool bEnableClustering = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	float MaxMergeDistance = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	int  MinClusterCount = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	float MaxClusterRadius = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
+	float ClusterRaidusOffset = 1.0f;
+
 	/** 데이터 유지를 위한 함수 */
 	virtual TStructOnScope<FActorComponentInstanceData> GetComponentInstanceData() const override;
-public:
+
 	/*
 	 * 에디터에 노출하지 않는 함수
 	 */
@@ -435,7 +451,7 @@ public:
 
 	void SettingAsyncOption(bool& OutParallelEnabled, bool& OutMultiWorker);
 
-	bool IsInitialized() { return bIsInitialized;  }
+	bool IsInitialized() { return bIsInitialized; }
 
 	void TogleDebugUpdate() { bShouldDebugUpdate = !bShouldDebugUpdate; }
 
@@ -454,12 +470,19 @@ public:
 
 	void ClearAllChunkBusyBits();
 
+	/** bit를 체크하고, 사용 중이지 않다면 할당까지 해주는 함수 */
+	bool CheckAndSetChunkSubtractBusy(int32 ChunkIndex);
+	void ClearChunkSubtractBusy(int32 ChunkIndex);
+	void ClearAllChunkSubtractBusyBits();
+
+	void SetChunkBits(int32 ChunkIndex, int32& BitIndex, int32& BitOffset);
+
 	/*
 	 * 총알 충돌과 그 외 충돌 분리를 위한 테스트 코드
 	 * 검증 완료되면 유지
 	 */
-	/*************************************************/
-	// 변형된 메시의 시각적(렌더링) 처리 즉시 업데이트하는 함수
+	 /*************************************************/
+	 // 변형된 메시의 시각적(렌더링) 처리 즉시 업데이트하는 함수
 	void ApplyBooleanOperationResult(FDynamicMesh3&& NewMesh, const int32 ChunkIndex, bool bDelayedCollisionUpdate);
 	// 타겟메시의 idle이나 원하는 딜레이를 주고 Async로 collision 갱신하는 함수
 	void RequestDelayedCollisionUpdate(UDynamicMeshComponent* TargetComp);
@@ -641,7 +664,14 @@ protected:
 	// PrimComp으로 Key값 설정, FHitResult의 GetComponent는 PrimitiveComp* 반환
 	TMap<UPrimitiveComponent*, int32> ChunkIndexMap;
 
+	/** 그리드 인덱스 -> ChunkId(CellMeshComponents 배열 인덱스) 매핑 테이블
+	 *  슬라이싱 후 고정되며, BuildCellMeshesFromGeometryCollection에서 계산됨 */
+	TArray<int32> GridToChunkMap;
+
 	TArray<uint64> ChunkBusyBits;
+
+	/** Multi Worker, Subtract 체크용 */
+	TArray<uint64> ChunkSubtractBusyBits;
 
 	/** Cell별 바운딩 박스 (빠른 충돌 체크용) */
 	TArray<FBox> CellBounds;
@@ -654,6 +684,7 @@ protected:
 
 	/** 구조적 무결성 시스템 (Anchor 연결성 분석) */
 	FStructuralIntegritySystem IntegritySystem;
+
 
 public:
 	/**
@@ -676,6 +707,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh")
 	bool BuildCellGraph();
 
+private:
+	/**
+	 * GridToChunkMap 구축 (그리드 인덱스 -> ChunkId 매핑)
+	 * 각 프래그먼트의 공간 위치를 기반으로 그리드 셀에 매핑
+	 * BuildCellMeshesFromGeometryCollection에서 호출됨
+	 */
+	void BuildGridToChunkMap();
+
+public:
 	/** CellGraph 초기화 상태 확인 */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
 	bool IsCellGraphBuilt() const { return CellGraph.IsGraphBuilt(); }
@@ -723,8 +763,6 @@ public:
 #endif
 protected:
 
-
-
 	//////////////////////////////////////////////////////////////////////////
 	// Debug Display Settings (액터 위 디버그 텍스트 표시)
 	//////////////////////////////////////////////////////////////////////////
@@ -740,16 +778,23 @@ protected:
 	FVector DebugTextOffset = FVector(0.0f, 0.0f, 250.0f);
 
 	/** 디버그 텍스트 색상 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="RealtimeDestructibleMesh|Debug")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	FLinearColor DebugTextColor = FLinearColor::Yellow;
 
 	/** Cell 메시 와이어프레임 디버그 표시 (PIE에서 자동으로 그려짐) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="RealtimeDestructibleMesh|Debug")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowCellMeshDebug = false;
+
+	/** CellGraph 노드 및 연결 디버그 표시 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
+	bool bShowCellGraphDebug = false;
+
+	/** CellGraph 디버그 드로잉 */
+	void DrawCellGraphDebug();
 
 	bool bShouldDebugUpdate = true;
 
-	FString DebugText;	
+	FString DebugText;
 
 protected:
 #if WITH_EDITOR
