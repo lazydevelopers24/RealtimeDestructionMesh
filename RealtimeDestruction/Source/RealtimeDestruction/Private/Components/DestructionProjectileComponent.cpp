@@ -108,8 +108,20 @@ void UDestructionProjectileComponent::OnProjectileHit(
 		return;
 	}
 
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
 	// 자기 자신과 충돌한 경우 무시
-	if (OtherActor == GetOwner())
+	if (OtherActor == Owner)
+	{
+		return;
+	}
+
+	// Owner가 Pawn/Character인 경우 무시 (캐릭터 사망 방지)
+	if (Owner->IsA<APawn>())
 	{
 		return;
 	}
@@ -580,7 +592,28 @@ void UDestructionProjectileComponent::RequestDestructionManual(const FHitResult&
 
 	if (DestructComp)
 	{
-		ProcessDestructionRequest(DestructComp, HitResult);
+		// 파괴 가능한 오브젝트에 충돌
+		int32 ChunkNum = DestructComp->GetChunkNum();
+		if (ChunkNum == 0)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequest %d"), ChunkNum);
+			ProcessDestructionRequest(DestructComp, HitResult);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequestForCell %d"), ChunkNum);
+			ProcessDestructionRequestForChunk(DestructComp, HitResult);
+		}
+	}
+	else
+	{
+		// 파괴 불가능한 오브젝트에 충돌
+		OnNonDestructibleHit.Broadcast(HitResult);
+
+		if (bDestroyOnNonDestructibleHit && bDestroyOnHit)
+		{
+			GetOwner()->Destroy();
+		}
 	}
 }
 
