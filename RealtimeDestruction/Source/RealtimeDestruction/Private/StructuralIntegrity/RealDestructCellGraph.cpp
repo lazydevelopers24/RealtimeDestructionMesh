@@ -749,6 +749,78 @@ FStructuralIntegrityInitData FRealDestructCellGraph::BuildInitDataFromGraph() co
 	return InitData;
 }
 
+FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() const
+{
+	FStructuralIntegrityGraphSnapshot Snapshot;
+
+	if (Nodes.Num() == 0)
+	{
+		return Snapshot;
+	}
+
+	// 1. 노드를 (ChunkId, CellId) 기준으로 정렬된 순서로 수집
+	TArray<int32> SortedNodeIndices;
+	SortedNodeIndices.Reserve(Nodes.Num());
+	for (int32 i = 0; i < Nodes.Num(); ++i)
+	{
+		SortedNodeIndices.Add(i);
+	}
+
+	// 결정론적 정렬: ChunkId 우선, 같으면 CellId로
+	SortedNodeIndices.Sort([this](int32 A, int32 B)
+	{
+		const FChunkCellNode& NodeA = Nodes[A];
+		const FChunkCellNode& NodeB = Nodes[B];
+		if (NodeA.ChunkId != NodeB.ChunkId)
+		{
+			return NodeA.ChunkId < NodeB.ChunkId;
+		}
+		return NodeA.CellId < NodeB.CellId;
+	});
+
+	// 2. NodeKeys 배열 구축
+	Snapshot.NodeKeys.Reserve(Nodes.Num());
+	for (int32 NodeIdx : SortedNodeIndices)
+	{
+		const FChunkCellNode& Node = Nodes[NodeIdx];
+		Snapshot.NodeKeys.Add(FCellKey(Node.ChunkId, Node.CellId));
+	}
+
+	// 3. NeighborKeys 배열 구축
+	Snapshot.NeighborKeys.SetNum(Nodes.Num());
+	for (int32 i = 0; i < SortedNodeIndices.Num(); ++i)
+	{
+		const int32 NodeIdx = SortedNodeIndices[i];
+		const FChunkCellNode& Node = Nodes[NodeIdx];
+
+		TArray<FCellKey> NeighborKeyList;
+		NeighborKeyList.Reserve(Node.Neighbors.Num());
+
+		for (const FChunkCellNeighbor& Neighbor : Node.Neighbors)
+		{
+			NeighborKeyList.Add(FCellKey(Neighbor.ChunkId, Neighbor.CellId));
+		}
+
+		// 결정론적 순서
+		NeighborKeyList.Sort();
+		Snapshot.NeighborKeys[i] = FStructuralIntegrityNeighborList(NeighborKeyList);
+	}
+
+	// 4. AnchorKeys 수집
+	for (int32 NodeIdx : SortedNodeIndices)
+	{
+		const FChunkCellNode& Node = Nodes[NodeIdx];
+		if (Node.bIsAnchor)
+		{
+			Snapshot.AnchorKeys.Add(FCellKey(Node.ChunkId, Node.CellId));
+		}
+	}
+
+	// 이미 정렬된 순서로 순회했으므로 AnchorKeys도 정렬됨
+
+	return Snapshot;
+}
+
 //=========================================================================
 // 조회 함수
 //=========================================================================
@@ -959,7 +1031,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 
 		// CellA의 경계 삼각형 검사
 		TArray<FChunkBoundaryTriangle2D> BoundaryTrisA;
-		FBox2D BoundsA;
+		FBox2D BoundsA(ForceInit);
 		bool bHasBoundaryA = HasBoundaryTrianglesOnPlane(
 			MeshA, TrianglesA, Plane,
 			PlaneTolerance, RectTolerance,
@@ -977,7 +1049,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 
 			// CellB의 경계 삼각형 검사
 			TArray<FChunkBoundaryTriangle2D> BoundaryTrisB;
-			FBox2D BoundsB;
+			FBox2D BoundsB(ForceInit);
 			bool bHasBoundaryB = HasBoundaryTrianglesOnPlane(
 				MeshB, TrianglesB, Plane,
 				PlaneTolerance, RectTolerance,
@@ -989,7 +1061,37 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 			}
 
 			// 2D Bounds 중첩 검사
-			if (!BoundsA.Intersect(BoundsB))
+			if (!BoundsOverlap2D(BoundsA, BoundsB))
+			{
+				continue;
+			}
+
+			const float Epsilon = FMath::Max(RectTolerance, KINDA_SMALL_NUMBER);
+			bool bConnected = false;
+
+			for (const FChunkBoundaryTriangle2D& TriA : BoundaryTrisA)
+			{
+				for (const FChunkBoundaryTriangle2D& TriB : BoundaryTrisB)
+				{
+					if (!BoundsOverlap2D(TriA.Bounds, TriB.Bounds))
+					{
+						continue;
+					}
+
+					if (TrianglesIntersect2D(TriA.P0, TriA.P1, TriA.P2, TriB.P0, TriB.P1, TriB.P2, Epsilon))
+					{
+						bConnected = true;
+						break;
+					}
+				}
+
+				if (bConnected)
+				{
+					break;
+				}
+			}
+
+			if (!bConnected)
 			{
 				continue;
 			}

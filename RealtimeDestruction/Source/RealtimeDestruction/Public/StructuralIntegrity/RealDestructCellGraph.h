@@ -130,6 +130,13 @@ public:
 	/** CellGraph의 노드 구조를 IntegritySystem이 사용할 수 있는 1차원 인접 리스트 형태로 변환 */
 	FStructuralIntegrityInitData BuildInitDataFromGraph() const;
 
+	/**
+	 * 현재 그래프 상태를 스냅샷으로 생성 (신규 SyncGraph API용)
+	 * - 노드는 (ChunkId, CellId) 기준 정렬
+	 * - Anchor 노드 목록 포함
+	 */
+	FStructuralIntegrityGraphSnapshot BuildGraphSnapshot() const;
+
 	/** 그래프 초기화 상태 확인 */
 	bool IsGraphBuilt() const { return Nodes.Num() > 0; }
 

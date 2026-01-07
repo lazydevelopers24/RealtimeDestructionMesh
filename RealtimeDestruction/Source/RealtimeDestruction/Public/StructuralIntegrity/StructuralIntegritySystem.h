@@ -150,6 +150,44 @@ public:
 	const FStructuralIntegritySettings& GetSettings() const { return Settings; }
 	void SetSettings(const FStructuralIntegritySettings& NewSettings);
 
+	//=========================================================================
+	// 그래프 동기화 API (신규)
+	//=========================================================================
+
+	/**
+	 * 그래프 스냅샷으로 내부 상태 동기화
+	 * - 새 Key: 새 ID 할당, Intact 상태
+	 * - 스냅샷에 없는 Key: Destroyed로 마킹 (ID 유지)
+	 * - 이웃 리스트 재구축
+	 * @param Snapshot - CellGraph로부터 생성된 스냅샷
+	 */
+	void SyncGraph(const FStructuralIntegrityGraphSnapshot& Snapshot);
+
+	/**
+	 * BFS로 연결성 재계산, Detached 그룹 반환
+	 * @return 분리된 그룹 정보를 포함한 결과
+	 */
+	FStructuralIntegrityResult RefreshConnectivity();
+
+	/**
+	 * 셀들을 Destroyed로 마킹 (파편 스폰 후 호출)
+	 * @param Keys - Destroyed로 마킹할 Cell Key 목록
+	 */
+	void MarkCellsAsDestroyed(const TArray<FCellKey>& Keys);
+
+	//=========================================================================
+	// Key 기반 조회 API
+	//=========================================================================
+
+	/** Key로 내부 ID 조회 (없으면 INDEX_NONE) */
+	int32 GetCellIdForKey(const FCellKey& Key) const;
+
+	/** 내부 ID로 Key 조회 */
+	FCellKey GetKeyForCellId(int32 CellId) const;
+
+	/** 파괴된 Cell의 Key 목록 */
+	TArray<FCellKey> GetDestroyedCellKeys() const;
+
 private:
 	//=========================================================================
 	// 내부 알고리즘
@@ -182,6 +220,20 @@ private:
 	 */
 	TArray<FDetachedCellGroup> BuildDetachedGroups(const TArray<int32>& DetachedCellIds);
 
+	/**
+	 * Key에 대한 내부 ID 조회/할당
+	 * @param Key - Cell Key
+	 * @param bCreateIfNotFound - true면 없을 때 새 ID 할당
+	 * @return 내부 ID (없고 생성 안 하면 INDEX_NONE)
+	 */
+	int32 FindOrAllocateCellId(const FCellKey& Key, bool bCreateIfNotFound = true);
+
+	/**
+	 * 스냅샷 기반으로 이웃 리스트 재구축
+	 * @param Snapshot - 그래프 스냅샷
+	 */
+	void RebuildNeighborLists(const FStructuralIntegrityGraphSnapshot& Snapshot);
+
 	//=========================================================================
 	// 데이터
 	//=========================================================================
@@ -203,4 +255,17 @@ private:
 
 	// 분리 그룹 ID 카운터
 	int32 NextGroupId = 0;
+
+	//=========================================================================
+	// Key <-> ID 매핑 (신규)
+	//=========================================================================
+
+	// Key -> 내부 ID
+	TMap<FCellKey, int32> KeyToId;
+
+	// 내부 ID -> Key
+	TArray<FCellKey> IdToKey;
+
+	// 다음에 할당할 내부 ID (단조 증가, 재사용 없음)
+	int32 NextInternalId = 0;
 };

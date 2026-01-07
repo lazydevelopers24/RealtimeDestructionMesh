@@ -841,6 +841,9 @@ protected:
 	/** CellGraph 디버그 드로잉 */
 	void DrawCellGraphDebug();
 
+	/** 분리된 Cell 그룹 디버그 시각화 */
+	void DrawDetachedGroupsDebug(const TArray<FDetachedCellGroup>& Groups);
+
 	bool bShouldDebugUpdate = true;
 
 	FString DebugText;

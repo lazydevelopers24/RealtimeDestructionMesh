@@ -2712,14 +2712,13 @@ bool URealtimeDestructibleMeshComponent::BuildCellGraph()
 			GridIdx, ChunkId, TriCount, CellCount);
 	}
 
-	// 7. IntegritySystem 초기화
-	FStructuralIntegrityInitData InitData = CellGraph.BuildInitDataFromGraph();
-	FStructuralIntegritySettings Settings;
+	// 7. IntegritySystem 초기화 (신규 SyncGraph API 사용)
+	FStructuralIntegrityGraphSnapshot Snapshot = CellGraph.BuildGraphSnapshot();
 	IntegritySystem.Reset();
-	IntegritySystem.Initialize(InitData, Settings);
+	IntegritySystem.SyncGraph(Snapshot);
 
-	UE_LOG(LogTemp, Log, TEXT("BuildCellGraph: Built graph with %d nodes, %d anchors"),
-		CellGraph.GetNodeCount(), IntegritySystem.GetAnchorCount());
+	UE_LOG(LogTemp, Log, TEXT("BuildCellGraph: Built graph with %d nodes, %d anchors, snapshot has %d keys"),
+		CellGraph.GetNodeCount(), IntegritySystem.GetAnchorCount(), Snapshot.GetNodeCount());
 
 	return CellGraph.IsGraphBuilt();
 }
@@ -2771,10 +2770,32 @@ void URealtimeDestructibleMeshComponent::UpdateCellGraphForModifiedChunks()
 	// 3. 영향받은 Division Plane의 연결 재검사
 	CellGraph.RebuildConnectionsForChunks(UpdateResults, ChunkMeshes);
 
-	// 4. IntegritySystem에 변경 전파 (TODO: BFS 기반 분리 감지는 추후 구현)
-	// 현재는 그래프 갱신만 수행
+	// 4. IntegritySystem에 그래프 동기화
+	FStructuralIntegrityGraphSnapshot Snapshot = CellGraph.BuildGraphSnapshot();
+	IntegritySystem.SyncGraph(Snapshot);
 
-	// 5. ModifiedChunkIds 초기화
+	// 5. 연결성 재계산 및 Detached 탐지
+	FStructuralIntegrityResult Result = IntegritySystem.RefreshConnectivity();
+
+	// 6. Detached 그룹 처리 (디버그 시각화)
+	if (Result.DetachedGroups.Num() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UpdateCellGraphForModifiedChunks: Detected %d detached groups"),
+			Result.DetachedGroups.Num());
+
+		// 디버그: Detached 셀 시각화
+		DrawDetachedGroupsDebug(Result.DetachedGroups);
+
+		// 스폰된 것으로 처리 (나중에 실제 물리 파편 스폰으로 교체)
+		TArray<FCellKey> SpawnedKeys;
+		for (const FDetachedCellGroup& Group : Result.DetachedGroups)
+		{
+			SpawnedKeys.Append(Group.CellKeys);
+		}
+		IntegritySystem.MarkCellsAsDestroyed(SpawnedKeys);
+	}
+
+	// 7. ModifiedChunkIds 초기화
 	ModifiedChunkIds.Reset();
 }
 
@@ -2834,7 +2855,17 @@ void URealtimeDestructibleMeshComponent::DrawCellGraphDebug()
 		const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
 		NodeCenters[NodeIdx] = WorldCenter;
 
-		// Anchor 노드는 녹색, 일반 노드는 파란색
+		// IntegritySystem에서 Cell 상태 확인
+		const FCellKey CellKey(Node->ChunkId, Node->CellId);
+		const int32 IntegrityId = IntegritySystem.GetCellIdForKey(CellKey);
+		const ECellStructuralState CellState = IntegritySystem.GetCellState(IntegrityId);
+
+		// 상태에 따른 색상: Anchor=녹색, Intact=시안, Destroyed=회색(스킵)
+		if (CellState == ECellStructuralState::Destroyed)
+		{
+			continue; // Destroyed된 셀은 그리지 않음
+		}
+
 		const FColor NodeColor = Node->bIsAnchor ? FColor::Green : FColor::Cyan;
 
 		// 노드 위치에 점 그리기 (매 프레임 그리기)
@@ -2852,8 +2883,24 @@ void URealtimeDestructibleMeshComponent::DrawCellGraphDebug()
 			continue;
 		}
 
+		// 현재 노드가 Destroyed면 스킵
+		const FCellKey NodeKey(Node->ChunkId, Node->CellId);
+		const int32 NodeIntegrityId = IntegritySystem.GetCellIdForKey(NodeKey);
+		if (IntegritySystem.GetCellState(NodeIntegrityId) == ECellStructuralState::Destroyed)
+		{
+			continue;
+		}
+
 		for (const FChunkCellNeighbor& Neighbor : Node->Neighbors)
 		{
+			// 이웃 노드가 Destroyed면 스킵
+			const FCellKey NeighborKey(Neighbor.ChunkId, Neighbor.CellId);
+			const int32 NeighborIntegrityId = IntegritySystem.GetCellIdForKey(NeighborKey);
+			if (IntegritySystem.GetCellState(NeighborIntegrityId) == ECellStructuralState::Destroyed)
+			{
+				continue;
+			}
+
 			const int32 NeighborNodeIdx = CellGraph.FindNodeIndex(Neighbor.ChunkId, Neighbor.CellId);
 			if (NeighborNodeIdx == INDEX_NONE)
 			{
@@ -2876,6 +2923,56 @@ void URealtimeDestructibleMeshComponent::DrawCellGraphDebug()
 			{
 				DrawDebugLine(World, NodeCenters[NodeIdx], NodeCenters[NeighborNodeIdx],
 					FColor::Yellow, false, 0.0f, SDPG_Foreground, 2.0f);
+			}
+		}
+	}
+}
+
+void URealtimeDestructibleMeshComponent::DrawDetachedGroupsDebug(const TArray<FDetachedCellGroup>& Groups)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const FTransform& ComponentTransform = GetComponentTransform();
+
+	// 각 그룹을 다른 색상으로 표시
+	const TArray<FColor> GroupColors = {
+		FColor::Red, FColor::Orange, FColor::Magenta,
+		FColor::Purple, FColor::Turquoise, FColor::Emerald
+	};
+
+	for (int32 GroupIdx = 0; GroupIdx < Groups.Num(); ++GroupIdx)
+	{
+		const FDetachedCellGroup& Group = Groups[GroupIdx];
+		const FColor GroupColor = GroupColors[GroupIdx % GroupColors.Num()];
+
+		UE_LOG(LogTemp, Warning, TEXT("Detached Group %d: %d cells, %d keys"),
+			Group.GroupId, Group.CellIds.Num(), Group.CellKeys.Num());
+
+		for (const FCellKey& Key : Group.CellKeys)
+		{
+			// Cell의 바운딩 박스 가져오기
+			const FChunkCellCache* Cache = CellGraph.GetChunkCellCache(Key.ChunkId);
+			if (Cache && Key.CellId >= 0 && Key.CellId < Cache->CellBounds.Num())
+			{
+				const FBox& CellBoundingBox = Cache->CellBounds[Key.CellId];
+				const FVector LocalCenter = CellBoundingBox.GetCenter();
+				const FVector LocalExtent = CellBoundingBox.GetExtent();
+
+				// 월드 좌표로 변환
+				const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
+
+				// 회전도 적용하려면 OrientedBox를 그려야 하지만, 간단히 AABB로 표시
+				DrawDebugBox(World, WorldCenter, LocalExtent * ComponentTransform.GetScale3D(),
+					ComponentTransform.GetRotation(), GroupColor, false, 5.0f, SDPG_Foreground, 3.0f);
+
+				// 그룹 ID 텍스트 표시
+				DrawDebugString(World, WorldCenter,
+					FString::Printf(TEXT("G%d"), Group.GroupId),
+					nullptr, GroupColor, 5.0f, false, 1.5f);
 			}
 		}
 	}

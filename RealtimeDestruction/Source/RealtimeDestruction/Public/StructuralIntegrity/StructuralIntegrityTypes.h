@@ -17,6 +17,59 @@ enum class ECellStructuralState : uint8
 };
 
 /**
+ * 안정 Cell 식별자
+ *
+ * CellGraph의 노드 인덱스는 그래프 재구축 시 변경될 수 있으므로,
+ * (ChunkId, CellId) 쌍을 안정적인 외부 식별자로 사용.
+ */
+USTRUCT(BlueprintType)
+struct REALTIMEDESTRUCTION_API FCellKey
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "CellKey")
+	int32 ChunkId = INDEX_NONE;
+
+	UPROPERTY(BlueprintReadOnly, Category = "CellKey")
+	int32 CellId = INDEX_NONE;
+
+	FCellKey() = default;
+	FCellKey(int32 InChunkId, int32 InCellId) : ChunkId(InChunkId), CellId(InCellId) {}
+
+	bool IsValid() const { return ChunkId != INDEX_NONE && CellId != INDEX_NONE; }
+
+	bool operator==(const FCellKey& Other) const
+	{
+		return ChunkId == Other.ChunkId && CellId == Other.CellId;
+	}
+
+	bool operator!=(const FCellKey& Other) const
+	{
+		return !(*this == Other);
+	}
+
+	// 결정론적 정렬용 (ChunkId 우선, 같으면 CellId로)
+	bool operator<(const FCellKey& Other) const
+	{
+		if (ChunkId != Other.ChunkId)
+		{
+			return ChunkId < Other.ChunkId;
+		}
+		return CellId < Other.CellId;
+	}
+
+	friend uint32 GetTypeHash(const FCellKey& Key)
+	{
+		return HashCombine(GetTypeHash(Key.ChunkId), GetTypeHash(Key.CellId));
+	}
+
+	FString ToString() const
+	{
+		return FString::Printf(TEXT("(%d,%d)"), ChunkId, CellId);
+	}
+};
+
+/**
  * 분리된 조각 그룹
  *
  * Anchor와의 연결이 끊어진 Cell들의 집합.
@@ -32,9 +85,13 @@ struct REALTIMEDESTRUCTION_API FDetachedCellGroup
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	int32 GroupId = INDEX_NONE;
 
-	// 포함된 Cell ID 목록 (IntegritySystem이 채움)
+	// 포함된 Cell ID 목록 (IntegritySystem이 채움, 레거시 호환용)
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
 	TArray<int32> CellIds;
+
+	// 포함된 Cell Key 목록 (IntegritySystem이 채움, 신규 API)
+	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
+	TArray<FCellKey> CellKeys;
 
 	// 그룹의 질량 중심 (상위 레벨에서 CellGraph를 통해 채움)
 	UPROPERTY(BlueprintReadOnly, Category = "DetachedCellGroup")
@@ -203,5 +260,55 @@ struct REALTIMEDESTRUCTION_API FStructuralIntegrityResult
 	bool HasChanges() const
 	{
 		return NewlyDestroyedCellIds.Num() > 0 || DetachedGroups.Num() > 0;
+	}
+};
+
+/**
+ * 그래프 스냅샷 - 노드별 이웃 목록 (UPROPERTY 지원용 래퍼)
+ */
+USTRUCT()
+struct REALTIMEDESTRUCTION_API FStructuralIntegrityNeighborList
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FCellKey> Neighbors;
+
+	FStructuralIntegrityNeighborList() = default;
+	FStructuralIntegrityNeighborList(const TArray<FCellKey>& InNeighbors) : Neighbors(InNeighbors) {}
+};
+
+/**
+ * 그래프 스냅샷
+ *
+ * CellGraph의 현재 상태를 IntegritySystem에 전달하기 위한 구조체.
+ * 결정론성을 위해 모든 배열은 정렬된 상태로 유지.
+ */
+USTRUCT()
+struct REALTIMEDESTRUCTION_API FStructuralIntegrityGraphSnapshot
+{
+	GENERATED_BODY()
+
+	// 정렬된 노드 Key 목록 (ChunkId, CellId 오름차순)
+	UPROPERTY()
+	TArray<FCellKey> NodeKeys;
+
+	// 각 노드의 이웃 Key 목록 (NodeKeys와 동일 인덱스)
+	UPROPERTY()
+	TArray<FStructuralIntegrityNeighborList> NeighborKeys;
+
+	// Anchor 노드 Key 목록
+	UPROPERTY()
+	TArray<FCellKey> AnchorKeys;
+
+	int32 GetNodeCount() const { return NodeKeys.Num(); }
+
+	bool IsValid() const { return NodeKeys.Num() > 0 && NodeKeys.Num() == NeighborKeys.Num(); }
+
+	void Reset()
+	{
+		NodeKeys.Reset();
+		NeighborKeys.Reset();
+		AnchorKeys.Reset();
 	}
 };
