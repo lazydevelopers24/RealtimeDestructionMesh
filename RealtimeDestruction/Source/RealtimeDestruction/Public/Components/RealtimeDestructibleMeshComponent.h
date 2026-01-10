@@ -11,43 +11,12 @@
 #include "RealtimeDestructibleMeshComponent.generated.h"
 
 class UGeometryCollection;
-
 class UStaticMesh;
 class UStaticMeshComponent;
 class UMaterialInterface;
 class FLifetimeProperty;
 class FRealtimeBooleanProcessor;
-
 class UBulletClusterComponent;
-
-//////////////////////////////////////////////////////////////////////////
-// Enum Types
-//////////////////////////////////////////////////////////////////////////
-
-// Controls when collision is rebuilt after destruction ops are applied.
-UENUM(BlueprintType)
-enum class ERealtimeCollisionUpdateMode : uint8
-{
-	Batch, // Rebuild once after a batch of ops completes.
-	PerHit // Rebuild collision after each hit/op is applied.
-};
-
-// Controls when the render mesh is refreshed after destruction ops.
-UENUM(BlueprintType)
-enum class ERealtimeRenderUpdateMode : uint8
-{
-	Auto,  // Refresh automatically: per hit in PerHit mode, once per batch in Batch mode.
-	Manual // Caller is responsible for triggering render update.
-};
-
-// Controls how destruction state is replicated across the network.
-UENUM(BlueprintType)
-enum class ERealtimeDestructionReplicationMode : uint8
-{
-	None,               // No replication; local-only destruction.
-	ServerSequencedOps, // Server batches/assigns order and multicasts ops to replay.
-	FullSnapshot        // Periodic/initial resync snapshot; normally use ServerSequencedOps.
-};
 
 //////////////////////////////////////////////////////////////////////////
 // Destruction Types
@@ -281,12 +250,6 @@ public:
 	void SetAsyncEnabled(bool bEnabled);
 
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Options")
-	void SetCollisionUpdateMode(ERealtimeCollisionUpdateMode Mode);
-
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Options")
-	void SetRenderUpdateMode(ERealtimeRenderUpdateMode Mode);
-
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Options")
 	void SetMaxHoleCount(int32 MaxCount);
 
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Status")
@@ -306,9 +269,6 @@ public:
 	/** 파괴 요청 거부 RPC (서버 → 요청한 클라이언트) */
 	UFUNCTION(Client, Reliable)
 	void ClientDestructionRejected(uint16 Sequence, EDestructionRejectReason Reason);
-
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Replication")
-	void SetReplicationMode(ERealtimeDestructionReplicationMode Mode);
 
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Replication")
 	void ApplyOpsDeterministic(const TArray<FRealtimeDestructionOp>& Ops);
@@ -622,15 +582,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
 	bool bEnableMultiWorkers = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
-	ERealtimeCollisionUpdateMode CollisionUpdateMode = ERealtimeCollisionUpdateMode::Batch;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
-	ERealtimeRenderUpdateMode RenderUpdateMode = ERealtimeRenderUpdateMode::Auto;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Replication")
-	ERealtimeDestructionReplicationMode ReplicationMode = ERealtimeDestructionReplicationMode::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Replication")
 	bool bDebugPenetration = false;

@@ -281,10 +281,7 @@ bool URealtimeDestructibleMeshComponent::ApplyOpImmediate(const FRealtimeDestruc
 	OnOpApplied.Broadcast(Op);
 	ModifiedChunkIds.Add(Op.Request.ChunkIndex);
 
-	if (RenderUpdateMode == ERealtimeRenderUpdateMode::Auto)
-	{
-		ApplyRenderUpdate();
-	}
+	ApplyRenderUpdate();
 	ApplyCollisionUpdate(this);
 	OnBatchCompleted.Broadcast(1);
 	UpdateCellGraphForModifiedChunks();
@@ -381,16 +378,6 @@ void URealtimeDestructibleMeshComponent::SetMaxOpsPerFrame(int32 MaxOps)
 void URealtimeDestructibleMeshComponent::SetAsyncEnabled(bool bEnabled)
 {
 	bAsyncEnabled = bEnabled;
-}
-
-void URealtimeDestructibleMeshComponent::SetCollisionUpdateMode(ERealtimeCollisionUpdateMode Mode)
-{
-	CollisionUpdateMode = Mode;
-}
-
-void URealtimeDestructibleMeshComponent::SetRenderUpdateMode(ERealtimeRenderUpdateMode Mode)
-{
-	RenderUpdateMode = Mode;
 }
 
 void URealtimeDestructibleMeshComponent::SetMaxHoleCount(int32 MaxCount)
@@ -568,11 +555,6 @@ void URealtimeDestructibleMeshComponent::MulticastApplyOpsCompact_Implementation
 	}
 
 	ApplyOpsDeterministic(Ops);
-}
-
-void URealtimeDestructibleMeshComponent::SetReplicationMode(ERealtimeDestructionReplicationMode Mode)
-{
-	ReplicationMode = Mode;
 }
 
 void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRealtimeDestructionOp>& Ops)
