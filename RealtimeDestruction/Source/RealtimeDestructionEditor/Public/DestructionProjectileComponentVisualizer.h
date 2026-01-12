@@ -36,6 +36,13 @@ private:
 		const FLinearColor& Color
 	);
 
+	void DrawDecalPreview(
+		const class UDestructionProjectileComponent* Component,
+		FPrimitiveDrawInterface* PDI,
+		const FLinearColor& Color
+	);
+	
+	
 };
 
 

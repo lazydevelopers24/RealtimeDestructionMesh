@@ -59,6 +59,8 @@ FCompactDestructionOp FCompactDestructionOp::Compress(const FRealtimeDestruction
 		? static_cast<uint8>(Request.ChunkIndex)
 		: 0;
 
+	Compact.DecalSize = Request.DecalSize;
+
 	return Compact;
 }
 
@@ -2021,23 +2023,29 @@ UDecalComponent* URealtimeDestructibleMeshComponent::SpawnTemporaryDecal(const F
 	}
 
 	Decal->SetDecalMaterial(HoleDecal);
-	Decal->DecalSize = DecalSize;
+	//Request에 decalSize가 없을 때, 기본값 사용
+	Decal->DecalSize = Request.DecalSize.IsNearlyZero() ? DecalSize : Request.DecalSize;
 
 	//데칼이 항상 보이도록 처리 
 	Decal->SetFadeScreenSize(0.0f);
 	Decal->FadeStartDelay = 0.0f;
 	Decal->FadeDuration = 0.0f;
-
-
+	 
 	// decal 방향 설정
 	FRotator DecalRotation = Request.ImpactNormal.Rotation();
-	//DecalRotation.Pitch += 180.0f;
+	 
+	FRotator TransformBasis = DecalRotation;
+	TransformBasis.Yaw += 180.0f;  // 에디터 좌표계와 일치시킴
+	FTransform DecalTransform(TransformBasis, Request.ImpactPoint);
+	FVector WorldOffset = DecalTransform.TransformVector(Request.DecalLocationOffset);
+	FVector DecalLocation = Request.ImpactPoint + WorldOffset;
+	  
 
-	Decal->SetWorldLocationAndRotation(Request.ImpactPoint, DecalRotation);
+	Decal->SetWorldLocationAndRotation(DecalLocation, DecalRotation);
+	  
 
 	// 액터에 등록
-	Decal->RegisterComponent();
-	//Decal->AttachToComponent(this, FAttachmentTransformRules::KeepWorldTransform);  
+	Decal->RegisterComponent(); 
 
 	return Decal;
 }

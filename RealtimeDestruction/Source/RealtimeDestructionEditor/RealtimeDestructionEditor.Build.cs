@@ -53,6 +53,14 @@ public class RealtimeDestructionEditor : ModuleRules
 				"GeometryCollectionEditor",
 				"Chaos",
 				"FractureEngine",
+				
+				"AdvancedPreviewScene",
+				"InputCore",
+				"EditorFramework",
+				"ToolMenus",
+				"WorkspaceMenuStructure",
+				
+				"PropertyEditor",
 			}
 		);
 	}

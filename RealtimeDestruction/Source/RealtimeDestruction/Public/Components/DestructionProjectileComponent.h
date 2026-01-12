@@ -20,7 +20,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDestructionRequested, const FVec
 
 // 파괴 대상이 아닌 것에 충돌 시 호출
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNonDestructibleHit, const FHitResult&, HitResult);
-
+ 
 /**
  * 투사체용 파괴 컴포넌트
  *
@@ -158,7 +158,49 @@ public:
 	/** 파괴 불가능한 오브젝트에 충돌해도 제거할지 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction")
 	bool bDestroyOnNonDestructibleHit = true;
+	
+	//=========================================================================
+	// Decal 파라미터
+	//=========================================================================
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Decal")
+	bool  bUseDecalSizeOverride = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Decal", meta = (EditCondition = "bUseDecalSizeOverride", EditConditionHides))
+	FVector DecalSizeOverride = FVector(1.0f, 1.0f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Decal", meta = (EditCondition = "bUseDecalSizeOverride", EditConditionHides))
+	FVector DecalLocationOffset = FVector::ZeroVector;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Decal", meta = (EditCondition = "bUseDecalSizeOverride", EditConditionHides))
+	FRotator DecalRotationOffset = FRotator::ZeroRotator;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Decal", meta = (EditCondition = "!bUseDecalSizeOverride", EditConditionHides))
+	float DecalSizeMultiplier = 1.0f;
+
+	//=========================================================================
+	// Decal Editor 값 저장용 
+	//=========================================================================
+
+	UPROPERTY()
+	FVector DecalLocationInEditor = FVector::ZeroVector;
+
+	UPROPERTY()
+	FRotator DecalRotationInEditor = FRotator::ZeroRotator;
+
+	UPROPERTY()
+	FVector DecalScaleInEditor = FVector::OneVector;
+	
+	UPROPERTY()
+	FVector ToolShapeLocationInEditor = FVector::ZeroVector;
+
+	UPROPERTY()
+	FRotator ToolShapeRotationInEditor = FRotator::ZeroRotator;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> DecalMaterialInEditor = nullptr;
+	
+	
 	//=========================================================================
 	// 즉시 피드백 설정
 	//=========================================================================
@@ -212,7 +254,10 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category="Destruction")
 	void RequestDestructionManual(const FHitResult& HitResult);
-
+public:
+	UFUNCTION(BlueprintCallable, Category="Destruction|Decal")
+	void GetCalculateDecalSize( FVector& LocationOffset,  FRotator& RotatorOffset, FVector& SizeOffset) const;
+  
 protected:
 	virtual void BeginPlay() override;
 

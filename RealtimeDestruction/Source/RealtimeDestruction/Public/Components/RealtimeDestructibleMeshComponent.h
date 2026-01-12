@@ -53,10 +53,16 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	EDestructionToolShape ToolShape = EDestructionToolShape::Cylinder;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
+	FVector DecalLocationOffset = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
+	FRotator DecalRotationOffset = FRotator::ZeroRotator;
+	
 	/** Tool Shape 파라미터 (네트워크 직렬화용) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	FDestructionToolShapeParams ShapeParams;
-
+	  
 	/** RTT 측정용 클라이언트 전송 시간 (클라이언트에서만 설정) */
 	UPROPERTY()
 	double ClientSendTime = 0.0;
@@ -69,7 +75,9 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	FVector ToolCenterWorld = FVector::ZeroVector;
-	
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
+	FVector DecalSize = FVector::ZeroVector;
 };
 
 USTRUCT(BlueprintType)
@@ -130,6 +138,9 @@ struct REALTIMEDESTRUCTION_API FCompactDestructionOp
 	// Chunk Index (클라이언트가 계산, 1 byte)
 	UPROPERTY()
 	uint8 ChunkIndex = 0;
+
+	UPROPERTY()
+	FVector_NetQuantize DecalSize;
 
 	// 압축
 	static FCompactDestructionOp Compress(const FRealtimeDestructionRequest& Request, int32 Seq);

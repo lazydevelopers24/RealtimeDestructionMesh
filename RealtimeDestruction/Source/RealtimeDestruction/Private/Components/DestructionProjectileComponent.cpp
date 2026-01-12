@@ -17,11 +17,13 @@
 #include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "HAL/PlatformTime.h"
 #include "DynamicMesh/DynamicMesh3.h"
+#include "Misc/MessageDialog.h" 
 
 #if WITH_EDITOR
 #include "PropertyEditorModule.h"
-#include "Modules/ModuleManager.h"
+#include "Modules/ModuleManager.h" 
 #endif
+
 
 
 UDestructionProjectileComponent::UDestructionProjectileComponent()
@@ -33,6 +35,10 @@ UDestructionProjectileComponent::UDestructionProjectileComponent()
 void UDestructionProjectileComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	UFunction* Func = FindFunction(TEXT("OpenDecalSizeEditor"));
+	UE_LOG(LogTemp, Warning, TEXT("=== OpenDecalSizeEditor UFunction: %s ==="),
+		Func ? TEXT("FOUND") : TEXT("NOT FOUND"));
 
 	FName PropertyName = (PropertyChangedEvent.Property != nullptr)
 		? PropertyChangedEvent.Property->GetFName()
@@ -48,8 +54,10 @@ void UDestructionProjectileComponent::PostEditChangeProperty(FPropertyChangedEve
 		}
 	}
 } 
-#endif
 
+#endif
+ 
+ 
 void UDestructionProjectileComponent::BeginPlay()
 {
 	Super::BeginPlay();
@@ -175,7 +183,9 @@ void UDestructionProjectileComponent::ProcessDestructionRequest(
 	// 파괴 요청 생성
 	FRealtimeDestructionRequest Request;
 	Request.ImpactPoint = Hit.ImpactPoint;
-	Request.ImpactNormal = Hit.ImpactNormal;	
+	Request.ImpactNormal = Hit.ImpactNormal;
+	
+	GetCalculateDecalSize(Request.DecalLocationOffset,  Request.DecalRotationOffset, Request.DecalSize );
 
 	if (!ToolMeshPtr.IsValid())
 	{
@@ -505,6 +515,7 @@ void UDestructionProjectileComponent::SetShapeParameters(FRealtimeDestructionReq
 		OutRequest.ShapeParams.bCapped = bCapped;
 		break;
 	}
+	GetCalculateDecalSize(OutRequest.DecalLocationOffset,  OutRequest.DecalRotationOffset, OutRequest.DecalSize ); 
 
 	UE_LOG(LogTemp, Warning, TEXT("[Server] ToolShape: %d, ShapeParams - Radius: %.2f, Height: %.2f, RadiusSteps: %d"),
 		static_cast<int32>(OutRequest.ToolShape),
@@ -629,6 +640,67 @@ void UDestructionProjectileComponent::RequestDestructionManual(const FHitResult&
 		}
 	}
 }
+
+void UDestructionProjectileComponent::GetCalculateDecalSize(FVector& LocationOffset, FRotator& RotatorOffset,
+	FVector& SizeOffset) const
+{
+	if (bUseDecalSizeOverride)
+	{
+		LocationOffset = DecalLocationOffset;
+		RotatorOffset = DecalRotationOffset;
+		SizeOffset = DecalSizeOverride;
+		return ;
+	}
+
+	float BaseSize = 0.0f;
+	LocationOffset = FVector::ZeroVector;  
+	RotatorOffset = FRotator::ZeroRotator; 
+	switch (ToolShape)
+	{
+	case EDestructionToolShape::Cylinder:
+		BaseSize = CylinderRadius;
+		break;
+
+	case EDestructionToolShape::Sphere:
+		BaseSize = SphereRadius;
+		break;
+
+	default: 
+		break;
+	}
+
+	float FinalSize	 = BaseSize * DecalSizeMultiplier;
+	SizeOffset = FVector(FinalSize,FinalSize,FinalSize);
+}
+//
+// FVector UDestructionProjectileComponent::GetCalculateDecalSize() const
+// {
+// 	if (bUseDecalSizeOverride)
+// 	{
+// 		return DecalSizeOverride;
+// 	}
+//
+// 	float BaseSize = 0.0f;
+//
+// 	switch (ToolShape)
+// 	{
+// 	case EDestructionToolShape::Cylinder:
+// 		BaseSize = CylinderRadius;
+// 		break;
+//
+// 	case EDestructionToolShape::Sphere:
+// 		BaseSize = SphereRadius;
+// 		break;
+//
+// 	default: 
+// 		break;
+// 	}
+//
+// 	float FinalSize	 = BaseSize * DecalSizeMultiplier;
+// 	
+//
+// 	return FVector(FinalSize,FinalSize,FinalSize);
+// }
 
 // [deprecated]
 void UDestructionProjectileComponent::SpawnImmediateFeedback(const FHitResult& Hit)

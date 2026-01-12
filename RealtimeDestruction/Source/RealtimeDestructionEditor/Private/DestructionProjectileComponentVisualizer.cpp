@@ -11,8 +11,7 @@ void FDestructionProjectileComponentVisualizer::DrawVisualization(const UActorCo
 	if (!ProjectileComp || !ProjectileComp->GetOwner())
 	{
 		return;
-	}
-	 
+	} 
 	
 	FLinearColor DrawColor = FLinearColor(1.0f, 1.0f,0.0f, 1.0f);
 	switch (ProjectileComp->ToolShape)
@@ -29,6 +28,8 @@ void FDestructionProjectileComponentVisualizer::DrawVisualization(const UActorCo
 		break; 
 	}
 
+	FLinearColor DecalColor = FLinearColor(0.0f, 1.0f, 0.5f, 1.0f);
+	DrawDecalPreview(ProjectileComp, PDI, DecalColor);
 }
 
 void FDestructionProjectileComponentVisualizer::DrawSphere(const UDestructionProjectileComponent* Component, FPrimitiveDrawInterface* PDI, const FLinearColor& Color)
@@ -96,4 +97,50 @@ void FDestructionProjectileComponentVisualizer::DrawCylinder(const UDestructionP
 		0.0f,
 		true
 	);
+}
+
+void FDestructionProjectileComponentVisualizer::DrawDecalPreview(const class UDestructionProjectileComponent* Component,
+	FPrimitiveDrawInterface* PDI, const FLinearColor& Color)
+{
+	if (!Component || !Component->GetOwner())
+	{
+		return;
+	}
+
+	FVector DecalSize; 
+	FVector LocationOffset;
+	FRotator RotationOffset;
+	Component->GetCalculateDecalSize(LocationOffset, RotationOffset, DecalSize);
+
+	
+	FVector Location = Component->GetComponentLocation();
+	FRotator Rotation = Component->GetComponentRotation();
+
+	Location += LocationOffset;
+	Rotation += RotationOffset;
+	
+	FTransform Transform(Rotation, Location);
+	FVector YAxis = Transform.GetUnitAxis(EAxis::Y);
+	FVector ZAxis = Transform.GetUnitAxis(EAxis::Z);
+
+	float HalfY = DecalSize.Y * 0.5f;
+	float HalfZ = DecalSize.Z * 0.5f;
+
+	// 사각형 4개 꼭지점
+	FVector TopLeft = Location + YAxis * (-HalfY) + ZAxis * HalfZ;
+	FVector TopRight = Location + YAxis * HalfY + ZAxis * HalfZ;
+	FVector BottomRight = Location + YAxis * HalfY + ZAxis * (-HalfZ);
+	FVector BottomLeft = Location + YAxis * (-HalfY) + ZAxis * (-HalfZ);
+
+	float Thickness = 1.5f;
+	
+	// 사각형 그리기
+	PDI->DrawLine(TopLeft, TopRight, Color, SDPG_World, Thickness);
+	PDI->DrawLine(TopRight, BottomRight, Color, SDPG_World, Thickness);
+	PDI->DrawLine(BottomRight, BottomLeft, Color, SDPG_World, Thickness);
+	PDI->DrawLine(BottomLeft, TopLeft, Color, SDPG_World, Thickness);
+
+	// 대각선 (X 표시로 데칼임을 표시)
+	PDI->DrawLine(TopLeft, BottomRight, Color, SDPG_World, Thickness * 0.5f);
+	PDI->DrawLine(TopRight, BottomLeft, Color, SDPG_World, Thickness * 0.5f);
 } 

@@ -82,7 +82,7 @@ public class RealtimeDestruction : ModuleRules
 					"FractureEngine",
 					"FractureEditor",
                     "GeometryCollectionEditor",
-					"DataflowCore",
+					"DataflowCore"
 				}
 			);
 		}

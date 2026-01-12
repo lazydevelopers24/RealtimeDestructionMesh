@@ -395,7 +395,7 @@ void FRealtimeBooleanProcessor::StartUnionWorker(FBulletHoleBatch&& InBatch, int
 						&CombinedToolMesh, FTransform::Identity,
 						&CurrentTool, FTransform::Identity,
 						&UnionResult, FMeshBoolean::EBooleanOp::Union
-					);
+					);   
 
 					if (MeshUnion.Compute())
 					{
@@ -1085,7 +1085,7 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 									{
 										if (Decal.IsValid())
 										{
-											Decal->DestroyComponent();
+											//Decal->DestroyComponent();
 										}
 									}
 								});
@@ -1938,7 +1938,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 						{
 							if (Decal.IsValid())
 							{
-								Decal->DestroyComponent();
+								//Decal->DestroyComponent();
 							}
 						}
 					}
@@ -2219,7 +2219,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerParallel(FBulletHoleBatch&& In
 
 					for (const auto& Decal : DecalsToRemove)
 						if (Decal.IsValid())
-							Decal->DestroyComponent();
+							//Decal->DestroyComponent();
 					/*
 					 * deprecated_realdestruction
 					 * SetMesh내부에서 호출됨
