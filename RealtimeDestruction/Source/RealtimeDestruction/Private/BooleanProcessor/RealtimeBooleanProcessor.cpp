@@ -102,16 +102,19 @@ bool FRealtimeBooleanProcessor::Initialize(URealtimeDestructibleMeshComponent* O
 	int32 ChunkNum = OwnerComponent->GetChunkNum();
 	if (ChunkNum > 0)
 	{
-		BooleanGenerations.SetNumZeroed(ChunkNum);
+		ChunkGenerations.SetNumZeroed(ChunkNum);
 		ChunkStates.Initialize(ChunkNum);
 		ChunkHoleCount.SetNumZeroed(ChunkNum);
+
+		// 초기값 10으로 시작
+		MaxUnionCount.Init(10, ChunkNum);
 
 		// Chunk용 MulyiWorker 변수 초기화
 		ChunkUnionResultsQueues.SetNum(ChunkNum);
 		for (int32 i = 0; i < ChunkNum; ++i)
 		{
 			ChunkUnionResultsQueues[i] = new TQueue<FUnionResult, EQueueMode::Mpsc>();
-
+			
 			// chunkstates의 lastsimplifytricount 설정
 			FDynamicMesh3 ChunkMesh;
 			OwnerComponent->GetChunkMesh(ChunkMesh, i);
@@ -150,12 +153,6 @@ void FRealtimeBooleanProcessor::Shutdown()
 
 	LifeTime->Clear();
 	LifeTime.Reset();
-	++BooleanGeneration;
-
-	// Debug
-	OpAccum = 0;
-	DurationCount = 0;
-	GrowthCount = 0;
 
 	FBulletHole Temp;
 	while (HighPriorityQueue.Dequeue(Temp)) {}
@@ -163,10 +160,6 @@ void FRealtimeBooleanProcessor::Shutdown()
 
 	DebugHighQueueCount = 0;
 	DebugNormalQueueCount = 0;
-
-	// 캐시 정리
-	CachedMeshPtr.Reset();
-	bCacheValid = false;
 
 	// Chunk 용 Queue 정리
 	for (TQueue<FUnionResult, EQueueMode::Mpsc>* Queue : ChunkUnionResultsQueues)
@@ -182,57 +175,9 @@ void FRealtimeBooleanProcessor::Shutdown()
 	ChunkUnionResultsQueues.Empty();
 	ChunkNextBatchIDs.Empty(); 
 
-	BooleanGenerations.Empty();
+	ChunkGenerations.Empty();
 
 	ChunkStates.Shutdown();
-}
-
-//-------------------------------------------------------------------
-// GT 복사 블로킹 최적화 - 캐시 함수들
-//-------------------------------------------------------------------
-
-void FRealtimeBooleanProcessor::SimplifyLog()
-{
-	UE_LOG(LogTemp, Display, TEXT("Growth %d, Op %d, Dur %d"), GrowthCount, OpAccum, DurationCount);
-}
-
-void FRealtimeBooleanProcessor::UpdateMeshCache(FDynamicMesh3&& ResultMesh)
-{
-	// GT에서만 호출됨
-	// 워커 결과를 캐시에 저장하여 다음 작업에서 재사용
-	CachedMeshPtr = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(MoveTemp(ResultMesh));
-	bCacheValid = true;
-}
-
-TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> FRealtimeBooleanProcessor::GetCachedMeshForWorker()
-{
-	// GT에서 호출 - 워커에게 전달할 캐시 포인터 반환
-	// 캐시가 유효하면 캐시된 메시 사용, 아니면 컴포넌트에서 새로 생성
-
-	if (bCacheValid && CachedMeshPtr.IsValid())
-	{
-		TRACE_CPUPROFILER_EVENT_SCOPE("GetCachedMeshForWorker_FromCache");
-		return CachedMeshPtr;
-	}
-
-	// 캐시가 없으면 컴포넌트에서 메시를 가져와서 SharedPtr로 생성
-	if (OwnerComponent.IsValid())
-	{
-		TRACE_CPUPROFILER_EVENT_SCOPE("GetCachedMeshForWorker_FromComponent");
-		if (UDynamicMesh* TargetMesh = OwnerComponent->GetDynamicMesh())
-		{
-			TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> NewMeshPtr;
-			TargetMesh->ProcessMesh([&](const FDynamicMesh3& Source)
-				{
-					NewMeshPtr = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(Source);
-				});
-			CachedMeshPtr = NewMeshPtr;
-			bCacheValid = true;
-			return NewMeshPtr;
-		}
-	}
-
-	return nullptr;
 }
 
 void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh)
@@ -243,22 +188,17 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 		return;
 	}
 
-	if (IsHoleMax())
+	if (!ChunkMesh)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Chunk is null"));
 		return;
 	}
 
-	/*
-	 * 0105 기준 검증단계니까 CellMesh가 없으면 기존 로직 수행
-	 * 나중에 CellMesh 불리언 연산이 안정화 되면 기존 로직 제거
-	 */
 	FBulletHole Op = {};
 	Op.ChunkIndex = Operation.Request.ChunkIndex;
-	Op.TargetMesh = ChunkMesh ? ChunkMesh : OwnerComponent.Get();
+	Op.TargetMesh = ChunkMesh;
 	FTransform ComponentToWorld = Op.TargetMesh->GetComponentTransform();
- 	//const FVector LocalImpact = ComponentToWorld.InverseTransformPosition(Operation.Request.ImpactPoint);
-	 
-	// AdjustedImpactWorld 계산 ProjectileComp로 이동
+
 	const FVector LocalImpact = ComponentToWorld.InverseTransformPosition(Operation.Request.ToolCenterWorld);
 	const FVector LocalNormal = ComponentToWorld.InverseTransformVector(Operation.Request.ToolForwardVector).
 		GetSafeNormal();
@@ -321,370 +261,7 @@ void FRealtimeBooleanProcessor::EnqueueRemaining(FBulletHole&& Operation)
 	}
 }
 
-void FRealtimeBooleanProcessor::StartUnionWorker(FBulletHoleBatch&& InBatch, int32 BatchID, int32 Gen)
-{
-	if (!OwnerComponent.IsValid())
-	{
-		ActiveUnionWorkers.fetch_sub(1);
-		return;
-	}
-
-	TRACE_CPUPROFILER_EVENT_SCOPE("UnionWorker_Start");
-
-	// 비동기 Union 작업 시작
-	UE::Tasks::Launch(
-		UE_SOURCE_LOCATION,
-		[
-			OwnerComponent = OwnerComponent,
-			LifeTimeToken = LifeTime,
-			Batch = MoveTemp(InBatch),
-			BatchID,
-			Gen,
-			this
-		]() mutable
-		{
-			FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-			if (!Processor || Processor->IsStale(Gen))
-			{
-				ActiveUnionWorkers.fetch_sub(1);
-				return;
-			}
-
-			TRACE_CPUPROFILER_EVENT_SCOPE("UnionWorker_Union");
-
-			//Union 수행 
-			FDynamicMesh3 CombinedToolMesh;
-			TArray<TWeakObjectPtr<UDecalComponent>> Decals;
-			int32 UnionCount = 0;
-
-			int32 BatchCount = Batch.Num();
-			TArray<FTransform> ToolTransforms = MoveTemp(Batch.ToolTransforms);
-			TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = MoveTemp(Batch.TemporaryDecals);
-			TArray<TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = MoveTemp(Batch.ToolMeshPtrs);
-
-			bool bIsFirst = true;
-
-			for (int32 i = 0; i < BatchCount; ++i)
-			{
-				if (Processor->IsStale(Gen))
-				{
-					ActiveUnionWorkers.fetch_sub(1);
-					return;
-				}
-				FTransform ToolTransform = MoveTemp(ToolTransforms[i]);
-				TWeakObjectPtr<UDecalComponent> TemporaryDecal = MoveTemp(TemporaryDecals[i]);
-
-				FDynamicMesh3 CurrentTool = MoveTemp(*(ToolMeshPtrs[i]));
-				MeshTransforms::ApplyTransform(CurrentTool, (FTransformSRT3d)ToolTransform, true);
-
-				if (TemporaryDecal.IsValid())
-				{
-					Decals.Add(TemporaryDecal);
-				}
-
-				if (bIsFirst)
-				{
-					CombinedToolMesh = MoveTemp(CurrentTool);
-					bIsFirst = false;
-					UnionCount++;
-				}
-				else
-				{
-					FDynamicMesh3 UnionResult;
-					FMeshBoolean MeshUnion(
-						&CombinedToolMesh, FTransform::Identity,
-						&CurrentTool, FTransform::Identity,
-						&UnionResult, FMeshBoolean::EBooleanOp::Union
-					);   
-
-					if (MeshUnion.Compute())
-					{
-						CombinedToolMesh = MoveTemp(UnionResult);
-						UnionCount++;
-					}
-					else
-					{
-						UE_LOG(LogTemp, Warning, TEXT("StartUnionWorker: Failed To Union"));
-					}
-				}
-
-				if (Processor->IsHoleMax())
-				{
-					break;
-				}
-
-			}
-
-			if (UnionCount > 0)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("[Union] BatchID %d completed with UnionCount %d"), BatchID, UnionCount);
-
-				FUnionResult Result;
-				Result.BatchID = BatchID;
-				Result.Generation = Gen;
-				Result.PendingCombinedToolMesh = MoveTemp(CombinedToolMesh);
-				Result.Decals = MoveTemp(Decals);
-				Result.UnionCount = UnionCount;
-
-				Processor->UnionResultsQueue.Enqueue(MoveTemp(Result));
-
-				UE_LOG(LogTemp, Warning, TEXT("[Union] BatchID %d enqueued, triggering Subtract"), BatchID);
-
-				/** Subtract Worker 트리거 */
-				TriggerSubtractWorker();
-			}
-			else
-			{
-				UE_LOG(LogTemp, Warning, TEXT("[Union Fail] ❌ BatchID %d had UnionCount 0"), BatchID);
-			}
-			ActiveUnionWorkers.fetch_sub(1);
-		});
-}
-
-void FRealtimeBooleanProcessor::TriggerSubtractWorker()
-{
-	// 이미 Subtract 작업 중이라면 Return
-	bool Expected = false;
-	if (!bSubtractInProgress.compare_exchange_strong(Expected, true))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Subtract] Already in progress, skipping"));
-		return;
-	}
-
-	// Subtract Worker 시작 
-	UE::Tasks::Launch(
-		UE_SOURCE_LOCATION,
-		[
-			OwnerComponent = OwnerComponent,
-			LifeTimeToken = LifeTime,
-			this
-		]() mutable {
-
-			TRACE_CPUPROFILER_EVENT_SCOPE("UnionWorker_Subtract");
-
-			FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-			if (!Processor || !OwnerComponent.IsValid())
-			{
-				bSubtractInProgress.store(false);
-				return;
-			}
-
-			TArray<FUnionResult> PendingResults;
-			FUnionResult TempResult;
-
-			// 큐에서 모든 결과 가져오기
-			while (Processor->UnionResultsQueue.Dequeue(TempResult))
-			{
-				PendingResults.Add(MoveTemp(TempResult));
-			}
-
-			if (PendingResults.Num() == 0)
-			{
-				bSubtractInProgress.store(false);
-				return;
-			}
-
-			// BatchID 순서대로 정렬
-			//PendingResults.Sort([](const FUnionResult& A, const FUnionResult& B) {
-			//	return A.BatchID < B.BatchID;
-			//	});
-
-			// 순서대로 Subtract 진행
-			int32 NextBatchID = Processor->NextSubtractBatchID.load();
-
-			// ⭐ 순서 맞는 첫 번째 결과만 처리! (한 번에 하나씩)
-			bool bProcessedOne = false;
-			TArray<FUnionResult> UnprocessedResults;
-
-			for (int32 i = 0; i < PendingResults.Num(); ++i)
-			{
-				FUnionResult& Result = PendingResults[i];
-
-				//// 이미 하나 처리했으면 나머지는 재큐잉
-				//if (bProcessedOne)
-				//{
-				//	UnprocessedResults.Add(MoveTemp(PendingResults[i]));
-				//	continue;
-				//}  
-				//if (Result.BatchID != NextBatchID)
-				//{
-				//	UE_LOG(LogTemp, Warning, TEXT("[Subtract] BatchID %d != NextBatchID %d, re-enqueuing"), Result.BatchID, NextBatchID);
-				//	UnprocessedResults.Add(MoveTemp(Result));
-				//	continue;
-				//}
-
-				if (Processor->IsStale(Result.Generation))
-				{
-					UE_LOG(LogTemp, Warning, TEXT("[Subtract] BatchID %d is stale, skipping"), Result.BatchID);
-					NextBatchID++;
-					Processor->NextSubtractBatchID.store(NextBatchID);
-					continue;
-				}
-
-				// 메시 가져오기
-				TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CachedMesh =
-					Processor->GetCachedMeshForWorker();
-
-				if (!CachedMesh.IsValid())
-				{
-					UE_LOG(LogTemp, Warning, TEXT("[Subtract Fail] CachedMesh invalid for BatchID %d, re-enqueuing all"), Result.BatchID);
-
-					// 현재 + 남은 결과 모두 재큐잉
-					for (int32 j = i; j < PendingResults.Num(); ++j)
-					{
-						UnprocessedResults.Add(MoveTemp(PendingResults[j]));
-					}
-					break;
-				}
-
-				//FDynamicMesh3 WorkMesh = *CachedMesh;
-
-				// Subtract 수행
-				FDynamicMesh3 ResultMesh;
-				FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
-
-				bool bSuccess = false;
-				{
-					TRACE_CPUPROFILER_EVENT_SCOPE("UnionWorker_ApplyBoolean");
-					bSuccess = ApplyMeshBooleanAsync(
-						CachedMesh.Get(),
-						&Result.PendingCombinedToolMesh,
-						&ResultMesh,
-						EGeometryScriptBooleanOperation::Subtract,
-						Options
-					);
-
-				}
-				if (bSuccess)
-				{
-					UE_LOG(LogTemp, Warning, TEXT("[Subtract] ✅ BatchID %d succeeded"), Result.BatchID);
-
-					// 다음 배치 ID로 진행
-					NextBatchID++;
-					Processor->NextSubtractBatchID.store(NextBatchID);
-
-					// ⭐ Game Thread에 반영 + 완료 후 다음 Subtract 트리거
-					AsyncTask(ENamedThreads::GameThread,
-						[OwnerComponent, Result = MoveTemp(Result),
-						ResultMesh = MoveTemp(ResultMesh), LifeTimeToken = LifeTime, Processor, NextBatchID]() mutable
-						{
-							if (!OwnerComponent.IsValid()) return;
-							if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
-							{
-								return;
-							}
-							Processor = LifeTimeToken->Processor.load();
-							if (!Processor)
-							{
-								return;
-							}
-
-							UE_LOG(LogTemp, Warning, TEXT("[Subtract][GT] Applying BatchID %d to mesh"), Result.BatchID);
-
-							// 메시 반영
-							//Processor->CachedMeshPtr = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(MoveTemp(ResultMesh));
-							//Processor->bCacheValid = true;
-							//OwnerComponent->SetMesh(FDynamicMesh3(*Processor->CachedMeshPtr));
-
-							Processor->CachedMeshPtr = MakeShared<FDynamicMesh3>(ResultMesh);  // 복사 1회
-							Processor->bCacheValid = true;
-
-							//// SetMesh 전에 작업을 미리 시작하자
-							Processor->bSubtractInProgress.store(false);
-							Processor->TriggerSubtractWorker();
-
-							{
-								TRACE_CPUPROFILER_EVENT_SCOPE("UnionWorker_SetMesh");
-
-								OwnerComponent->SetMesh(MoveTemp(ResultMesh));  // Move (비용 없음)
-							}
-
-							/*
-							 * deprecated_realdestruction
-							 * SetMesh 내부에서 호출됨
-							 */
-							 // 렌더링 & 충돌
-							 // OwnerComponent->ApplyRenderUpdate();
-							 // OwnerComponent->ApplyCollisionUpdate();
-
-							 // HoleCount 업데이트
-							Processor->CurrentHoleCount += Result.UnionCount;
-
-							UE_LOG(LogTemp, Warning, TEXT("[Subtract][GT] CurrentHoleCount: %d"), Processor->CurrentHoleCount);
-
-							// Decal 처리
-							for (const auto& Decal : Result.Decals)
-							{
-								if (Decal.IsValid())
-								{
-									// Decal->DestroyComponent();
-								}
-							}
-
-							// ⭐ 플래그 해제 후 다음 Subtract 트리거!
-							//Processor->bSubtractInProgress.store(false);
-							//Processor->TriggerSubtractWorker();
-						});
-
-					bProcessedOne = true;
-				}
-				else
-				{
-					UE_LOG(LogTemp, Warning, TEXT("[Subtract Fail] ❌ BatchID %d failed"), Result.BatchID);
-					NextBatchID++;
-					Processor->NextSubtractBatchID.store(NextBatchID);
-				}
-			}
-
-			// 처리 못한 결과들 재큐잉
-			//for (FUnionResult& UnprocessedResult : UnprocessedResults)
-			//{
-			//	Processor->UnionResultsQueue.Enqueue(MoveTemp(UnprocessedResult));
-			//}
-			//
-			//if (UnprocessedResults.Num() > 0)
-			//{
-			//	UE_LOG(LogTemp, Warning, TEXT("[Subtract Fail] Re-enqueued %d unprocessed results"), UnprocessedResults.Num());
-			//}
-
-			// ⭐ 하나도 처리 못했으면 여기서 플래그 해제
-			if (!bProcessedOne)
-			{
-				bSubtractInProgress.store(false);
-
-				// 큐에 아직 결과 남아있으면 다시 트리거
-				if (!Processor->UnionResultsQueue.IsEmpty())
-				{
-					UE_LOG(LogTemp, Warning, TEXT("[Subtract] No results processed but queue not empty, re-triggering"));
-					Processor->TriggerSubtractWorker();
-				}
-			}
-			//if (!bProcessedOne)
-			//{
-			//	bSubtractInProgress.store(false);
-			//
-			//	// 큐에 아직 결과 남아있으면 다시 트리거
-			//	if (!Processor->UnionResultsQueue.IsEmpty())
-			//	{
-			//		UE_LOG(LogTemp, Warning, TEXT("[Subtract] No results processed but queue not empty, re-triggering"));
-			//		Processor->TriggerSubtractWorker();
-			//	}
-			//	else
-			//	{
-			//		UE_LOG(LogTemp, Warning, TEXT("[Subtract] No results processed, queue empty, done"));
-			//	}
-			//}
-			//else
-			//{
-			//	// ⭐ 하나 처리했으면 AsyncTask에서 플래그 해제
-			//	// (AsyncTask 내부에서 플래그 해제 후 TriggerSubtractWorker 호출)
-			//	UE_LOG(LogTemp, Warning, TEXT("[Subtract] Processed one, waiting for GT apply"));
-			//}
-
-		});
-}
-
-void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBatch, int32 BatchID, int32 Gen, int32 ChunkIndex)
+void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBatch, int32 BatchID, int32 ChunkIndex)
 {
 	if (!OwnerComponent.IsValid() || ChunkIndex == INDEX_NONE)
 	{
@@ -704,14 +281,13 @@ void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBa
 		OwnerComponent = OwnerComponent,
 		LifeTimeToken = LifeTime,
 		Batch = MoveTemp(InBatch),
-		BatchID,
-		Gen,
+		BatchID,		
 		ChunkIndex,
 		this
 	]()mutable
 		{
 			FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-			if (!Processor || Processor->IsStaleForChunk(Gen, ChunkIndex))
+			if (!Processor)
 			{
 				ActiveUnionWorkers.fetch_sub(1);
 				return;
@@ -733,12 +309,6 @@ void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBa
 
 			for (int32 i = 0; i < BatchCount; ++i)
 			{
-				if (Processor->IsStaleForChunk(Gen, ChunkIndex))
-				{
-					ActiveUnionWorkers.fetch_sub(1);
-					return;
-				}
-
 				if (!ToolMeshPtrs[i].IsValid())
 				{
 					continue;
@@ -746,7 +316,7 @@ void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBa
 				 
 				FTransform ToolTransform = MoveTemp(ToolTransforms[i]); 
 				TWeakObjectPtr<UDecalComponent> TemporaryDecal = MoveTemp(TemporaryDecals[i]);
-
+				
 				// 메시가 비어있으면 스킵 (크래시 방지)
 				FDynamicMesh3 CurrentTool = *(ToolMeshPtrs[i]);
 				if (CurrentTool.TriangleCount() == 0)
@@ -789,11 +359,6 @@ void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBa
 						UE_LOG(LogTemp, Warning, TEXT("[UnionWorkerForChunk] Union failed at ChunkIndex %d, item %d"), ChunkIndex, i);
 					}
 				}
-
-				if (Processor->IsHoleMax())
-				{
-					break;
-				}
 			}
 
 			if (UnionCount > 0 && CombinedToolMesh.TriangleCount() > 0)
@@ -803,7 +368,7 @@ void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBa
 
 				FUnionResult Result;
 				Result.BatchID = BatchID;
-				Result.Generation = Gen;
+				// Result.Generation = Gen;
 				Result.PendingCombinedToolMesh = MoveTemp(CombinedToolMesh);
 				Result.Decals = MoveTemp(Decals);
 				Result.UnionCount = UnionCount;
@@ -902,117 +467,21 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 
 					bool bProcessedAny = false;
 
-					/*
-					for (FUnionResult& Result : PendingResults)
-					{ 
-						bool bIsStale = Processor->IsStaleForChunk(Result.Generation, ChunkIndex);
-						 
-
-						if (bIsStale)
-						{
-							continue;
-						}
-						if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
-						{
-							return;
-						}
-						
-						Processor = LifeTimeToken->Processor.load();
-						if (!Processor)
-						{
-							return;
-						}
-
-						// Chunk 메시 복사
-						FDynamicMesh3 WorkMesh;
-						if (!OwnerComponent->GetChunkMesh(WorkMesh, ChunkIndex))
-						{
-							UE_LOG(LogTemp, Warning, TEXT("[SubtractWorkerForChunk] Failed to get ChunkMesh for ChunkIndex %d"), ChunkIndex);
-							continue;
-						} 
-						 
- 
-						// Subtract 수행 전 메시 유효성 검사
-						if (WorkMesh.TriangleCount() == 0)
-						{
- 							continue;
-						}
-
- 
-						if (Result.PendingCombinedToolMesh.TriangleCount() == 0)
-						{ 
-							continue;
-						}
-
-						// Subtract 수행
-						FDynamicMesh3 ResultMesh;
-						FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
-
-						bool bSuccess = ApplyMeshBooleanAsync(
-							&WorkMesh,
-							&Result.PendingCombinedToolMesh,
-							&ResultMesh,
-							EGeometryScriptBooleanOperation::Subtract,
-							Options
-						);
- 
-						if (bSuccess)
-						{ 
-
-							// GT에서 결과 반영
-							AsyncTask(ENamedThreads::GameThread,
-								[OwnerComponent, Result = MoveTemp(Result), ResultMesh = MoveTemp(ResultMesh),
-								LifeTimeToken, ChunkIndex]() mutable
-								{
-									if (!OwnerComponent.IsValid()) return;
-
-
-									// Processor 유효성 검사 추가
-									if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
-									{
-										return;
-									}
-									FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-									if (!Processor)
-									{
-										return;
-									} 
-
-									OwnerComponent->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
-									Processor->CurrentHoleCount += Result.UnionCount;
-
-									for (const auto& Decal : Result.Decals)
-									{
-										if (Decal.IsValid())
-										{
-											Decal->DestroyComponent();
-										}
-									}
-								});
-
-							bProcessedAny = true;
-						}
-					}
-					 */
 					double BatchStartTime = FPlatformTime::Seconds();
 					for (int32 ResultIndex = 0; ResultIndex < PendingResults.Num(); ++ResultIndex)
 					{
-						FUnionResult& Result = PendingResults[ResultIndex]; 
-						bool bIsStale = Processor->IsStaleForChunk(Result.Generation, ChunkIndex);
-
-
-						if (bIsStale)
-						{
-							continue;
-						}
+						FUnionResult& Result = PendingResults[ResultIndex];
+						
 						if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 						{
+							UE_LOG(LogTemp, Warning, TEXT("[SubtractWorkerForChunk] Chunk %d : LifeToken invalid"), ChunkIndex);
 							return;
 						}
 
 						Processor = LifeTimeToken->Processor.load();
 						if (!Processor)
 						{
+							UE_LOG(LogTemp, Warning, TEXT("[SubtractWorkerForChunk] Chunk %d : Processor invalid"), ChunkIndex);
 							return;
 						}
 
@@ -1027,11 +496,13 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 						// Subtract 수행 전 메시 유효성 검사
 						if (WorkMesh.TriangleCount() == 0)
 						{
+							UE_LOG(LogTemp, Warning, TEXT("[SubtractWorkerForChunk] Chunk %d : Workmesh Triangle count is zero"), ChunkIndex);
 							continue;
 						}
 
 						if (Result.PendingCombinedToolMesh.TriangleCount() == 0)
 						{
+							UE_LOG(LogTemp, Warning, TEXT("[SubtractWorkerForChunk] Chunk %d : Toolmesh Triangle count is zero"), ChunkIndex);
 							continue;
 						}
 
@@ -1049,22 +520,26 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 							Options
 						);
 
-						CurrentSubDuration = FPlatformTime::Seconds() - CurrentSubDuration;
-						
+						CurrentSubDuration = FPlatformTime::Seconds() - CurrentSubDuration;						
 
 						if (bSuccess)
 						{
 							Processor->AccumulateSubtractDuration(ChunkIndex, CurrentSubDuration);
+							Processor->TrySimplify(ResultMesh, ChunkIndex, Result.UnionCount);
 							
 							double SubtractCost = CurrentSubDuration * 1000.0;
 							Processor->UpdateSubtractAvgCost(SubtractCost);
+							Processor->UpdateUnionSize(ChunkIndex, SubtractCost);
 
 							// GT에서 결과 반영
 							AsyncTask(ENamedThreads::GameThread,
 								[OwnerComponent, Result = MoveTemp(Result), ResultMesh = MoveTemp(ResultMesh),
 								LifeTimeToken, ChunkIndex]() mutable
 								{
-									if (!OwnerComponent.IsValid()) return;
+									if (!OwnerComponent.IsValid())
+									{
+										return;
+									}
 
 
 									// Processor 유효성 검사 추가
@@ -1078,7 +553,14 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 										return;
 									}
 
+									double CurrentSetMeshAvgCost = FPlatformTime::Seconds();
+									
 									OwnerComponent->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
+									++Processor->ChunkGenerations[ChunkIndex];
+
+									CurrentSetMeshAvgCost = CurrentSetMeshAvgCost - FPlatformTime::Seconds();
+									Processor->UpdateSimplifyInterval(CurrentSetMeshAvgCost);
+									
 									Processor->ChunkHoleCount[ChunkIndex] += Result.UnionCount;
 
 									for (const auto& Decal : Result.Decals)
@@ -1092,10 +574,17 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 
 							bProcessedAny = true;
 						}
+						else
+						{
+							/*
+							 * 실패한 연산 처리를 어떻게 할 것인가
+							 * 불리언 실패해서 데칼 남는 경우는 없음 
+							 */
+						}
 
 						// 시간 체크
 						double ElapseMs = (FPlatformTime::Seconds() - BatchStartTime) * 1000.0f;
-
+						
 						UE_LOG(LogTemp, Warning, TEXT("[Adaptive Subtract] %d Num: ElapseMs: %.2f"), PendingResults.Num(), ElapseMs);
 						if (ElapseMs > Processor->FrameBudgetMs)
 						{
@@ -1103,11 +592,10 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 							UE_LOG(LogTemp, Warning, TEXT("[Adaptive Subtract] Pass Next Frame: %d"), PendingResults.Num());
 							for (int32 j = ResultIndex + 1; j < PendingResults.Num(); ++j)
 							{
-								ChunkQueue->Enqueue(MoveTemp(PendingResults[j]));
+								ChunkQueue->Enqueue(MoveTemp(PendingResults[j]));								
 							}
 							break;
 						}
-
 					}
 
 					// GT에서 비트 해제 및 다음 트리거
@@ -1140,6 +628,7 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 				});
 		});
 }
+
 void FRealtimeBooleanProcessor::UpdateSubtractAvgCost(double CostMs)
 {
 	SubtractCostAccum += CostMs;
@@ -1150,102 +639,41 @@ void FRealtimeBooleanProcessor::UpdateSubtractAvgCost(double CostMs)
 		SubtractAvgCostMs = SubtractCostAccum / SubtractCostSampleCount;
 		SubtractCostAccum = SubtractAvgCostMs;
 		SubtractCostSampleCount = 1;
-
-		//UE_LOG(LogTemp, Warning, TEXT("[Adaptive Subtract] : %.2f"), SubtractAvgCostMs);
 	}
 }
 
-void FRealtimeBooleanProcessor::KickProcessIfNeeded()
+void FRealtimeBooleanProcessor::UpdateUnionSize(int32 ChunkIndex, double DurationMs)
 {
-	if (bWorkInFlight && !bEnableMultiWorkers)
+	const int32 CurrentUnionCount = MaxUnionCount[ChunkIndex];
+	int32 NextCount = CurrentUnionCount;
+	
+	if (DurationMs > FrameBudgetMs)
 	{
-		return;
+		// 70%로 감소
+		NextCount = FMath::FloorToInt(CurrentUnionCount * 0.7f);
+
+		/*
+		 * 극단적으로 비용이 커져도 프레임 방어할 수 있도록 최소 1개로 결정
+		 */
+		NextCount = FMath::Max(1, NextCount);
+	}
+	else if (DurationMs < (FrameBudgetMs * 0.6))
+	{
+		/*
+		 * 1. 20개도 충분할 것 같음
+		 * 2. 모든 메시에 대해서 프로파일링하는 건 비현실적임.
+		 */
+		NextCount = FMath::Min(CurrentUnionCount + 1, 20);
 	}
 
-	if (IsHoleMax())
+	if (NextCount != CurrentUnionCount)
 	{
-		FBulletHole Temp;
-		while (HighPriorityQueue.Dequeue(Temp)) {}
-		while (NormalPriorityQueue.Dequeue(Temp)) {}
-		return;
+		MaxUnionCount[ChunkIndex] = CurrentUnionCount;
 	}
-
-	// batch에 처리할 연산을 채움
-	FBulletHoleBatch Batch;
-	int32 BatchCount = DrainBatch(Batch);
-
-
-	// batch 배열이 0 이하 == 처리할 연산이 없다.
-	if (BatchCount <= 0)
-	{
-		return;
-	}
-
-	if (!bEnableMultiWorkers)
-	{
-		bWorkInFlight = true;
-	}  
-
-	if (bEnableMultiWorkers)
-	{
-		// Batch 존재 && Hole 충분 할 때 Worker 배치
-		// 가용한 Worker Max Count를 설정
-		int32 CurrentCount = ActiveUnionWorkers.load();
-		bool bWorkerReserved = false;
-
-		while (CurrentCount < MaxWorkerCount)
-		{
-			if (ActiveUnionWorkers.compare_exchange_weak(CurrentCount, CurrentCount + 1))
-			{
-				bWorkerReserved = true;
-				break;
-			}
-		}
-
-		// 워커 잡는거 실패했으면 return
-		if (!bWorkerReserved)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Fail] Allocated Max Worker"));
-			return;
-		}
-
-
-		/** 순서 추적을 위해 Batch ID 할당 */
-		int32 CurrentBatchID = NextBatchID.fetch_add(1);
-		int32 Gen = BooleanGeneration.load();
-		// TODO: BatchCount가 항상 1임
-
-		UE_LOG(LogTemp, Warning, TEXT("[KickProcess] Starting Union Worker for BatchID %d (Count: %d)"), CurrentBatchID, BatchCount);
-
-		/** Union Worker 시작 */
-		StartUnionWorker(MoveTemp(Batch), CurrentBatchID, Gen);
-	}
-	else
-	{
-		const int32 Gen = ++BooleanGeneration;
-
-		if (bEnableParallel/* && BatchCount >= ParallelThreshold*/)
-		{
-			StartBooleanWorkerParallel(MoveTemp(Batch), Gen);
-		}
-		else
-		{
-			StartBooleanWorkerAsync(MoveTemp(Batch), Gen);
-		}
-	}
-
 }
 
 void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 {
-	if (IsHoleMax())
-	{
-		FBulletHole Temp;
-		while (HighPriorityQueue.Dequeue(Temp)) {}
-		while (NormalPriorityQueue.Dequeue(Temp)) {}
-		return;
-	}
-
 	/*
 	 * 우선 순위별 TMap 생성
 	 * Chunk의 주소를 Key로 해서 Chunk별 연산 수집
@@ -1260,90 +688,118 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 	TArray<UDynamicMeshComponent*> HighPriorityOrder;
 	TArray<UDynamicMeshComponent*> NormalPriorityOrder;
 
+	
+
+	// 임의로 메모리 할당
+	HighPriorityOrder.Reserve(100);
+	NormalPriorityOrder.Reserve(100);
+
 	auto GatherOps = [&](TQueue<FBulletHole, EQueueMode::Mpsc>& Queue,
-		TMap<UDynamicMeshComponent*, FBulletHoleBatch>& OpMap,
-		TArray<UDynamicMeshComponent*>& OrderArray, int& DebugCount)
+	                     TMap<UDynamicMeshComponent*, FBulletHoleBatch>& OpMap,
+	                     TArray<UDynamicMeshComponent*>& OrderArray, int& DebugCount)
+	{
+		// Union 개수를 넘어서는 작업(Overflow)을 임시 저장할 배열(Re-enqueue용)
+		TArray<FBulletHole> OverflowOps;
+		OverflowOps.Reserve(50);
+		
+		FBulletHole Op;
+		while (Queue.Dequeue(Op))
 		{
-			FBulletHole Op;
-			while (Queue.Dequeue(Op))
+			auto TargetMesh = Op.TargetMesh.Get();
+			if (!TargetMesh)
 			{
-				auto TargetMesh = Op.TargetMesh.Get();
-				if (!TargetMesh)
-				{
-					continue;
-				}
+				continue;
+			}
 
-				/*
-				 * 맵에 주소가 없다 == 처음 들어온 Chunk
-				 * 처음 들어온 Chunk를 순서배열에 저장해서 순서 유지
-				 */
-				if (!OpMap.Contains(TargetMesh))
+			const int32 ChunkIndex = OwnerComponent->GetChunkIndex(TargetMesh);
+			if (ChunkIndex == INDEX_NONE)
+			{
+				continue;
+			}
+			
+			const int32 ChunkUnionLimit = MaxUnionCount.IsValidIndex(ChunkIndex) ? MaxUnionCount[ChunkIndex] : 10;
+
+			// FindOrAdd 대신 Find를 사용해서 맵에 불필요한 Key 생성 방지
+			FBulletHoleBatch* Batch = OpMap.Find(TargetMesh);
+			const int32 CurrentCount = Batch ? Batch->Num() : 0;
+
+			// union 개수를 초과하는 경우 Overflow 배열에 관리 후 Re-enqueue
+			if (CurrentCount >= ChunkUnionLimit)
+			{
+				OverflowOps.Add(MoveTemp(Op));
+			}
+			else
+			{
+				if (!Batch)
 				{
+					// 순서 등록
 					OrderArray.Add(TargetMesh);
-				}
 
-				FBulletHoleBatch& Batch = OpMap.FindOrAdd(TargetMesh);
-				if (Batch.Num() == 0)
-				{
-					Batch.Reserve(MaxBatchSize);
+					// 맵 생성
+					Batch = &OpMap.Add(TargetMesh);
+					Batch->Reserve(ChunkUnionLimit);
 				}
-
-				Batch.Add(MoveTemp(Op));
+				Batch->Add(MoveTemp(Op));
 				DebugCount--;
 			}
-		};
+		}
+
+		for (FBulletHole& OverflowOp : OverflowOps)
+		{
+			Queue.Enqueue(MoveTemp(OverflowOp));
+		}
+	};
 
 	GatherOps(HighPriorityQueue, HighPriorityMap, HighPriorityOrder, DebugHighQueueCount);
 	GatherOps(NormalPriorityQueue, NormalPriorityMap, NormalPriorityOrder, DebugNormalQueueCount);
 
 	auto ProcessTargetMesh = [&](TMap<UDynamicMeshComponent*, FBulletHoleBatch>& OpMap,
-		TQueue<FBulletHole, EQueueMode::Mpsc>& Queue,
-		TArray<UDynamicMeshComponent*>& OrderArray, int32& DebugCount)
+	                             TQueue<FBulletHole, EQueueMode::Mpsc>& Queue,
+	                             TArray<UDynamicMeshComponent*>& OrderArray, int32& DebugCount)
+	{
+		if (OpMap.IsEmpty() || OrderArray.IsEmpty())
 		{
-			if (OpMap.IsEmpty() || OrderArray.IsEmpty())
+			return;
+		}
+
+		for (auto TargetMesh : OrderArray)
+		{
+			const int32 ChunkIndex = OwnerComponent->GetChunkIndex(TargetMesh);
+
+			if (ChunkIndex == INDEX_NONE)
 			{
-				return;
+				continue;
 			}
 
-			for (auto TargetMesh : OrderArray)
+			if (FBulletHoleBatch* Batch = OpMap.Find(TargetMesh))
 			{
-				const int32 ChunkIndex = OwnerComponent->GetChunkIndex(TargetMesh);
+				Batch->ChunkIndex = ChunkIndex;
+				if (bEnableMultiWorkers)
+				{
+					// batchID, Gen 증가
+					int32 CurrentBatchID = ChunkNextBatchIDs[ChunkIndex].fetch_add(1);
 
-				if (ChunkIndex == INDEX_NONE)
-				{
-					continue;
+					// union worker 시작 
+					StartUnionWorkerForChunk(MoveTemp(*Batch), CurrentBatchID, ChunkIndex);
 				}
-				 
-				if (FBulletHoleBatch* Batch = OpMap.Find(TargetMesh))
+				else
 				{
-					Batch->ChunkIndex = ChunkIndex;
-					if (bEnableMultiWorkers)
-					{  
-						// batchID, Gen 증가
-						int32 CurrentBatchID = ChunkNextBatchIDs[ChunkIndex].fetch_add(1);
-						const int32 Gen = ++BooleanGenerations[ChunkIndex];
-							 
-						// union worker 시작 
-						StartUnionWorkerForChunk(MoveTemp(*Batch), CurrentBatchID, Gen, ChunkIndex); 
+					if (!OwnerComponent->CheckAndSetChunkBusy(ChunkIndex))
+					{
+						const int32 Gen = ChunkGenerations[ChunkIndex];
+						StartBooleanWorkerAsyncForChunk(MoveTemp(*Batch), Gen);
 					}
 					else
 					{
-						if (!OwnerComponent->CheckAndSetChunkBusy(ChunkIndex))
-						{
-							const int32 Gen = ++BooleanGenerations[ChunkIndex];
-							StartBooleanWorkerAsyncForChunk(MoveTemp(*Batch), Gen);
-						}
-						else
-						{
-							/*
-								* busy상태의 청크를 queue에 되돌리는 로직 추가
-								*/ 
-							EnqueueRetryOps(Queue, MoveTemp(*Batch), TargetMesh, ChunkIndex, DebugCount); 
-						}
+						/*
+							* busy상태의 청크를 queue에 되돌리는 로직 추가
+							*/
+						EnqueueRetryOps(Queue, MoveTemp(*Batch), TargetMesh, ChunkIndex, DebugCount);
 					}
 				}
 			}
-		};
+		}
+	};
 
 	ProcessTargetMesh(HighPriorityMap, HighPriorityQueue, HighPriorityOrder, DebugHighQueueCount);
 	ProcessTargetMesh(NormalPriorityMap, NormalPriorityQueue, NormalPriorityOrder, DebugNormalQueueCount);
@@ -1369,342 +825,6 @@ int32 FRealtimeBooleanProcessor::DrainBatch(FBulletHoleBatch& InBatch)
 	}
 
 	return InBatch.Num();
-}
-
-void FRealtimeBooleanProcessor::StartBooleanWorkerAsync(FBulletHoleBatch&& InBatch, int32 Gen)
-{
-	if (!OwnerComponent.IsValid())
-	{
-		bWorkInFlight = false;
-		UE_LOG(LogTemp, Warning, TEXT("OwnerComponent is invalid"));
-		return;
-	}
-
-	//-------------------------------------------------------------------
-	// GT 복사 최적화 플래그에 따른 분기
-	//-------------------------------------------------------------------
-	const bool bUseOptimization = bUseCachedMeshOptimization;
-
-	// 최적화 모드: SharedPtr로 워커에 전달
-	TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CachedMesh;
-	// 기존 모드: GT에서 직접 복사
-	FDynamicMesh3 TargetCopyGT;
-
-	if (bUseOptimization)
-	{
-		// 최적화 모드: SharedPtr만 가져옴 (캐시 히트 시 복사 없음)
-		CachedMesh = GetCachedMeshForWorker();
-		if (!CachedMesh.IsValid())
-		{
-			bWorkInFlight = false;
-			UE_LOG(LogTemp, Warning, TEXT("[Async][Optimized] Failed to get cached mesh"));
-			return;
-		}
-		bCacheValid = false;
-		UE_LOG(LogTemp, Log, TEXT("[Async] Using OPTIMIZED path (Worker copy)"));
-	}
-	else
-	{
-		// 기존 모드: GT에서 직접 복사 (블로킹)
-		if (UDynamicMesh* TargetMesh = OwnerComponent->GetDynamicMesh())
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync_CopyMesh_GT_Legacy");
-			TargetMesh->ProcessMesh([&](const FDynamicMesh3& Source)
-				{
-					TargetCopyGT = Source;
-				});
-		}
-		else
-		{
-			bWorkInFlight = false;
-			return;
-		}
-		UE_LOG(LogTemp, Log, TEXT("[Async] Using LEGACY path (GT copy)"));
-	}
-
-	FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
-	UE::Tasks::Launch(
-		UE_SOURCE_LOCATION, [OwnerComponent = OwnerComponent, LifeTimeToken = LifeTime,
-		CachedMesh, TargetCopyGT = MoveTemp(TargetCopyGT), bUseOptimization,
-		Batch = MoveTemp(InBatch), Options, Gen]() mutable
-		{
-			FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-			if (!Processor)
-			{
-				return;
-			}
-
-			int32 BatchCount = Batch.Num();
-			if (BatchCount <= 0)
-			{
-				Processor->bWorkInFlight = false;
-				return;
-			}
-
-			if (Processor->IsStale(Gen))
-			{
-				Processor->bWorkInFlight = false;
-				return;
-			}
-
-			/*
-			 * 현재 구조에서 오직 하나의 워커만 사용 중임 - bWorkInFlight로 KickProcessIfNeeded함수를 가드하고 있음
-			 * 멀티 스레드 활용도가 매우 낮은 구조 - 스레드 사용률 증가시킬 필요 있음
-			 * 현재 구조에서 충돌이 많이 발생하면 워커 하나로만 처리하기 때문에 TargetMesh에 반영이 느림 - 워커에서 불리언 연산이 끝나고 반영되기 때문에 연산 대기 필요
-			 * 비동기 연산 시작 시의 TargetMesh는 유일함.
-			 */
-			TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync");
-			using namespace UE::Geometry;
-
-			// 플래그에 따른 메시 복사
-			FDynamicMesh3 WorkMesh;
-			if (bUseOptimization)
-			{
-				// 최적화 모드: 워커에서 복사 (GT 블로킹 없음!)
-				TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync_CopyInWorker_Optimized");
-				WorkMesh = *CachedMesh;
-			}
-			else
-			{
-				// 기존 모드: 이미 GT에서 복사됨
-				TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync_UseGTCopy_Legacy");
-				WorkMesh = MoveTemp(TargetCopyGT);
-			}
-			int32 AppliedCount = 0;
-
-			// 실패/미처리 re-queuing
-			TArray<FBulletHole> Remaining;
-			Remaining.Reserve(Batch.Num());
-			int32 DroppedCount = 0;
-
-			TArray<TWeakObjectPtr<UDecalComponent>> DecalsToRemove;
-
-			TArray<FTransform> ToolTransforms = MoveTemp(Batch.ToolTransforms);
-			TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = MoveTemp(Batch.TemporaryDecals);
-			TArray<TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = MoveTemp(Batch.ToolMeshPtrs);
-
-			/*
-			 * Toolmesh union
-			 */
-			bool bIsFirst = true;
-			bool bCombinedValid = false;
-			FDynamicMesh3 CombinedToolMesh;
-			int32 UnionCount = 0;
-			{
-				TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync_Union");
-				for (int32 i = 0; i < BatchCount; ++i)
-				{
-					if (Processor->IsStale(Gen))
-					{
-						Processor->bWorkInFlight = false;
-						return;
-					}
-
-					if (!ToolMeshPtrs[i].IsValid())
-					{
-						continue;
-					}
-
-					FTransform ToolTransform = MoveTemp(ToolTransforms[i]);
-					TWeakObjectPtr<UDecalComponent> TemporaryDecal = MoveTemp(TemporaryDecals[i]);
-
-					// ToolMesh를 Local로 변환
-					// ShapredPtr이니까 MoveTemp는 안씀
-					FDynamicMesh3 CurrentTool = *(ToolMeshPtrs[i]);
-					MeshTransforms::ApplyTransform(CurrentTool, (FTransformSRT3d)ToolTransform, true);
-
-					if (TemporaryDecal.IsValid())
-					{
-						DecalsToRemove.Add(TemporaryDecal);
-					}
-
-					if (bIsFirst)
-					{
-						CombinedToolMesh = CurrentTool;
-						bIsFirst = false;
-						bCombinedValid = true;
-						UnionCount++;
-					}
-					else
-					{
-						FDynamicMesh3 UnionResult;
-						FMeshBoolean MeshUnion(&CombinedToolMesh, FTransform::Identity,
-							&CurrentTool, FTransform::Identity,
-							&UnionResult, FMeshBoolean::EBooleanOp::Union);
-						if (MeshUnion.Compute())
-						{
-							CombinedToolMesh = MoveTemp(UnionResult);
-							UnionCount++;
-						}
-
-					}
-
-					if (Processor->IsHoleMax())
-					{
-						break;
-					}
-				}
-			}
-
-			bool bSubtractSuccess = false;
-			if (bCombinedValid && CombinedToolMesh.TriangleCount() > 0)
-			{
-				if (Processor->IsStale(Gen))
-				{
-					Processor->bWorkInFlight = false;
-					return;
-				}
-
-				TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync_Subtract");
-
-				double CurrentSubDuration = FPlatformTime::Seconds();
-
-				FDynamicMesh3 ResultMesh;
-				bSubtractSuccess = ApplyMeshBooleanAsync(&WorkMesh, &CombinedToolMesh, &ResultMesh,
-					EGeometryScriptBooleanOperation::Subtract, Options);
-
-				CurrentSubDuration = FPlatformTime::Seconds() - CurrentSubDuration;
-
-				if (bSubtractSuccess)
-				{
-					// 유니온된 총알 개수만큼 불리언 연산에 적용된다.
-					AppliedCount = UnionCount;
-					WorkMesh = MoveTemp(ResultMesh);
-
-					// Processor->AccumulateSubtractDuration(ChunkIndex, CurrentSubDuration);
-				}
-				else
-				{
-					//  실패하면 누적값 초기화
-					// Processor->SubtractDurationAccum = 0;
-					// Processor->DurationAccumCount = 0;
-				}
-			}
-
-			// 메시 단순화
-			if (bSubtractSuccess)
-			{
-				if (Processor->IsStale(Gen))
-				{
-					Processor->bWorkInFlight = false;
-					return;
-				}
-
-				{
-					// TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsync_Simplify");
-				   // bool bIsSimplified = Processor->TrySimplify(WorkMesh, Processor->CurrentInterval_Legacy, UnionCount);
-				}
-			}
-
-			AsyncTask(
-				ENamedThreads::GameThread, [OwnerComponent, LifeTimeToken, Gen, Result = MoveTemp(WorkMesh), AppliedCount, Remaining = MoveTemp(Remaining), DroppedCount, DecalsToRemove = MoveTemp(DecalsToRemove), bUseOptimization]() mutable
-				{
-					/*
-					 * 메시 변형이 반복(정점 증가)
-					 * 정점 증가된 메시를 MeshComp에 반영하는 비용이 8회 발사 후 약 70배 증가함(피그잼 확인 요망)
-					 * 특히 SetMesh비용은 게임 스레드에 반영하는 비용의 대부분을 차지함
-					 * Notify와 Collision의 경우 처음에는 매우 적은 비용임
-					 * 하지만 정점 수가 증가하면 이 비용도 엄청나게 증가함
-					 */
-					if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
-					{
-						return;
-					}
-
-					FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-					if (!Processor)
-					{
-						return;
-					}
-
-					if (!OwnerComponent.IsValid())
-					{
-						Processor->bWorkInFlight = false;
-						return;
-					}
-
-					Processor->bWorkInFlight = false;
-					if (OwnerComponent->GetBooleanProcessor() != Processor)
-					{
-						return;
-					}
-					UE_LOG(LogTemp, Display, TEXT("Current Hole %d"), Processor->CurrentHoleCount);
-
-					TRACE_BOOKMARK(TEXT("ApplyGT Start"));
-					TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsyncApplyGT")
-
-						if (Processor->IsStale(Gen))
-						{
-							Processor->bWorkInFlight = false;
-							return;
-						}
-
-
-					if (AppliedCount > 0)
-					{
-						double CurrentSetMeshAvgCost = 0.0;
-						//-------------------------------------------------------------------
-						// 플래그에 따른 메시 반영 방식 분기
-						//-------------------------------------------------------------------
-						if (bUseOptimization)
-						{
-							// 최적화 모드: 캐시에 저장 후 컴포넌트에 복사
-							TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsyncApplyGT_CacheAndSetMesh_Optimized");
-
-							// 결과를 캐시에 move 저장
-							Processor->CachedMeshPtr = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(MoveTemp(Result));
-							Processor->bCacheValid = true;
-
-							CurrentSetMeshAvgCost = FPlatformTime::Seconds();
-							// 캐시에서 컴포넌트로 복사해서 전달
-							OwnerComponent->SetMesh(FDynamicMesh3(*Processor->CachedMeshPtr));
-							CurrentSetMeshAvgCost = FPlatformTime::Seconds() - CurrentSetMeshAvgCost;
-						}
-						else
-						{
-							CurrentSetMeshAvgCost = FPlatformTime::Seconds();
-							// 기존 모드: 직접 SetMesh
-							TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsyncApplyGT_SetMesh_Legacy");
-							OwnerComponent->SetMesh(MoveTemp(Result));
-							CurrentSetMeshAvgCost = FPlatformTime::Seconds() - CurrentSetMeshAvgCost;
-						}
-
-						Processor->UpdateSimplifyInterval(CurrentSetMeshAvgCost);
-
-						/*
-						 * deprecated_realdestruction
-						 */
-						 // {
-							//  TRACE_BOOKMARK(TEXT("Notify Start"));
-							//  TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsyncApplyGT_Notify");
-							//  OwnerComponent->ApplyRenderUpdate();						
-							//  TRACE_BOOKMARK(TEXT("Notify End"));
-						 // }
-						 // {
-							//  TRACE_BOOKMARK(TEXT("Collision Start"));
-							//  TRACE_CPUPROFILER_EVENT_SCOPE("ApplyMeshBooleanAsyncApplyGT_Collision");
-							//  OwnerComponent->ApplyCollisionUpdate();
-							//  TRACE_BOOKMARK(TEXT("Collision End"));
-						 // }
-						{
-
-							for (const TWeakObjectPtr<UDecalComponent>& Decal : DecalsToRemove)
-							{
-								if (Decal.IsValid())
-								{
-									//Decal->DestroyComponent();
-								}
-							}
-						}
-
-						Processor->CurrentHoleCount += AppliedCount;
-					}
-
-					Processor->SimplifyLog();
-
-					LifeTimeToken->Processor.load()->KickProcessIfNeeded();
-				});
-		});
 }
 
 void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch&& InBatch, int32 Gen)
@@ -1749,13 +869,6 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				return;
 			}
 
-			const int32 ChunkIndex = Batch.ChunkIndex;
-			if (Processor->IsStaleForChunk(Gen, ChunkIndex))
-			{
-				SafeClearBusyBit();
-				return;
-			}
-
 			const int32 BatchCount = Batch.Num();
 			if (BatchCount <= 0)
 			{
@@ -1763,7 +876,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				return;
 			}
 
-
+			const int32 ChunkIndex = Batch.ChunkIndex;
 			// 타겟메시 복사			
 			FDynamicMesh3 WorkMesh;
 			if (!OwnerComponent->GetChunkMesh(WorkMesh, ChunkIndex))
@@ -1789,11 +902,6 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Union");
 				for (int32 i = 0; i < BatchCount; i++)
 				{
-					if (Processor->IsStaleForChunk(Gen, ChunkIndex))
-					{
-						SafeClearBusyBit();
-						return;
-					}
 
 					if (!ToolMeshPtrs[i].IsValid())
 					{
@@ -1831,23 +939,12 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 							UnionCount++;
 						}
 					}
-
-					if (Processor->IsHoleMax())
-					{
-						break;
-					}
 				}
 			}
 						
 			bool bSubtractSuccess = false;
 			if (bCombinedValid && CombinedToolMesh.TriangleCount() > 0)
 			{
-				if (Processor->IsStaleForChunk(Gen, ChunkIndex))
-				{
-					SafeClearBusyBit();
-					return;
-				}				
-
 				double CurrentSubDuration = FPlatformTime::Seconds();
 
 				FDynamicMesh3 ResultMesh;
@@ -1856,7 +953,8 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 					bSubtractSuccess = ApplyMeshBooleanAsync(&WorkMesh, &CombinedToolMesh, &ResultMesh,
 					                                         EGeometryScriptBooleanOperation::Subtract, Options);
 				}
-
+				++Processor->ChunkGenerations[ChunkIndex];
+				
 				CurrentSubDuration = FPlatformTime::Seconds() - CurrentSubDuration;
 
 				if (bSubtractSuccess)
@@ -1879,12 +977,6 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			// 메시 단순화
 			if (bSubtractSuccess)
 			{
-				if (Processor->IsStaleForChunk(Gen, ChunkIndex))
-				{
-					SafeClearBusyBit();
-					return;
-				}
-
 				if (ChunkIndex != INDEX_NONE)
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Simplify");
@@ -1917,18 +1009,13 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 						return;
 					}
 
-					if (Processor->IsStaleForChunk(Gen, ChunkIndex))
-					{
-						return;
-					}
-
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_ApplyGT");
 					if (AppliedCount > 0)
 					{
 						double CurrentSetMeshAvgCost = FPlatformTime::Seconds();
 						{
 							TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_SetMesh");
-						   OwnerComponent->ApplyBooleanOperationResult(MoveTemp(Result), ChunkIndex, false);
+							OwnerComponent->ApplyBooleanOperationResult(MoveTemp(Result), ChunkIndex, false);
 						}
 						CurrentSetMeshAvgCost = CurrentSetMeshAvgCost - FPlatformTime::Seconds();
 
@@ -1944,307 +1031,17 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 					}
 					Processor->ChunkHoleCount[ChunkIndex] += AppliedCount;
 
-					Processor->SimplifyLog();
-
 					Processor->KickProcessIfNeededPerChunk();
-				});
-		});
-}
-
-void FRealtimeBooleanProcessor::StartBooleanWorkerParallel(FBulletHoleBatch&& InBatch, int32 Gen)
-{
-	// 유효성 검사
-	if (!OwnerComponent.IsValid())
-	{
-		bWorkInFlight = false;
-		return;
-	}
-
-	int32 RecommendedThreads = AutoTuner.GetRecommendedThreadCount();
-
-	int32 BatchCount = InBatch.Num();
-	int32 BatchBasedLimit = (BatchCount + 1) / 2;
-
-	int32 ActualThreads = FMath::Clamp(RecommendedThreads, 1, BatchBasedLimit);
-
-	//-------------------------------------------------------------------
-	// GT 복사 최적화 플래그에 따른 분기
-	//-------------------------------------------------------------------
-	const bool bUseOptimization = bUseCachedMeshOptimization;
-
-	// 최적화 모드: SharedPtr로 워커에 전달
-	TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CachedMesh;
-	// 기존 모드: GT에서 직접 복사
-	FDynamicMesh3 TargetCopyGT;
-
-	if (bUseOptimization)
-	{
-		// 최적화 모드: SharedPtr만 가져옴 (캐시 히트 시 복사 없음)
-		CachedMesh = GetCachedMeshForWorker();
-		if (!CachedMesh.IsValid())
-		{
-			bWorkInFlight = false;
-			UE_LOG(LogTemp, Warning, TEXT("[Parallel][Optimized] Failed to get cached mesh"));
-			return;
-		}
-		bCacheValid = false;
-		UE_LOG(LogTemp, Log, TEXT("[Parallel] Using OPTIMIZED path (Worker copy)"));
-	}
-	else
-	{
-		// 기존 모드: GT에서 직접 복사 (블로킹)
-		if (UDynamicMesh* TargetMesh = OwnerComponent->GetDynamicMesh())
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_CopyMesh_GT_Legacy");
-			TargetMesh->ProcessMesh([&](const FDynamicMesh3& Source)
-				{
-					TargetCopyGT = Source;
-				});
-		}
-		else
-		{
-			bWorkInFlight = false;
-			return;
-		}
-		UE_LOG(LogTemp, Log, TEXT("[Parallel] Using LEGACY path (GT copy)"));
-	}
-
-	FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
-	const int32 LocalMaxThreads = MaxParallelThreads;
-
-	//비동기 작업 시작
-	UE::Tasks::Launch(UE_SOURCE_LOCATION,
-		[CachedMesh, TargetCopyGT = MoveTemp(TargetCopyGT), bUseOptimization,
-		Batch = MoveTemp(InBatch), Options, ActualThreads, OwnerComponent = OwnerComponent, LifeTimeToken = LifeTime,
-		Gen, BatchCount, this]() mutable
-		{
-			TRACE_BOOKMARK(TEXT("BooleanBatch Start (Count: %d, Threads: %d)"), BatchCount, ActualThreads);
-
-			TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_Async");
-			TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*FString::Printf(TEXT("Batch: %d"), BatchCount));
-			const double WorkStartSec = FPlatformTime::Seconds();
-			int32 NumThreads = ActualThreads;
-
-			// 플래그에 따른 메시 복사
-			FDynamicMesh3 TargetCopy;
-			if (bUseOptimization)
-			{
-				// 최적화 모드: 워커에서 복사 (GT 블로킹 없음!)
-				TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_CopyInWorker_Optimized");
-				TargetCopy = *CachedMesh;
-			}
-			else
-			{
-				// 기존 모드: 이미 GT에서 복사됨
-				TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_UseGTCopy_Legacy");
-				TargetCopy = MoveTemp(TargetCopyGT);
-			}
-
-			const int32 BatchSize = Batch.Num();
-
-			TArray<FDynamicMesh3> ThreadTools;
-			ThreadTools.SetNum(NumThreads);
-
-			TArray<TArray<TWeakObjectPtr<UDecalComponent>>> PerThreadDecals;
-			PerThreadDecals.SetNum(NumThreads);
-
-			TArray<FTransform> ToolTransforms = MoveTemp(Batch.ToolTransforms);
-			TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = MoveTemp(Batch.TemporaryDecals);
-			TArray<TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = MoveTemp(Batch.ToolMeshPtrs);
-			/*
-			 * 현재 사용하지 않음
-			 */
-			 // TArray<uint8> Attempts = MoveTemp(Batch.Attempts);
-			 // TArray<bool> bIsPenetrations = MoveTemp(Batch.bIsPenetrations);
-			ParallelFor(NumThreads, [&](int32 ForIndex)
-				{
-					TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_ParallerFor");
-
-					const int32 ItemsPerThreads = BatchSize / NumThreads;
-					const int32 StartIdx = ForIndex * ItemsPerThreads;
-					const int32 EndIdx =
-						(ForIndex == NumThreads - 1) ? BatchSize : StartIdx + ItemsPerThreads;
-					// 마지막 부분은 꽉차있지 않을 수 있음
-
-					FDynamicMesh3 CombinedTool;
-					bool bFirst = true;
-					TArray<TWeakObjectPtr<UDecalComponent>> LocalDecals;
-
-					for (int32 i = StartIdx; i < EndIdx; ++i)
-					{
-						// const FBulletHole& Hole = Batch[i];
-						FTransform ToolTransform = MoveTemp(ToolTransforms[i]);
-						TWeakObjectPtr<UDecalComponent> TemporaryDecal = MoveTemp(TemporaryDecals[i]);
-						FDynamicMesh3 SingleTool = *(ToolMeshPtrs[i]);
-
-						// 총알을 Local Transform으로 이동시키기) 
-						MeshTransforms::ApplyTransform(
-							SingleTool, (UE::Geometry::FTransformSRT3d)ToolTransform, true);
-
-						// decal도 모으자
-						if (TemporaryDecal.IsValid()) LocalDecals.Add(TemporaryDecal);
-
-
-						if (bFirst)
-						{
-							CombinedTool = MoveTemp(SingleTool);
-							bFirst = false;
-						}
-						else
-						{
-							FDynamicMesh3 Result;
-							FMeshBoolean UnionOp(&CombinedTool, FTransformSRT3d::Identity(), &SingleTool,
-								FTransformSRT3d::Identity(), &Result,
-								FMeshBoolean::EBooleanOp::Union);
-							UnionOp.bSimplifyAlongNewEdges = Options.bSimplifyOutput;
-							if (UnionOp.Compute())
-							{
-								CombinedTool = MoveTemp(Result);
-							}
-							else
-							{
-								UE_LOG(LogTemp, Warning, TEXT("[Parallel] Union OP Error"));
-							}
-						}
-					}
-
-					// 총알 구멍을 합들을 배열에 저장
-					ThreadTools[ForIndex] = MoveTemp(CombinedTool);
-					PerThreadDecals[ForIndex] = MoveTemp(LocalDecals);
-				}, EParallelForFlags::None);
-
-
-			//  최종 Tool 병합 
-			FDynamicMesh3 BigTool = HierarchicalUnion(ThreadTools, Options);
-			TArray<TWeakObjectPtr<UDecalComponent>> AllDecals;
-			for (auto& List : PerThreadDecals) AllDecals.Append(List);
-
-			FDynamicMesh3 FinalResult;
-			bool bSuccess = false;
-
-			// BigTool이 비어있지 않은 경우에만 연산
-			if (BigTool.TriangleCount() > 0)
-			{
-				TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_SubtractOP");
-
-				FMeshBoolean SubtractOp(
-					&TargetCopy, FTransformSRT3d::Identity(),
-					&BigTool, FTransformSRT3d::Identity(),
-					&FinalResult,
-					FMeshBoolean::EBooleanOp::Difference
-				);
-
-				SubtractOp.bSimplifyAlongNewEdges = Options.bSimplifyOutput;
-				bSuccess = SubtractOp.Compute();
-			}
-
-
-			int32 ActualAppliedCount = 0;
-			// 실패했거나 Tool이 없으면 원본 유지 (혹은 실패 처리)
-			if (bSuccess)
-			{
-				ActualAppliedCount = BatchSize;
-			}
-			else
-			{
-				// 실패시 원본 유지 및 데칼 삭제 취소
-				FinalResult = MoveTemp(TargetCopy);
-				AllDecals.Empty();
-				ActualAppliedCount = 0;
-			}
-
-			double WorkEndSec = FPlatformTime::Seconds();
-			double WorkDuration = WorkEndSec - WorkStartSec;
-
-			// GameThread에 결과 반영
-			AsyncTask(ENamedThreads::GameThread,
-				[OwnerComponent, LifeTimeToken, Gen, Result = MoveTemp(FinalResult), AppliedCount = ActualAppliedCount,
-				DecalsToRemove = MoveTemp(AllDecals), WorkDuration, BatchCount, bUseOptimization]() mutable
-				{
-					// 수명 체크
-					if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load()) return;
-
-					FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-					if (!Processor || !OwnerComponent.IsValid())
-					{
-						if (Processor) Processor->bWorkInFlight = false;
-						return;
-					}
-
-					// Processor 상태 업데이트
-					Processor->bWorkInFlight = false;
-
-					// 세대 체크
-					if (Gen != Processor->BooleanGeneration)
-					{
-						Processor->KickProcessIfNeeded();
-						return;
-					}
-					TRACE_COUNTER_SET(Counter_ThreadCount, Processor->AutoTuner.CurrentThreadCount);
-
-					float WorkTimeMs = WorkDuration * 1000.0f;
-					TRACE_COUNTER_SET(Counter_WorkTime, WorkTimeMs);
-
-					float Throughput = (WorkDuration > 0.0)
-						? (float)BatchCount / WorkDuration
-						: 0.0f;
-					TRACE_COUNTER_SET(Counter_Throughput, Throughput);
-
-					TRACE_COUNTER_SET(Counter_BatchSize, BatchCount);
-
-					float CurrentDeltaTime = FApp::GetDeltaTime();
-					Processor->AutoTuner.Update(BatchCount, WorkDuration, CurrentDeltaTime);
-
-					//-------------------------------------------------------------------
-					// 플래그에 따른 메시 반영 방식 분기
-					//-------------------------------------------------------------------
-					if (bUseOptimization)
-					{
-						// 최적화 모드: 캐시에 저장 후 컴포넌트에 복사
-						TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_CacheAndSetMesh_Optimized");
-
-						// 결과를 캐시에 move 저장
-						Processor->CachedMeshPtr = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(MoveTemp(Result));
-						Processor->bCacheValid = true;
-
-						// 캐시에서 컴포넌트로 복사해서 전달
-						OwnerComponent->SetMesh(FDynamicMesh3(*Processor->CachedMeshPtr));
-					}
-					else
-					{
-						// 기존 모드: 직접 SetMesh
-						TRACE_CPUPROFILER_EVENT_SCOPE("BooleanWorkerParallel_SetMesh_Legacy");
-						OwnerComponent->SetMesh(MoveTemp(Result));
-					}
-
-					for (const auto& Decal : DecalsToRemove)
-						if (Decal.IsValid())
-							//Decal->DestroyComponent();
-					/*
-					 * deprecated_realdestruction
-					 * SetMesh내부에서 호출됨
-					 */
-					 // OwnerComponent->ApplyRenderUpdate();
-					 // OwnerComponent->ApplyCollisionUpdate();
-
-					Processor->CurrentHoleCount += AppliedCount;
-					Processor->KickProcessIfNeeded();
 				});
 		});
 }
 
 void FRealtimeBooleanProcessor::CancelAllOperations()
 {
-	/*
-	 * Lifetime은 살려두는 함수
-	 * OwnerComponent의 ResetToSourceMesh함수 내부에서 호출
-	 */
-	++BooleanGeneration;
 
 	SetMeshAvgCost = 0.0;
 
 	InitInterval = 0;
-
 
 	FBulletHole Temp;
 	while (HighPriorityQueue.Dequeue(Temp)) {}
@@ -2253,15 +1050,8 @@ void FRealtimeBooleanProcessor::CancelAllOperations()
 	DebugHighQueueCount = 0;
 	DebugNormalQueueCount = 0;
 
-	// Debug
-	OpAccum = 0;
-	DurationCount = 0;
-	GrowthCount = 0;
-
 	// 리셋 시 HoleCount와 캐시도 초기화
 	CurrentHoleCount = 0;
-	CachedMeshPtr.Reset();
-	bCacheValid = false;
 
 	ChunkStates.Reset();
 
@@ -2356,7 +1146,6 @@ bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMes
 		State.LastSimplifyTriCount > 1000) ||
 		TriCount - State.LastSimplifyTriCount > 1000)
 	{
-		GrowthCount++;
 		bShouldSimplify = true;
 	}
 	// 2회 누적되고, 누적된 값의 평균이 임계값 이상이면 simplify
@@ -2364,13 +1153,11 @@ bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMes
 		State.SubtractDurationAccum / State.DurationAccumCount >= SubDurationHighThreshold)
 	{
 		UE_LOG(LogTemp, Display, TEXT("Duration Simplify"));
-		DurationCount++;
 		bShouldSimplify = true;
 	}
 	// 현재 인터벌이 최대 인터벌에 도달하면 단순화
 	else if (State.Interval >= MaxInterval)
 	{		
-		OpAccum++;
 		bShouldSimplify = true;
 	}
 
@@ -2465,50 +1252,86 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 		break;
 	}
 
-	// Mesh 연산
-	FMeshBoolean MeshBoolean(
-		TargetMesh, (FTransformSRT3d)TargetTransform,
-		ToolMesh, (FTransformSRT3d)ToolTransform,
-		OutputMesh, Op);
-	MeshBoolean.bPutResultInInputSpace = true;
-	MeshBoolean.bSimplifyAlongNewEdges = Options.bSimplifyOutput;
-	 
-	MeshBoolean.bWeldSharedEdges = false; 
-
-	bool bSuccess = MeshBoolean.Compute();
-
-	if (bSuccess)
+	const int32 MaxAttempts = 2;
+	for (int32 Attempt = 0; Attempt < MaxAttempts; Attempt++)
 	{
-		FMergeCoincidentMeshEdges Welder(OutputMesh);
-		Welder.MergeSearchTolerance = 0.001;
+		FTransform CurrentToolTransform = ToolTransform;
 
-		Welder.Apply();
-	}
-	
-
-	/*
-	 * 현재 사용되지 않는 코드임
-	 * bFillHoles의 true, false 여부와 관계없이 동일한 결과
-	 */
-	TArray<int> NewBoundaryEdges = MoveTemp(MeshBoolean.CreatedBoundaryEdges);
-	if (NewBoundaryEdges.Num() > 0 && Options.bFillHoles)
-	{
-		FMeshBoundaryLoops OpenBoundary(OutputMesh, false);
-		TSet<int> ConsiderEdges(NewBoundaryEdges);
-		OpenBoundary.EdgeFilterFunc = [&ConsiderEdges](int EID)
-			{
-				return ConsiderEdges.Contains(EID);
-			};
-		OpenBoundary.Compute();
-
-		for (FEdgeLoop& Loop : OpenBoundary.Loops)
+		// 첫 boolean 실패 시 위치와 회전을 살짝 비틀어서 재시도
+		if (Attempt > 0)
 		{
-			UE::Geometry::FMinimalHoleFiller Filler(OutputMesh, Loop);
-			Filler.Fill();
-		}
-	}
+			// 1.5mm
+			const float JitterAmount = 0.015f;
+			// 0.1 deg
+			const float JitterAngle = 0.1f;
 
-	return bSuccess;
+			FVector RandomOffset(
+				FMath::FRandRange(-JitterAmount, JitterAmount),
+				FMath::FRandRange(-JitterAmount, JitterAmount),
+				FMath::FRandRange(-JitterAmount, JitterAmount));
+
+			FQuat RandomRot(FVector::UpVector, FMath::DegreesToRadians(
+				FMath::FRandRange(-JitterAngle, JitterAngle)));
+
+			CurrentToolTransform.AddToTranslation(RandomOffset);
+			CurrentToolTransform.SetRotation(CurrentToolTransform.GetRotation() * RandomRot);
+
+			UE_LOG(LogTemp, Log, TEXT("[Boolean] Attempt %d: Retrying with Jitter"), Attempt);
+		}
+
+		// Mesh 연산
+		FMeshBoolean MeshBoolean(
+			TargetMesh, (FTransformSRT3d)TargetTransform,
+			ToolMesh, (FTransformSRT3d)CurrentToolTransform,
+			OutputMesh, Op);
+	
+		MeshBoolean.bPutResultInInputSpace = true;
+		MeshBoolean.bSimplifyAlongNewEdges = Options.bSimplifyOutput;
+		MeshBoolean.bWeldSharedEdges = false;
+
+		bool bSuccess = MeshBoolean.Compute();
+
+		if (bSuccess)
+		{
+			/*
+			 * welding 처리
+			 * 열린 메시를 닫힌 메시로 만듬
+			 */
+			FMergeCoincidentMeshEdges Welder(OutputMesh);
+			Welder.MergeSearchTolerance = 0.001;
+
+			Welder.Apply();
+
+			/*
+			 * 현재 사용되지 않는 코드임
+			 * bFillHoles의 true, false 여부와 관계없이 동일한 결과
+			 */
+			TArray<int> NewBoundaryEdges = MoveTemp(MeshBoolean.CreatedBoundaryEdges);
+			if (NewBoundaryEdges.Num() > 0 && Options.bFillHoles)
+			{
+				FMeshBoundaryLoops OpenBoundary(OutputMesh, false);
+				TSet<int> ConsiderEdges(NewBoundaryEdges);
+				OpenBoundary.EdgeFilterFunc = [&ConsiderEdges](int EID)
+				{
+					return ConsiderEdges.Contains(EID);
+				};
+				OpenBoundary.Compute();
+
+				for (FEdgeLoop& Loop : OpenBoundary.Loops)
+				{
+					UE::Geometry::FMinimalHoleFiller Filler(OutputMesh, Loop);
+					Filler.Fill();
+				}
+			}
+
+			return true;
+		}
+		// 실패한 경우 Clear 후 재시도
+		OutputMesh->Clear();
+	}	
+
+	UE_LOG(LogTemp, Warning, TEXT("[Boolean] All attempts failed."));
+	return false;
 }
 
 void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options)
@@ -2528,62 +1351,4 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 	{
 		TargetMesh->CompactInPlace();
 	}
-}
-
-UE::Geometry::FDynamicMesh3 FRealtimeBooleanProcessor::HierarchicalUnion(TArray<UE::Geometry::FDynamicMesh3>& Results, const FGeometryScriptMeshBooleanOptions& Options)
-{
-	TRACE_CPUPROFILER_EVENT_SCOPE(HierarchicalUnion);
-
-	// 빈 메시 필터링 (제안하신 내용 반영)
-	Results.RemoveAll([](const FDynamicMesh3& Mesh) {
-		return Mesh.TriangleCount() == 0;
-		});
-
-	if (Results.Num() == 0) return FDynamicMesh3();
-	if (Results.Num() == 1) return MoveTemp(Results[0]);
-
-	// 계층적 병합
-	//TODO: 병합도 Reduction으로 빠르게 할 수 있지 않을까?
-	while (Results.Num() > 1)
-	{
-		TArray<FDynamicMesh3> NextLevel;
-		NextLevel.Reserve((Results.Num() + 1) / 2);
-
-		// 2개씩 묶어서 Union
-		for (int32 i = 0; i < Results.Num(); i += 2)
-		{
-			if (i + 1 < Results.Num())
-			{
-				// Union 연산
-				FDynamicMesh3 Merged;
-
-				FMeshBoolean MeshBoolean(
-					&Results[i], FTransformSRT3d::Identity(),
-					&Results[i + 1], FTransformSRT3d::Identity(),
-					&Merged, FMeshBoolean::EBooleanOp::Union);
-
-				MeshBoolean.bSimplifyAlongNewEdges = Options.bSimplifyOutput;
-				bool bSuccess = MeshBoolean.Compute();
-
-				if (bSuccess)
-				{
-					NextLevel.Add(MoveTemp(Merged));
-				}
-				else
-				{
-					// 실패 시 첫 번째 메시 유지
-					UE_LOG(LogTemp, Warning, TEXT("Union failed, keeping first mesh"));
-					NextLevel.Add(MoveTemp(Results[i]));
-				}
-			}
-			else
-			{
-				// 홀수 개일 때 마지막 메시
-				NextLevel.Add(MoveTemp(Results[i]));
-			}
-		}
-		Results = MoveTemp(NextLevel);
-	}
-
-	return MoveTemp(Results[0]);
 }

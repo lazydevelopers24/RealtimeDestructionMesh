@@ -20,7 +20,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDestructionRequested, const FVec
 
 // 파괴 대상이 아닌 것에 충돌 시 호출
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnNonDestructibleHit, const FHitResult&, HitResult);
- 
+
 /**
  * 투사체용 파괴 컴포넌트
  *
@@ -158,7 +158,7 @@ public:
 	/** 파괴 불가능한 오브젝트에 충돌해도 제거할지 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction")
 	bool bDestroyOnNonDestructibleHit = true;
-	
+
 	//=========================================================================
 	// Decal 파라미터
 	//=========================================================================
@@ -209,29 +209,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Feedback")
 	bool bShowImmediateFeedback = true;
 
-	//// 재질에 따라 decal이 바뀔 것이기에, 
-	//// decal을 Mesh로 옮겼다.
-	// 
-	////[deprecated]
-	///** 즉시 피드백용 데칼 머티리얼 */
-	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Feedback")
-	//TObjectPtr<UMaterialInterface> ImmediateDecalMaterial;
-	//
-	////[deprecated]
-	///** 데칼 크기 배율 (HoleRadius * 이 값) */
-	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Feedback")
-	//float DecalSizeMultiplier = 2.0f;
-	//
-	////[deprecated]
-	///** 데칼 수명 (초) */
-	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Feedback")
-	//float DecalLifeSpan = 10.0f;
-	//
-	////[deprecated]
-	///** 즉시 피드백용 파티클 (Niagara) */
-	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Destruction|Feedback")
-	//TObjectPtr<UNiagaraSystem> ImmediateParticle;
-
 	//=========================================================================
 	// 이벤트
 	//=========================================================================
@@ -257,7 +234,7 @@ public:
 public:
 	UFUNCTION(BlueprintCallable, Category="Destruction|Decal")
 	void GetCalculateDecalSize( FVector& LocationOffset,  FRotator& RotatorOffset, FVector& SizeOffset) const;
-  
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -270,19 +247,13 @@ protected:
 	void OnProjectileHit(UPrimitiveComponent* HitComp, AActor* OtherActor,
 		UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
 
-	/** 즉시 피드백 스폰 */
-	void SpawnImmediateFeedback(const FHitResult& Hit);
-
-	/** 파괴 요청 처리 */
-	void ProcessDestructionRequest(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit);
-
 	void ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit);
 
 private:
 	bool EnsureToolMesh();
 
 	void SetShapeParameters(FRealtimeDestructionRequest& OutRequest);
-	
+
 	void DrawDebugToolShape(const FVector& Center, const FVector& Direction, const FColor& Color) const;
 
 	void DrawDebugAffetedChunks(const FBox& ChunkBox, const FColor& Color) const;
@@ -296,5 +267,5 @@ private:
 	TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> ToolMeshPtr = nullptr;
 
 
-	const float SurfaceMargin = 2.0f;
+	float SurfaceMargin = 0.0f;
 };

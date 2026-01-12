@@ -29,7 +29,6 @@ class UDecalComponent;
 struct FUnionResult
 {
 	int32 BatchID = 0;				// 순서 추적용
-	int32 Generation = 0;
 	UE::Geometry::FDynamicMesh3 PendingCombinedToolMesh; // Union 결과 
 	TArray<TWeakObjectPtr<UDecalComponent>> Decals;
 	int32 UnionCount = 0;
@@ -233,9 +232,6 @@ public:
 	void EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh = nullptr);
 	void EnqueueRemaining(FBulletHole&& Operation);
 
-	// 큐가 쌓이면 불리언 연산 시작
-	void KickProcessIfNeeded();
-
 	void KickProcessIfNeededPerChunk();
 
 	bool IsOwnerCompValid() const { return OwnerComponent.IsValid(); }
@@ -245,11 +241,6 @@ public:
 	void CancelAllOperations();
 
 	void SetWorkInFlight(bool bEnabled) { bWorkInFlight = bEnabled; }
-
-	bool IsStale(int32 Gen) const { return Gen != BooleanGeneration.load(); }
-	bool IsStaleForChunk(int32 Gen, int32 ChunkIndex) const { return Gen != BooleanGenerations[ChunkIndex].load(); }
-
-	bool IsHoleMax() const { return CurrentHoleCount >= MaxHoleCount; }
 
 	int32 GetChunkHoleCount(int32 ChunkIndex) const { return ChunkHoleCount[ChunkIndex]; }
 	int32 GetChunkHoleCount(const UPrimitiveComponent* ChunkComponent) const;
@@ -264,16 +255,10 @@ public:
 
 	static void ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options);
 
-	static UE::Geometry::FDynamicMesh3 HierarchicalUnion(TArray<UE::Geometry::FDynamicMesh3>& Results, const FGeometryScriptMeshBooleanOptions& Options);
-
-
 private:
 	int32 DrainBatch(FBulletHoleBatch& InBatch);
-	void StartBooleanWorkerAsync(FBulletHoleBatch&& InBatch, int32 Gen);
 
 	void StartBooleanWorkerAsyncForChunk(FBulletHoleBatch&& InBatch, int32 Gen);
-
-	void StartBooleanWorkerParallel(FBulletHoleBatch&& InBatch, int32 Gen);
 
 	void AccumulateSubtractDuration(int32 ChunkIndex, double CurrentSubDuration);
 
@@ -301,21 +286,9 @@ private:
 	// 비동기 작업 실행 여부 검사
 	bool bWorkInFlight = false;
 
-	/*
-	 * BooleanGeneration이 필요한 상황
-	 * 1. 불리언 연산 시작(KickProcessIfNeeded호출, BooleanGeneration == 10)
-	 * 2. 워커 스레드 작업 시작
-	 * 3. 게임 로직 등에 의해서 라운드 재시작 or 메시 리셋 등 발생
-	 * 4. 워커 스레드 작업 완료 및 게임 스레드에서 불리언 연산 결과 반영 로직 실행
-	 * 위 경우에서 메시가 새로 갱신되었는데 이전의 불리언 연산값을 반영하는 결과가 발생할 수 있음
-	 * 3번 단계에서 BooleanGeneration을 증가시키고 GT에서 Stale 검사를 하면 방어 가능
-	 */
-	 // deprecated_realdestruction
-	 // Legacy 코드, 기존의 단일 메시에 대한 Gen 관리용 멤버 변수
-	 // Chunk 안정화 후 제거
-	std::atomic<int32>BooleanGeneration = 0;
-	// Chunk용
-	TArray<std::atomic<int32>> BooleanGenerations;
+	// 청크 변경 이력 관리
+	// 불리연 연산이 완료되고 SetMesh할 때 증가
+	TArray<std::atomic<int32>> ChunkGenerations;
 
 	// Destruction Settings
 	// 프로세서를 소유한 컴포넌트로부터 받아옴
@@ -339,12 +312,6 @@ private:
 
 	double SetMeshAvgCost = 0.0;
 
-	// Debug
-	int32 OpAccum = 0;
-	int32 DurationCount = 0;
-	int32 GrowthCount = 0;
-	void SimplifyLog();
-
 	// Batch를 나눠서 병렬로 처리하는 방법
 	int32 ParallelThreshold = 12;
 	int32 MaxParallelThreads = 4;
@@ -352,44 +319,17 @@ private:
 
 	FBooleanThreadTuner AutoTuner;
 
-	//-------------------------------------------------------------------
-	// GT 복사 블로킹 최적화를 위한 캐시된 메시
-	// - GT에서는 포인터만 전달, 실제 복사는 워커에서 수행
-	// - 워커 완료 후 결과를 캐시에 저장하여 다음 작업에 재사용
-	//-------------------------------------------------------------------
-	TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe> CachedMeshPtr;
-
-	// 캐시가 유효한지 (워커 결과가 반영되었는지)
-	bool bCacheValid = false;
-
-	// GT 복사 최적화 사용 여부 (런타임 토글 가능)
-	// true: 캐시 기반 최적화 (워커에서 복사)
-	// false: 기존 방식 (GT에서 복사)
-	bool bUseCachedMeshOptimization = true;
-
-	// 캐시 업데이트 (GT에서 호출)
-	void UpdateMeshCache(UE::Geometry::FDynamicMesh3&& ResultMesh);
-
-	// 캐시에서 메시 가져오기 (워커에서 복사할 소스)
-	TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe> GetCachedMeshForWorker();
-
-public:
-	// 최적화 플래그 Getter/Setter
-	void SetCachedMeshOptimization(bool bEnable) { bUseCachedMeshOptimization = bEnable; }
-	bool IsCachedMeshOptimizationEnabled() const { return bUseCachedMeshOptimization; }
-
 private:
-
-	void StartUnionWorker(FBulletHoleBatch&& InBatch, int32 BatchID, int32 Gen);
-	void TriggerSubtractWorker();
-
-	void StartUnionWorkerForChunk(FBulletHoleBatch&& InBatch, int32 BatchID, int32 Gen, int32 ChunkIndex);
+	void StartUnionWorkerForChunk(FBulletHoleBatch&& InBatch, int32 BatchID, int32 ChunkIndex);
 	void TriggerSubtractWorkerForChunk(int32 ChunkIndex);
 
 	/** Subtract 연산 비용 측정기 */
 	void UpdateSubtractAvgCost(double CostMs);
 
+	void UpdateUnionSize(int32 ChunkIndex, double DurationMs);
+
 	bool bEnableMultiWorkers;
+	
 	/** 최대 Worker 수 */
 	int8 MaxWorkerCount = 8;
 
@@ -414,8 +354,8 @@ private:
 	/** Chunk별 BatchID 카운터 */
 	TArray<std::atomic<int32>> ChunkNextBatchIDs;
 
-	/** Subtract 스케줄링 관련 */
-	int32 MaxSubtractPerBatch = 3; // TODO: 조정 가능하도록 할 예정
+	// 청크별 toolmesh의 최대 Union 개수
+	TArray<uint8> MaxUnionCount;
 
 	double FrameBudgetMs = 8.0f;
 	double SubtractAvgCostMs = 2.0f;
