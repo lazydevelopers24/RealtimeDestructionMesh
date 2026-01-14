@@ -643,9 +643,9 @@ int32 URealtimeDestructibleMeshComponent::GridCellIdToChunkId(int32 GridCellId) 
 	const FVector LocalCenter = GridCellCache.IdToLocalCenter(GridCellId);
 
 	// SliceCount 기반 그리드 인덱스 계산
-	int32 GridX = FMath::FloorToInt((LocalCenter.X - CachedMeshBounds.Min.X) / CachedCellSize.X);
-	int32 GridY = FMath::FloorToInt((LocalCenter.Y - CachedMeshBounds.Min.Y) / CachedCellSize.Y);
-	int32 GridZ = FMath::FloorToInt((LocalCenter.Z - CachedMeshBounds.Min.Z) / CachedCellSize.Z);
+	int32 GridX = FMath::FloorToInt((LocalCenter.X - CachedMeshBounds.Min.X) / CachedChunkSize.X);
+	int32 GridY = FMath::FloorToInt((LocalCenter.Y - CachedMeshBounds.Min.Y) / CachedChunkSize.Y);
+	int32 GridZ = FMath::FloorToInt((LocalCenter.Z - CachedMeshBounds.Min.Z) / CachedChunkSize.Z);
 
 	GridX = FMath::Clamp(GridX, 0, SliceCount.X - 1);
 	GridY = FMath::Clamp(GridY, 0, SliceCount.Y - 1);
@@ -1812,7 +1812,7 @@ TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> URealtimeDestructibleMeshComponen
 			ShapeParams.RadiusSteps,
 			ShapeParams.HeightSubdivisions,
 			ShapeParams.bCapped,
-			EGeometryScriptPrimitiveOriginMode::Center
+			EGeometryScriptPrimitiveOriginMode::Base
 		);
 		break;
 
@@ -1826,7 +1826,7 @@ TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> URealtimeDestructibleMeshComponen
 			ShapeParams.RadiusSteps,
 			ShapeParams.HeightSubdivisions,
 			ShapeParams.bCapped,
-			EGeometryScriptPrimitiveOriginMode::Center
+			EGeometryScriptPrimitiveOriginMode::Base
 		);
 		break;
 	}
@@ -2142,7 +2142,7 @@ void URealtimeDestructibleMeshComponent::FindChunksInRadius(const FVector& World
 	FVector LocalRadius = GetComponentTransform().InverseTransformVector(FVector(Radius));
 	float LocalRadiusScalar = LocalRadius.GetAbsMax();  // 또는 평균값
 
-	const FVector& CellSize = CachedCellSize;
+	const FVector& CellSize = CachedChunkSize;
 	const FBox& MeshBounds = CachedMeshBounds;
 
 	//  로컬 좌표로 계산
@@ -2406,9 +2406,9 @@ void URealtimeDestructibleMeshComponent::DrawDebugText() const
 	float BoundsHeight = Bounds.BoxExtent.Z * 2.0f;
 	if (ChunkMeshComponents.Num() > 0)
 	{
-		if (SliceCount.Z > 0 && CachedCellSize.Z > 0.0f)
+		if (SliceCount.Z > 0 && CachedChunkSize.Z > 0.0f)
 		{
-			BoundsHeight = CachedCellSize.Z * SliceCount.Z;
+			BoundsHeight = CachedChunkSize.Z * SliceCount.Z;
 		}
 	}
 
@@ -3394,7 +3394,7 @@ void URealtimeDestructibleMeshComponent::BuildGridToChunkMap()
 		BoundsSize.Z / SliceCount.Z);
 
 	CachedMeshBounds = MeshBounds;
-	CachedCellSize = CellSize;
+	CachedChunkSize = CellSize;
 	if (!MeshBounds.IsValid)
 	{
 		return;
@@ -3482,7 +3482,7 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 	}
 
 	// 4. 캐시된 정보 저장
-	CachedMeshBounds = SourceStaticMesh->GetBoundingBox();
+	// CachedMeshBounds = SourceStaticMesh->GetBoundingBox();
 	CachedCellSize = GridCellCache.CellSize;  // 빌더가 저장한 로컬 스페이스 셀 크기
 
 	UE_LOG(LogTemp, Log, TEXT("BuildGridCells: WorldCellSize=(%.1f, %.1f, %.1f), Scale=(%.2f, %.2f, %.2f), LocalCellSize=(%.2f, %.2f, %.2f), Grid %dx%dx%d, Valid cells: %d, Anchors: %d"),
@@ -3503,7 +3503,7 @@ void URealtimeDestructibleMeshComponent::FindChunksAlongLineInternal(const FVect
 		return;
 	}
 
-	const FVector& ChunkSize = CachedCellSize;
+	const FVector& ChunkSize = CachedChunkSize;
 	const FBox& MeshBounds = CachedMeshBounds;
 
 	// World to Local

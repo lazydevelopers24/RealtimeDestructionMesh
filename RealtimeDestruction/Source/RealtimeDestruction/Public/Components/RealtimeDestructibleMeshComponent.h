@@ -458,6 +458,9 @@ public:
 	FBox CachedMeshBounds;
 
 	UPROPERTY()
+	FVector CachedChunkSize;
+
+	UPROPERTY()
 	FVector CachedCellSize;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
@@ -687,6 +690,7 @@ protected:
 
 	/** 그리드 인덱스 -> ChunkId(CellMeshComponents 배열 인덱스) 매핑 테이블
 	 *  슬라이싱 후 고정되며, BuildCellMeshesFromGeometryCollection에서 계산됨 */
+	UPROPERTY()
 	TArray<int32> GridToChunkMap;
 
 	TArray<uint64> ChunkBusyBits;
