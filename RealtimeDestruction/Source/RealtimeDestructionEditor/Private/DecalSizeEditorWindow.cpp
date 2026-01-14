@@ -354,6 +354,7 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateDecalSection()
 						if (Viewport.IsValid())
 						{
 							Viewport->SetDecalMaterial(SelectedDecalMaterial);
+							SaveToDataAsset();
 						}
 					})
 				]
@@ -767,12 +768,15 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateToolShapeSection()
                       SNew(SSpinBox<float>)
                       .MinValue(1.0f)
                       .MaxValue(1000.0f)
-                      .Value(InitSphereRadius)
+                      .Value_Lambda([this]() {
+                          return Viewport.IsValid() ? Viewport->GetPreviewSphereRadius() : 10.0f;
+                      })
                       .OnValueChanged_Lambda([this](float V)
                       {
                           if (Viewport.IsValid())
                           {
                               Viewport->SetPreviewSphere(V);
+							  SaveToDataAsset();
                           }
                       })
                   ]
@@ -803,12 +807,15 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateToolShapeSection()
                       SNew(SSpinBox<float>)
                       .MinValue(1.0f)
                       .MaxValue(1000.0f)
-                      .Value(InitCylinderRadius)
+                      .Value_Lambda([this]() {
+                          return Viewport.IsValid() ? Viewport->GetPreviewCylinderRadius() : 10.0f;
+                      })
                       .OnValueChanged_Lambda([this](float V)
                       {
                           if (Viewport.IsValid())
                           {
                               Viewport->SetPreviewCylinderRadius(V);
+							  SaveToDataAsset();
                           }
                       })
                   ]
@@ -839,12 +846,15 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateToolShapeSection()
                       SNew(SSpinBox<float>)
                       .MinValue(1.0f)
                       .MaxValue(2000.0f)
-                      .Value(InitCylinderHeight)
+                      .Value_Lambda([this]() {
+                          return Viewport.IsValid() ? Viewport->GetPreviewCylinderHeight() : 400.0f;
+                      })
                       .OnValueChanged_Lambda([this](float V)
                       {
                           if (Viewport.IsValid())
                           {
                               Viewport->SetPreviewCylinderHeight(V);
+							  SaveToDataAsset();
                           }
                       })
                   ]
@@ -1382,12 +1392,29 @@ void SDecalSizeEditorWindow::OnSurfaceTypeSelected(FName SelectedSurfaceType)
 	CurrentSurfaceType = SelectedSurfaceType;
 
 	FDecalSizeConfig* Config = GetCurrentDecalConfig();
-	if (Config && Viewport.IsValid())
-	{ 
-		Viewport->SetDecalMaterial(Config->DecalMaterial);
-		Viewport->SetDecalSize(Config->DecalSize);
-		// ... 기타 설정 적용
-		Viewport->RefreshPreview();
+	if (Config)
+	{
+		// Material 멤버 변수 업데이트 (UI에서 사용)
+		SelectedDecalMaterial = Config->DecalMaterial;
+
+		if (Viewport.IsValid())
+		{
+			Viewport->SetDecalMaterial(Config->DecalMaterial);
+			Viewport->SetDecalSize(Config->DecalSize);
+
+			// Transform 설정
+			FTransform DecalTransform;
+			DecalTransform.SetLocation(Config->LocationOffset);
+			DecalTransform.SetRotation(Config->RotationOffset.Quaternion());
+			Viewport->SetDecalTransform(DecalTransform);
+
+			// Tool Shape 설정
+			Viewport->SetPreviewCylinderRadius(Config->CylinderRadius);
+			Viewport->SetPreviewCylinderHeight(Config->CylinderHeight);
+			Viewport->SetPreviewSphere(Config->SphereRadius);
+
+			Viewport->RefreshPreview();
+		}
 	}
 }
 
