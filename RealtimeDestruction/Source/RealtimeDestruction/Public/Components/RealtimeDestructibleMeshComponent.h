@@ -790,6 +790,14 @@ public:
 	/** 작은 파편(고립된 Connected Component) 정리 */
 	void CleanupSmallFragments();
 
+	/**
+	 * 분리된 셀들을 파편 액터로 스폰
+	 * @param DetachedCellIds - 분리된 셀 ID 배열
+	 * @param InitialLocation - 파편 그룹 중심 위치
+	 * @param InitialVelocity - 초기 속도 (폭발 방향)
+	 */
+	void SpawnDebrisFromCells(const TArray<int32>& DetachedCellIds, const FVector& InitialLocation, const FVector& InitialVelocity);
+
 	//[deprecated]
 	/** Cell 개수 반환 */
 	//UFUNCTION(BlueprintPure, Category="RealtimeDestructibleMesh|CellMesh")

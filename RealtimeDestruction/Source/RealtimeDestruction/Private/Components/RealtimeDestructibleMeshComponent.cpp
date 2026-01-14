@@ -34,6 +34,7 @@
 #include "Algo/Unique.h"
 #include "StructuralIntegrity/CellDestructionSystem.h"
 #include "Data/DecalMaterialDataAsset.h"
+#include "ProceduralMeshComponent.h"
 
 //////////////////////////////////////////////////////////////////////////
 // FCompactDestructionOp 구현 (언리얼 내장 NetQuantize 사용)
@@ -1043,9 +1044,144 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				FColor PointColor = bIsSmallFragment ? FColor::Red : FColor::Green;
 				DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
 
-				// 작은 파편이면 삭제
+				// 작은 파편이면 파편 액터로 스폰 후 삭제
 				if (bIsSmallFragment)
 				{
+					// 메쉬 데이터 추출
+					TMap<int32, int32> OldToNewVertexMap;
+					TArray<FVector> DebrisVertices;
+					TArray<int32> DebrisTriangles;
+
+					for (int32 Tid : Comp.Indices)
+					{
+						if (!Mesh->IsTriangle(Tid)) continue;
+
+						FIndex3i Tri = Mesh->GetTriangle(Tid);
+						int32 NewTriIndices[3];
+
+						for (int32 j = 0; j < 3; ++j)
+						{
+							int32 OldVid = Tri[j];
+							if (int32* Found = OldToNewVertexMap.Find(OldVid))
+							{
+								NewTriIndices[j] = *Found;
+							}
+							else
+							{
+								int32 NewIdx = DebrisVertices.Num();
+								OldToNewVertexMap.Add(OldVid, NewIdx);
+								// 로컬 -> 월드 -> 스폰위치 기준 상대좌표로 변환
+								FVector3d LocalPos = Mesh->GetVertex(OldVid);
+								FVector WorldVertexPos = MeshTransform.TransformPosition(FVector(LocalPos));
+								DebrisVertices.Add(WorldVertexPos - WorldPos);
+								NewTriIndices[j] = NewIdx;
+							}
+						}
+
+						// 원래 와인딩 순서 유지
+						DebrisTriangles.Add(NewTriIndices[0]);
+						DebrisTriangles.Add(NewTriIndices[1]);
+						DebrisTriangles.Add(NewTriIndices[2]);
+					}
+
+					// 파편 액터 스폰
+					if (DebrisVertices.Num() >= 3 && DebrisTriangles.Num() >= 3)
+					{
+						UWorld* World = GetWorld();
+						if (World)
+						{
+							FActorSpawnParameters SpawnParams;
+							SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+							AActor* DebrisActor = World->SpawnActor<AActor>(AActor::StaticClass(), WorldPos, FRotator::ZeroRotator, SpawnParams);
+							if (DebrisActor)
+							{
+								// ProceduralMeshComponent 생성
+								UProceduralMeshComponent* ProcMesh = NewObject<UProceduralMeshComponent>(DebrisActor, UProceduralMeshComponent::StaticClass(), TEXT("DebrisMesh"));
+								ProcMesh->SetMobility(EComponentMobility::Movable);
+								ProcMesh->bUseComplexAsSimpleCollision = false;
+
+								// UV 생성
+								TArray<FVector2D> DebrisUVs;
+								DebrisUVs.SetNum(DebrisVertices.Num());
+
+								// 메쉬 섹션 생성 (노말 자동 계산)
+								ProcMesh->CreateMeshSection_LinearColor(0, DebrisVertices, DebrisTriangles, TArray<FVector>(), DebrisUVs,
+									TArray<FLinearColor>(), TArray<FProcMeshTangent>(), false);
+
+								// Convex Collision 생성 - 정점이 충분하고 유효할 때만
+								if (DebrisVertices.Num() >= 4)
+								{
+									// NaN 체크
+									bool bHasValidVerts = true;
+									for (const FVector& V : DebrisVertices)
+									{
+										if (!FMath::IsFinite(V.X) || !FMath::IsFinite(V.Y) || !FMath::IsFinite(V.Z))
+										{
+											bHasValidVerts = false;
+											break;
+										}
+									}
+									if (bHasValidVerts)
+									{
+										ProcMesh->AddCollisionConvexMesh(DebrisVertices);
+									}
+								}
+
+								// 원본 머티리얼 적용
+								if (ChunkMesh->GetNumMaterials() > 0)
+								{
+									UMaterialInterface* OrigMat = ChunkMesh->GetMaterial(0);
+									if (OrigMat)
+									{
+										ProcMesh->SetMaterial(0, OrigMat);
+									}
+								}
+
+								// 액터에 연결
+								DebrisActor->SetRootComponent(ProcMesh);
+								ProcMesh->RegisterComponent();
+								DebrisActor->AddInstanceComponent(ProcMesh);
+
+								// 위치 명시적 설정
+								DebrisActor->SetActorLocation(WorldPos);
+
+								// 물리 설정 - 정점이 4개 이상일 때만
+								if (DebrisVertices.Num() >= 4)
+								{
+									ProcMesh->SetSimulatePhysics(true);
+									ProcMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+									ProcMesh->SetCollisionResponseToAllChannels(ECR_Block);
+
+									// 약간 아래로 초기 속도
+									ProcMesh->SetPhysicsLinearVelocity(FVector(0, 0, -50));
+
+									// 랜덤 회전
+									FVector RandomAngular(
+										FMath::RandRange(-90.0f, 90.0f),
+										FMath::RandRange(-90.0f, 90.0f),
+										FMath::RandRange(-90.0f, 90.0f)
+									);
+									ProcMesh->SetPhysicsAngularVelocityInDegrees(RandomAngular);
+								}
+
+								// 10초 후 삭제
+								DebrisActor->SetLifeSpan(10.0f);
+
+								UE_LOG(LogTemp, Warning, TEXT("Debris Actor Location: %s, ProcMesh Location: %s"),
+									*DebrisActor->GetActorLocation().ToString(),
+									*ProcMesh->GetComponentLocation().ToString());
+
+								UE_LOG(LogTemp, Warning, TEXT("Debris Spawned: Pos=%s, Vertices=%d, Triangles=%d, Volume=%.1f"),
+									*WorldPos.ToString(), DebrisVertices.Num(), DebrisTriangles.Num() / 3, Volume);
+
+								// 디버그: 스폰 위치에 파란 구체 표시
+								DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+							}
+						}
+					}
+
+					// 원본 메쉬에서 삼각형 삭제
 					for (int32 Tid : Comp.Indices)
 					{
 						Mesh->RemoveTriangle(Tid);
@@ -1068,6 +1204,12 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 		UE_LOG(LogTemp, Warning, TEXT("CleanupSmallFragments: Removed %d small fragments (volume <= 5000 cm^3)"),
 			TotalRemoved);
 	}
+}
+
+void URealtimeDestructibleMeshComponent::SpawnDebrisFromCells(const TArray<int32>& DetachedCellIds, const FVector& InitialLocation, const FVector& InitialVelocity)
+{
+	// 파편 스폰은 이제 CleanupSmallFragments에서 직접 처리됨
+	// 이 함수는 향후 확장을 위해 유지
 }
 
 // [deprecated]
