@@ -12,11 +12,11 @@ struct FRealtimeDestructionRequest;
 // SubCell 설정 상수
 //=========================================================================
 
-/** SubCell 분할 수 (각 축당) - 5x5x5 = 125개 subcell */
-inline constexpr int32 SUBCELL_DIVISION = 5;
+/** SubCell 분할 수 (각 축당) - 2x2x2 = 8개 subcell */
+inline constexpr int32 SUBCELL_DIVISION = 2;
 
 /** 총 SubCell 개수 */
-inline constexpr int32 SUBCELL_COUNT = SUBCELL_DIVISION * SUBCELL_DIVISION * SUBCELL_DIVISION;  // 125
+inline constexpr int32 SUBCELL_COUNT = SUBCELL_DIVISION * SUBCELL_DIVISION * SUBCELL_DIVISION;  // 8
 
 /** SubCell 3D 좌표 -> SubCell ID */
 inline constexpr int32 SubCellCoordToId(int32 X, int32 Y, int32 Z)
@@ -529,7 +529,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 	TArray<int32> GetCellsInAABB(const FBox& WorldAABB, const FTransform& MeshTransform) const;
 };
 
-/** Subcell 비트마스크 (125개 subcell) */
+/** Subcell 비트마스크 (8개 subcell, 2x2x2) */
 USTRUCT()
 struct FSubCell
 {
@@ -538,36 +538,32 @@ struct FSubCell
 	/**
 	 * 비트마스크 (각 비트가 subcell 존재 여부)
 	 * 0 = Dead, 1 = Alive
-	 * 128 비트 중 125비트만 사용하므로 Bits[1]의 상위 비트 3개는 항상 0으로 설정.
+	 * 8비트로 8개 SubCell 상태 표현
+	 * SubCellId = X + Y * 2 + Z * 4
 	 */
 	UPROPERTY()
-	int64 Bits[2] = { -1LL, (1LL << 61) - 1};
+	uint8 Bits = 0xFF;  // 모든 SubCell 살아있음
 
 	bool IsSubCellAlive(int32 SubCellId) const
 	{
-		const int32 ArrayIdx = SubCellId / 64;
-		const int32 BitIdx = SubCellId % 64;
-		return (Bits[ArrayIdx] & (1LL << BitIdx)) != 0;
+		return (Bits & (1 << SubCellId)) != 0;
 	}
 
 	void DestroySubCell(int32 SubCellId)
 	{
-		const int32 ArrayIdx = SubCellId / 64;
-		const int32 BitIdx = SubCellId % 64;
-		Bits[ArrayIdx] &= ~(1LL << BitIdx);
+		Bits &= ~(1 << SubCellId);
 	}
 
 	/** 모든 subcell이 파괴되었는지 확인 */
 	bool IsFullyDestroyed() const
 	{
-		return Bits[0] == 0 && Bits[1] == 0;
+		return Bits == 0;
 	}
 
 	/** 초기화 (모든 subcell 존재) */
 	void Reset()
 	{
-		Bits[0] = -1LL; // 전부 1
-		Bits[1] = (1LL << 61) - 1; // 상위 비트 3개만 0, 나머지는 전부 1
+		Bits = 0xFF;
 	}
 };
 

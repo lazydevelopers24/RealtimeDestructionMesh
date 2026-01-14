@@ -463,106 +463,126 @@ void FDestructionBatchProcessor::ProcessBatch()
 }
 
 //=============================================================================
-// FCellDestructionSystem - SubCell 레벨 연결성 검사
+// FCellDestructionSystem - SubCell 레벨 연결성 검사 (2x2x2 최적화)
 //=============================================================================
 
 namespace SubCellBFSHelper
 {
 	/**
-	 * 두 Cell 사이의 방향 계산
-	 * @return 방향 인덱스 (0-5: -X, +X, -Y, +Y, -Z, +Z), -1이면 인접하지 않음
+	 * 경계면 SubCell 쌍 테이블 (2x2x2 전용)
+	 * 각 방향별로 (현재 Cell SubCell, 이웃 Cell SubCell) 쌍 4개
+	 *
+	 * SubCell 배치:
+	 *   Z=0: 0(0,0,0), 1(1,0,0), 2(0,1,0), 3(1,1,0)
+	 *   Z=1: 4(0,0,1), 5(1,0,1), 6(0,1,1), 7(1,1,1)
 	 */
-	int32 GetNeighborDirection(const FGridCellCache& Cache, int32 FromCellId, int32 ToCellId)
+	struct FBoundarySubCellPair
 	{
-		const FIntVector FromCoord = Cache.IdToCoord(FromCellId);
-		const FIntVector ToCoord = Cache.IdToCoord(ToCellId);
-		const FIntVector Diff = ToCoord - FromCoord;
+		int32 Current;   // 현재 Cell의 경계 SubCell
+		int32 Neighbor;  // 이웃 Cell의 대응 SubCell
+	};
 
-		// 인접 Cell은 한 축으로만 ±1 차이
-		if (Diff == FIntVector(-1, 0, 0)) return 0;  // -X
-		if (Diff == FIntVector(+1, 0, 0)) return 1;  // +X
-		if (Diff == FIntVector(0, -1, 0)) return 2;  // -Y
-		if (Diff == FIntVector(0, +1, 0)) return 3;  // +Y
-		if (Diff == FIntVector(0, 0, -1)) return 4;  // -Z
-		if (Diff == FIntVector(0, 0, +1)) return 5;  // +Z
+	// +X 방향: X=1 (1,3,5,7) → 이웃의 X=0 (0,2,4,6)
+	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_POS_X[4] = {
+		{1, 0}, {3, 2}, {5, 4}, {7, 6}
+	};
 
-		return -1;  // 인접하지 않음
-	}
+	// -X 방향: X=0 (0,2,4,6) → 이웃의 X=1 (1,3,5,7)
+	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_NEG_X[4] = {
+		{0, 1}, {2, 3}, {4, 5}, {6, 7}
+	};
+
+	// +Y 방향: Y=1 (2,3,6,7) → 이웃의 Y=0 (0,1,4,5)
+	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_POS_Y[4] = {
+		{2, 0}, {3, 1}, {6, 4}, {7, 5}
+	};
+
+	// -Y 방향: Y=0 (0,1,4,5) → 이웃의 Y=1 (2,3,6,7)
+	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_NEG_Y[4] = {
+		{0, 2}, {1, 3}, {4, 6}, {5, 7}
+	};
+
+	// +Z 방향: Z=1 (4,5,6,7) → 이웃의 Z=0 (0,1,2,3)
+	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_POS_Z[4] = {
+		{4, 0}, {5, 1}, {6, 2}, {7, 3}
+	};
+
+	// -Z 방향: Z=0 (0,1,2,3) → 이웃의 Z=1 (4,5,6,7)
+	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_NEG_Z[4] = {
+		{0, 4}, {1, 5}, {2, 6}, {3, 7}
+	};
 
 	/**
-	 * 경계 SubCell → 이웃 Cell의 대응 SubCell ID
-	 * 예: +X 방향 이동 시, 현재 Cell의 (4,Y,Z) → 이웃 Cell의 (0,Y,Z)
+	 * 방향별 경계 SubCell 쌍 배열 반환
+	 * @param Direction - 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
 	 */
-	int32 GetCorrespondingBoundarySubCell(int32 SubCellId, int32 Direction)
+	inline const FBoundarySubCellPair* GetBoundaryPairs(int32 Direction)
 	{
-		const FIntVector Coord = SubCellIdToCoord(SubCellId);
-
 		switch (Direction)
 		{
-		case 0:  // -X → 이웃 Cell의 +X 경계 (X=4)
-			return SubCellCoordToId(SUBCELL_DIVISION - 1, Coord.Y, Coord.Z);
-		case 1:  // +X → 이웃 Cell의 -X 경계 (X=0)
-			return SubCellCoordToId(0, Coord.Y, Coord.Z);
-		case 2:  // -Y → 이웃 Cell의 +Y 경계 (Y=4)
-			return SubCellCoordToId(Coord.X, SUBCELL_DIVISION - 1, Coord.Z);
-		case 3:  // +Y → 이웃 Cell의 -Y 경계 (Y=0)
-			return SubCellCoordToId(Coord.X, 0, Coord.Z);
-		case 4:  // -Z → 이웃 Cell의 +Z 경계 (Z=4)
-			return SubCellCoordToId(Coord.X, Coord.Y, SUBCELL_DIVISION - 1);
-		case 5:  // +Z → 이웃 Cell의 -Z 경계 (Z=0)
-			return SubCellCoordToId(Coord.X, Coord.Y, 0);
-		default:
-			return -1;
+		case 0: return BOUNDARY_PAIRS_NEG_X;
+		case 1: return BOUNDARY_PAIRS_POS_X;
+		case 2: return BOUNDARY_PAIRS_NEG_Y;
+		case 3: return BOUNDARY_PAIRS_POS_Y;
+		case 4: return BOUNDARY_PAIRS_NEG_Z;
+		case 5: return BOUNDARY_PAIRS_POS_Z;
+		default: return nullptr;
 		}
 	}
 
 	/**
-	 * SubCell이 특정 방향의 경계에 있는지 확인
-	 * 예: Direction=1 (+X) → SubCell의 X 좌표가 4인지 확인
+	 * 두 Cell 사이에 연결된 경계 SubCell 쌍이 있는지 확인
+	 * @param Direction - CellA → CellB 방향 (0-5)
+	 * @return 양쪽 모두 살아있는 경계 SubCell 쌍이 하나라도 있으면 true
 	 */
-	bool IsSubCellOnBoundary(int32 SubCellId, int32 Direction)
+	bool HasConnectedBoundary(
+		int32 CellA,
+		int32 CellB,
+		int32 Direction,
+		const FCellState& CellState)
 	{
-		const FIntVector Coord = SubCellIdToCoord(SubCellId);
-
-		switch (Direction)
+		const FBoundarySubCellPair* Pairs = GetBoundaryPairs(Direction);
+		if (!Pairs)
 		{
-		case 0: return Coord.X == 0;                      // -X 경계
-		case 1: return Coord.X == SUBCELL_DIVISION - 1;   // +X 경계
-		case 2: return Coord.Y == 0;                      // -Y 경계
-		case 3: return Coord.Y == SUBCELL_DIVISION - 1;   // +Y 경계
-		case 4: return Coord.Z == 0;                      // -Z 경계
-		case 5: return Coord.Z == SUBCELL_DIVISION - 1;   // +Z 경계
-		default: return false;
-		}
-	}
-
-	/**
-	 * Cell의 첫 번째 살아있는 SubCell 찾기
-	 * @return SubCellId, 없으면 -1
-	 */
-	int32 FindFirstAliveSubCell(int32 CellId, const FCellState& CellState)
-	{
-		if (CellState.DestroyedCells.Contains(CellId))
-		{
-			return -1;
+			return false;
 		}
 
-		const FSubCell* SubCellState = CellState.SubCellStates.Find(CellId);
-
-		for (int32 SubCellId = 0; SubCellId < SUBCELL_COUNT; ++SubCellId)
+		for (int32 i = 0; i < 4; ++i)
 		{
-			bool bAlive = SubCellState ? SubCellState->IsSubCellAlive(SubCellId) : true;
-			if (bAlive)
+			if (CellState.IsSubCellAlive(CellA, Pairs[i].Current) &&
+				CellState.IsSubCellAlive(CellB, Pairs[i].Neighbor))
 			{
-				return SubCellId;
+				return true;  // 연결된 쌍 발견
 			}
 		}
 
-		return -1;
+		return false;  // 연결 없음
 	}
 
 	/**
-	 * SubCell 레벨 BFS로 Anchor 도달 여부 확인
+	 * Cell에 살아있는 SubCell이 있는지 확인
+	 */
+	bool HasAliveSubCell(int32 CellId, const FCellState& CellState)
+	{
+		if (CellState.DestroyedCells.Contains(CellId))
+		{
+			return false;
+		}
+
+		const FSubCell* SubCellState = CellState.SubCellStates.Find(CellId);
+		if (!SubCellState)
+		{
+			return true;  // 상태 없으면 모두 살아있음
+		}
+
+		return !SubCellState->IsFullyDestroyed();
+	}
+
+	/**
+	 * Cell 단위 BFS로 Anchor 도달 여부 확인 (2x2x2 최적화)
+	 *
+	 * 2x2x2에서는 Cell 내 모든 SubCell이 서로 연결되므로,
+	 * Cell 단위로 탐색하고 경계 연결만 SubCell 레벨로 검사
 	 *
 	 * @param Cache - 격자 캐시
 	 * @param CellState - 셀 상태
@@ -580,37 +600,24 @@ namespace SubCellBFSHelper
 	{
 		OutVisitedCells.Reset();
 
-		// 시작 Cell의 살아있는 SubCell 찾기
-		const int32 StartSubCell = FindFirstAliveSubCell(StartCellId, CellState);
-		if (StartSubCell < 0)
+		// 시작 Cell에 살아있는 SubCell이 있는지 확인
+		if (!HasAliveSubCell(StartCellId, CellState))
 		{
-			// 살아있는 SubCell 없음 = 이미 완전 파괴된 Cell
 			return false;
 		}
 
-		// BFS 큐: (CellId, SubCellId)
-		TQueue<TPair<int32, int32>> Queue;
+		// Cell 단위 BFS
+		TQueue<int32> CellQueue;
+		TSet<int32> VisitedCells;
 
-		// 방문한 SubCell 추적: (CellId << 16) | SubCellId
-		// 참고: CellId가 65535 이하라고 가정 (일반적인 파괴 메시에서 충분)
-		TSet<int32> VisitedSubCells;
-
-		auto MakeKey = [](int32 CellId, int32 SubCellId) -> int32
-		{
-			return (CellId << 16) | SubCellId;
-		};
-
-		Queue.Enqueue(TPair<int32, int32>(StartCellId, StartSubCell));
-		VisitedSubCells.Add(MakeKey(StartCellId, StartSubCell));
+		CellQueue.Enqueue(StartCellId);
+		VisitedCells.Add(StartCellId);
 		OutVisitedCells.Add(StartCellId);
 
-		while (!Queue.IsEmpty())
+		while (!CellQueue.IsEmpty())
 		{
-			TPair<int32, int32> Current;
-			Queue.Dequeue(Current);
-
-			const int32 CurrCellId = Current.Key;
-			const int32 CurrSubCellId = Current.Value;
+			int32 CurrCellId;
+			CellQueue.Dequeue(CurrCellId);
 
 			// Anchor Cell에 도달했는지 확인
 			if (Cache.GetCellIsAnchor(CurrCellId))
@@ -624,81 +631,46 @@ namespace SubCellBFSHelper
 				return true;
 			}
 
-			// 현재 SubCell 좌표
-			const FIntVector SubCoord = SubCellIdToCoord(CurrSubCellId);
+			// 6방향 이웃 Cell 탐색
+			const FIntVector CurrCoord = Cache.IdToCoord(CurrCellId);
 
-			// 6방향 탐색
 			for (int32 Dir = 0; Dir < 6; ++Dir)
 			{
-				const FIntVector NewSubCoord = SubCoord + FIntVector(
+				const FIntVector NeighborCoord = CurrCoord + FIntVector(
 					DIRECTION_OFFSETS[Dir][0],
 					DIRECTION_OFFSETS[Dir][1],
 					DIRECTION_OFFSETS[Dir][2]
 				);
 
-				// 같은 Cell 내 이동 가능한지 확인
-				if (NewSubCoord.X >= 0 && NewSubCoord.X < SUBCELL_DIVISION &&
-					NewSubCoord.Y >= 0 && NewSubCoord.Y < SUBCELL_DIVISION &&
-					NewSubCoord.Z >= 0 && NewSubCoord.Z < SUBCELL_DIVISION)
+				if (!Cache.IsValidCoord(NeighborCoord))
 				{
-					// 같은 Cell 내 이동
-					const int32 NextSubCellId = SubCellCoordToId(NewSubCoord.X, NewSubCoord.Y, NewSubCoord.Z);
-					const int32 Key = MakeKey(CurrCellId, NextSubCellId);
-
-					if (!VisitedSubCells.Contains(Key))
-					{
-						if (CellState.IsSubCellAlive(CurrCellId, NextSubCellId))
-						{
-							VisitedSubCells.Add(Key);
-							Queue.Enqueue(TPair<int32, int32>(CurrCellId, NextSubCellId));
-						}
-					}
+					continue;
 				}
-				else
+
+				const int32 NeighborCellId = Cache.CoordToId(NeighborCoord);
+
+				// 이미 방문했거나 유효하지 않은 Cell 스킵
+				if (VisitedCells.Contains(NeighborCellId))
 				{
-					// 경계를 넘어 다른 Cell로 이동 시도
-					// 현재 SubCell이 해당 방향 경계에 있는지 확인
-					if (!IsSubCellOnBoundary(CurrSubCellId, Dir))
-					{
-						continue;
-					}
+					continue;
+				}
 
-					// 해당 방향의 이웃 Cell 찾기
-					const FIntVector CurrCellCoord = Cache.IdToCoord(CurrCellId);
-					const FIntVector NeighborCoord = CurrCellCoord + FIntVector(
-						DIRECTION_OFFSETS[Dir][0],
-						DIRECTION_OFFSETS[Dir][1],
-						DIRECTION_OFFSETS[Dir][2]
-					);
+				if (!Cache.GetCellExists(NeighborCellId))
+				{
+					continue;
+				}
 
-					if (!Cache.IsValidCoord(NeighborCoord))
-					{
-						continue;
-					}
+				if (CellState.DestroyedCells.Contains(NeighborCellId))
+				{
+					continue;
+				}
 
-					const int32 NeighborCellId = Cache.CoordToId(NeighborCoord);
-
-					// 이웃 Cell이 유효한지 확인
-					if (!Cache.GetCellExists(NeighborCellId) ||
-						CellState.DestroyedCells.Contains(NeighborCellId))
-					{
-						continue;
-					}
-
-					// 이웃 Cell의 대응 경계 SubCell
-					const int32 NeighborSubCellId = GetCorrespondingBoundarySubCell(CurrSubCellId, Dir);
-					const int32 Key = MakeKey(NeighborCellId, NeighborSubCellId);
-
-					if (!VisitedSubCells.Contains(Key))
-					{
-						// 이웃 Cell의 경계 SubCell이 살아있는지 확인
-						if (CellState.IsSubCellAlive(NeighborCellId, NeighborSubCellId))
-						{
-							VisitedSubCells.Add(Key);
-							Queue.Enqueue(TPair<int32, int32>(NeighborCellId, NeighborSubCellId));
-							OutVisitedCells.Add(NeighborCellId);
-						}
-					}
+				// 경계 SubCell 연결 검사
+				if (HasConnectedBoundary(CurrCellId, NeighborCellId, Dir, CellState))
+				{
+					VisitedCells.Add(NeighborCellId);
+					CellQueue.Enqueue(NeighborCellId);
+					OutVisitedCells.Add(NeighborCellId);
 				}
 			}
 		}
