@@ -15,6 +15,7 @@
 #include "NetworkLogMacros.h"
 #include "Data/DecalMaterialDataAsset.h"
 #include "Debug/DestructionDebugger.h"
+#include "Subsystems/DestructionGameInstanceSubsystem.h"
 #include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "HAL/PlatformTime.h"
 #include "DynamicMesh/DynamicMesh3.h"
@@ -300,8 +301,25 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 		{
 			Request.bSpawnDecal = true;
 		}
-		FName SurfaceType = DestructComp->SurfaceType; 
+		FName SurfaceType = DestructComp->SurfaceType;
 		Request.SurfaceType = SurfaceType;
+		Request.DecalConfigID = DecalConfigID;  // 네트워크 전송용
+
+		// GameInstanceSubsystem에 DecalDataAsset 설정 (서버/클라 모두)
+		if (DecalDataAsset)
+		{
+			if (UGameInstance* GI = GetWorld()->GetGameInstance())
+			{
+				if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+				{
+					if (!Subsystem->GetDecalDataAsset())
+					{
+						Subsystem->SetDecalDataAsset(DecalDataAsset);
+					}
+				}
+			}
+		}
+
 		if (DecalDataAsset)
 		{
 			FDecalSizeConfig FoundConfig;
@@ -452,6 +470,13 @@ void UDestructionProjectileComponent::SetShapeParameters(FRealtimeDestructionReq
 		}
 		break;
 	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[Client] ToolCenterWorld=%s, ImpactPoint=%s, Forward=%s, SurfaceMargin=%.2f, Shape=%d"),
+		*OutRequest.ToolCenterWorld.ToString(),
+		*OutRequest.ImpactPoint.ToString(),
+		*OutRequest.ToolForwardVector.ToString(),
+		SurfaceMargin,
+		(int32)ToolShape);
 
 	// Shape별로 파라미터 채우기 (네트워크 전송용)
 	switch (ToolShape)

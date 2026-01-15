@@ -35,6 +35,8 @@
 #include "StructuralIntegrity/CellDestructionSystem.h"
 #include "Data/DecalMaterialDataAsset.h"
 #include "ProceduralMeshComponent.h"
+#include "Net/UnrealNetwork.h"
+#include "Subsystems/DestructionGameInstanceSubsystem.h"
 
 //////////////////////////////////////////////////////////////////////////
 // FCompactDestructionOp 구현 (언리얼 내장 NetQuantize 사용)
@@ -65,6 +67,8 @@ FCompactDestructionOp FCompactDestructionOp::Compress(const FRealtimeDestruction
 		: 0;
 	
 	Compact.DecalSize = Request.DecalSize;
+	Compact.DecalConfigID = Request.DecalConfigID;
+	Compact.SurfaceType = Request.SurfaceType;
 	return Compact;
 }
 
@@ -75,6 +79,7 @@ FRealtimeDestructionRequest FCompactDestructionOp::Decompress() const
 	// FVector_NetQuantize → FVector 자동 변환
 	Request.ImpactPoint = ImpactPoint;
 	Request.ImpactNormal = FVector(ImpactNormal).GetSafeNormal();
+	Request.ToolForwardVector = FVector(ToolForwardVector).GetSafeNormal();
 
 	// ToolShape와 ShapeParams 복원
 	Request.ToolShape = ToolShape;
@@ -94,13 +99,33 @@ FRealtimeDestructionRequest FCompactDestructionOp::Decompress() const
 		break;
 	}
 
-	// ChunkIndex 복원 (클라이언트가 계산한 값)
+	// ChunkIndex 복원
 	Request.ChunkIndex = static_cast<int32>(ChunkIndex);
 
-	// ToolForwardVector 복원 (Compress에서 저장한 값)
-	Request.ToolForwardVector = FVector(ToolForwardVector).GetSafeNormal();
-	// ToolCenterWorld = ImpactPoint에서 ToolForward 방향으로 Depth/2 만큼 이동
-	Request.ToolCenterWorld = Request.ImpactPoint + Request.ToolForwardVector * (Request.Depth * 0.5f);
+	// ToolCenterWorld 계산 - DestructionProjectileComponent::SetShapeParameters와 동일한 공식 사용
+	constexpr float SurfaceMargin = 2.0f;
+	constexpr float PenetrationOffset = 0.5f;
+
+	switch (ToolShape)
+	{
+	case EDestructionToolShape::Cylinder:
+		// Cylinder: ImpactPoint에서 Forward 반대 방향으로 SurfaceMargin 만큼 이동
+		Request.ToolCenterWorld = Request.ImpactPoint - (Request.ToolForwardVector * SurfaceMargin);
+		break;
+	case EDestructionToolShape::Sphere:
+		// Sphere: ImpactPoint에서 Forward 방향으로 PenetrationOffset 만큼 이동
+		Request.ToolCenterWorld = Request.ImpactPoint + (Request.ToolForwardVector * PenetrationOffset);
+		break;
+	default:
+		Request.ToolCenterWorld = Request.ImpactPoint - (Request.ToolForwardVector * SurfaceMargin);
+		break;
+	}
+
+	// Decal 관련 복원
+	Request.DecalSize = DecalSize;
+	Request.DecalConfigID = DecalConfigID;
+	Request.SurfaceType = SurfaceType;
+	Request.bSpawnDecal = true;  // 네트워크 요청은 기본적으로 데칼 생성
 
 	return Request;
 }
@@ -237,7 +262,13 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 	 */
 	if (Op.Request.ChunkIndex != INDEX_NONE)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[EnqueueRequestLocal] ChunkIndex=%d → BooleanProcessor->EnqueueOp 호출"),
+			Op.Request.ChunkIndex);
 		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[EnqueueRequestLocal] ChunkIndex=INDEX_NONE → Boolean 연산 스킵!"));
 	}
 
 	// if (!bEnableMultiWorkers)
@@ -954,6 +985,12 @@ void URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 
 void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 {
+	// 데디케이티드 서버에서는 파편 처리 스킵 (물리 NaN 오류 방지)
+	if (IsRunningDedicatedServer())
+	{
+		return;
+	}
+
 	using namespace UE::Geometry;
 
 	// 작은 파편 기준: 바운딩 박스 볼륨 (cm^3)
@@ -1115,8 +1152,9 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 								// 위치 명시적 설정
 								DebrisActor->SetActorLocation(WorldPos);
 
-								// 물리 설정 - 정점이 4개 이상일 때만
-								if (DebrisVertices.Num() >= 4)
+								// 물리 설정 - 정점이 4개 이상이고 데디케이티드 서버가 아닐 때만
+							// 서버에서는 파편 물리 시뮬레이션 스킵 (NaN 오류 방지)
+								if (DebrisVertices.Num() >= 4 && !IsRunningDedicatedServer())
 								{
 									ProcMesh->SetSimulatePhysics(true);
 									ProcMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
@@ -1430,20 +1468,50 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 		FRealtimeDestructionRequest ModifiableRequest = Op.Request;
 		if (!ModifiableRequest.ToolMeshPtr.IsValid())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[Client] ToolShape: %d, ShapeParams - Radius: %.2f, Height: %.2f, RadiusSteps: %d"),
-				static_cast<int32>(ModifiableRequest.ToolShape),
-				ModifiableRequest.ShapeParams.Radius,
-				ModifiableRequest.ShapeParams.Height,
-				ModifiableRequest.ShapeParams.RadiusSteps);
-
 			ModifiableRequest.ToolMeshPtr = CreateToolMeshPtrFromShapeParams(
 				ModifiableRequest.ToolShape,
 				ModifiableRequest.ShapeParams
 			);
 		}
 
+		// ToolCenterWorld는 Decompress()에서 이미 계산됨
+
+		// DecalMaterial 조회 (네트워크로 전송된 ConfigID로 로컬에서 조회)
+		// 1. 컴포넌트에 설정된 DecalDataAsset 사용
+		// 2. 없으면 GameInstanceSubsystem에서 조회
+		UDecalMaterialDataAsset* DataAssetToUse = DecalDataAsset;
+		if (!DataAssetToUse)
+		{
+			if (UGameInstance* GI = GetWorld()->GetGameInstance())
+			{
+				if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+				{
+					DataAssetToUse = Subsystem->GetDecalDataAsset();
+				}
+			}
+		}
+
+		if (DataAssetToUse && ModifiableRequest.bSpawnDecal)
+		{
+			FDecalSizeConfig FoundConfig;
+			if (DataAssetToUse->GetConfig(ModifiableRequest.DecalConfigID, ModifiableRequest.SurfaceType, FoundConfig))
+			{
+				ModifiableRequest.DecalMaterial = FoundConfig.DecalMaterial;
+				ModifiableRequest.DecalSize = FoundConfig.DecalSize;
+				ModifiableRequest.DecalLocationOffset = FoundConfig.LocationOffset;
+				ModifiableRequest.DecalRotationOffset = FoundConfig.RotationOffset;
+			}
+		}
+
+		// 데칼 생성 (관통이 아닐 때만 - 로컬 경로와 동일)
+		UDecalComponent* TempDecal = nullptr;
+		if (!Op.bIsPenetration)
+		{
+			TempDecal = SpawnTemporaryDecal(ModifiableRequest);
+		}
+
 		// 비동기 경로로 처리 (워커 스레드 사용)
-		EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, nullptr);
+		EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal);
 	}
 }
 
@@ -3344,6 +3412,18 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 	return true;
 }
 
+void URealtimeDestructibleMeshComponent::EditorBuildGridCells()
+{
+	if (BuildGridCells())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("EditorBuildGridCells: SUCCESS - Grid cells built. Save the level to persist!"));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("EditorBuildGridCells: FAILED - Check if SourceStaticMesh is set"));
+	}
+}
+
 void URealtimeDestructibleMeshComponent::FindChunksAlongLineInternal(const FVector& WorldStart, const FVector& WorldEnd, TArray<int32>& OutChunkIndices)
 {
 	if (GridToChunkMap.Num() == 0 || SliceCount.X <= 0 || SliceCount.Y <= 0 || SliceCount.Z <= 0)
@@ -3902,12 +3982,23 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 			UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: Rebuilt CellMeshComponents with %d entries"), DestructComp->ChunkMeshComponents.Num());
 		}
 
-		// Cell 모드가 활성화 되어 있고, 유효하면 GridCell만 재구축
+		// Cell 모드가 활성화 되어 있고, 유효하면
 		if (bSavedUseCellMeshes && bSavedCellMeshesValid)
 		{
-			// GridCellCache, GridToChunkMap은 저장되지 않으므로 재구축
+			// GridToChunkMap은 저장되지 않으므로 재구축
 			DestructComp->BuildGridToChunkMap();
-			DestructComp->BuildGridCells();
+
+			// GridCellCache는 저장되므로, 유효하지 않을 때만 재구축
+			if (!DestructComp->GridCellCache.IsValid())
+			{
+				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellCache is invalid, rebuilding..."));
+				DestructComp->BuildGridCells();
+			}
+			else
+			{
+				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellCache loaded from saved data (ValidCells=%d)"),
+					DestructComp->GridCellCache.GetValidCellCount());
+			}
 			return;
 		}
 

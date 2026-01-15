@@ -88,6 +88,10 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	
 	UPROPERTY()
 	FName SurfaceType = FName("Default");
+
+	/** Decal 설정 조회용 ID (네트워크 전송용) */
+	UPROPERTY()
+	FName DecalConfigID = FName("Default");
 };
 
 USTRUCT(BlueprintType)
@@ -155,6 +159,14 @@ struct REALTIMEDESTRUCTION_API FCompactDestructionOp
 
 	UPROPERTY()
 	FVector_NetQuantize DecalSize;
+
+	// Decal 설정 조회용 ID
+	UPROPERTY()
+	FName DecalConfigID = FName("Default");
+
+	// SurfaceType (데칼 조회용)
+	UPROPERTY()
+	FName SurfaceType = FName("Default");
 
 	// 압축
 	static FCompactDestructionOp Compress(const FRealtimeDestructionRequest& Request, int32 Seq);
@@ -255,6 +267,13 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	void ResetToSourceMesh();
+
+	/** DecalDataAsset 설정 (Projectile에서 호출) */
+	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|HoleDecal")
+	void SetDecalDataAsset(UDecalMaterialDataAsset* InDecalDataAsset) { DecalDataAsset = InDecalDataAsset; }
+
+	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|HoleDecal")
+	UDecalMaterialDataAsset* GetDecalDataAsset() const { return DecalDataAsset; }
 
 	// Destruction queue
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
@@ -691,8 +710,12 @@ public:
 	 * SourceStaticMesh로부터 격자 셀을 생성합니다.
 	 * @return 성공 여부
 	 */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|GridCell")
+	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|GridCell")
 	bool BuildGridCells();
+
+	/** 에디터 버튼: 격자 셀 빌드 */
+	UFUNCTION(CallInEditor, Category = "GridCell")
+	void EditorBuildGridCells();
 
 	/** 격자 셀 캐시 유효 여부 */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|GridCell")

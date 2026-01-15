@@ -54,7 +54,8 @@ struct REALTIMEDESTRUCTION_API FDestructionToolShapeParams
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shape|Box")
     FVector BoxSize = FVector(20.0f, 20.0f, 20.0f);
 
-    // 내부에서만 사용하는 변수
+    // 네트워크 전송을 위해 UPROPERTY 추가
+    UPROPERTY()
     float SurfaceMargin = 0.0f;
 };
 
