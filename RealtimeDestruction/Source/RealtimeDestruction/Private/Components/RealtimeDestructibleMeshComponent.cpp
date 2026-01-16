@@ -432,17 +432,16 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		// 히스토리에 추가 (NarrowPhase용)
 		DestructionInputHistory.Add(QuantizedInput);
 
-		// 파괴된 셀 축적 (Detached 발생 시까지 모음)
-		for (int32 CellId : DestructionResult.NewlyDestroyedCells)
+		// 파괴된 셀 즉시 전송 (클라이언트 CellState 동기화)
+		if (DestructionResult.NewlyDestroyedCells.Num() > 0)
 		{
-			AccumulatedDestroyedCellIds.AddUnique(CellId);
+			MulticastDestroyedCells(DestructionResult.NewlyDestroyedCells);
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Phase 1: %d SubCells destroyed, %d Cells fully destroyed, %d Cells affected, Accumulated=%d"),
+		UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Phase 1: %d SubCells destroyed, %d Cells fully destroyed, %d Cells affected"),
 			DestructionResult.DeadSubCellCount,
 			DestructionResult.NewlyDestroyedCells.Num(),
-			DestructionResult.AffectedCells.Num(),
-			AccumulatedDestroyedCellIds.Num());
+			DestructionResult.AffectedCells.Num());
 
 		//=========================================================================
 		// [SubCell Test] Phase 2: SubCell 레벨 BFS로 분리된 Cell 찾기 (서버만)
@@ -515,57 +514,28 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			// }
 
 			//=====================================================================
-			// [SubCell Test] Phase 4: 서버 → 클라이언트 Multicast
+			// [SubCell Test] Phase 4: 서버 → 클라이언트 신호 전송
 			//=====================================================================
-			TArray<FDetachedDebrisInfo> DebrisToSend_SubCell;
-			static int32 DebrisIdCounter_SubCell = 0;
+			// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
+			UE_LOG(LogTemp, Warning, TEXT("[SubCell] MulticastDetachSignal SENDING - %d groups detached"),
+				ForCellLevelAPICompatibility.Num());
+			MulticastDetachSignal();
 
+			// 서버: 분리된 셀의 삼각형 삭제 (서버도 렌더링하는 경우)
 			for (const TArray<int32>& Group : ForCellLevelAPICompatibility)
 			{
-				FDetachedDebrisInfo DebrisInfo;
-				DebrisInfo.DebrisId = ++DebrisIdCounter_SubCell;
-
-				for (int32 CellId : Group)
-				{
-					DebrisInfo.CellIds.Add(CellId);
-				}
-
-				DebrisInfo.InitialLocation = FCellDestructionSystem::CalculateGroupCenter(
-					GridCellCache, Group, GetComponentTransform());
-
-				TArray<FQuantizedDestructionInput> Inputs_SubCell;
-				Inputs_SubCell.Add(QuantizedInput);
-				DebrisInfo.InitialVelocity = FCellDestructionSystem::CalculateDebrisVelocity(
-					DebrisInfo.InitialLocation, Inputs_SubCell);
-
-				DebrisToSend_SubCell.Add(DebrisInfo);
-			}
-
-			if (DebrisToSend_SubCell.Num() > 0)
-			{
-				// 총 셀 수 및 예상 바이트 계산
-				int32 TotalDebrisCells = 0;
-				for (const auto& Debris : DebrisToSend_SubCell)
-				{
-					TotalDebrisCells += Debris.CellIds.Num();
-				}
-				const int32 TotalCellIds = AccumulatedDestroyedCellIds.Num() + TotalDebrisCells;
-				const int32 EstimatedBytes = (AccumulatedDestroyedCellIds.Num() * 4) + (DebrisToSend_SubCell.Num() * 24) + (TotalDebrisCells * 4);
-
-				UE_LOG(LogTemp, Warning, TEXT("[SubCell] MulticastDetachedDebris SENDING - Debris=%d, DestroyedCells=%d, DebrisCells=%d, TotalCells=%d, ~%dKB"),
-					DebrisToSend_SubCell.Num(), AccumulatedDestroyedCellIds.Num(), TotalDebrisCells, TotalCellIds, EstimatedBytes / 1024);
-
-				// 축적된 파괴 셀 + 분리된 파편 정보 전송
-				MulticastDetachedDebris(DebrisToSend_SubCell, AccumulatedDestroyedCellIds);
-
-				// 전송 후 축적 초기화
-				AccumulatedDestroyedCellIds.Empty();
+				RemoveTrianglesForDetachedCells(Group);
 			}
 
 			CellState.MoveAllDetachedToDestroyed();
 
 			UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Complete: %d cells disconnected (%d groups)"),
 				DisconnectedCells_SubCell.Num(), ForCellLevelAPICompatibility.Num());
+		}
+		else
+		{
+			// 분리된 셀 없어도 파괴된 셀 있으면 파편 정리 (RemoveTrianglesForDetachedCells 통하지 않으므로)
+			CleanupSmallFragments();
 		}
 
 		return;
@@ -588,17 +558,17 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 	// 직접 파괴된 셀 상태 업데이트
 	CellState.DestroyCells(NewlyDestroyedCells);
 
-	// 파괴된 셀 축적 (Detached 발생 시까지 모음)
-	for (int32 CellId : NewlyDestroyedCells)
+	// 파괴된 셀 즉시 전송 (클라이언트 CellState 동기화)
+	if (NewlyDestroyedCells.Num() > 0)
 	{
-		AccumulatedDestroyedCellIds.AddUnique(CellId);
+		MulticastDestroyedCells(NewlyDestroyedCells);
 	}
 
 	// 히스토리에 추가 (NarrowPhase용)
 	DestructionInputHistory.Add(QuantizedInput);
 
-	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction: %d cells directly destroyed, Accumulated=%d"),
-		NewlyDestroyedCells.Num(), AccumulatedDestroyedCellIds.Num());
+	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction: %d cells directly destroyed"),
+		NewlyDestroyedCells.Num());
 
 	//=========================================================================
 	// Phase 2: BFS로 앵커에서 분리된 셀 찾기 (서버에서만 실행)
@@ -609,7 +579,7 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 
 	if (!bIsServer)
 	{
-		// 클라이언트: BFS 스킵, 서버에서 MulticastDetachedDebris로 분리 정보 받음
+		// 클라이언트: BFS 스킵, 서버에서 MulticastDetachSignal로 신호 받으면 실행
 		UE_LOG(LogTemp, Warning, TEXT("[GridCell] FindDisconnectedCells SKIPPED - NetMode=Client"));
 		return;
 	}
@@ -637,64 +607,29 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		}
 
 		//=====================================================================
-		// Phase 4: 서버 → 클라이언트 Multicast (분리된 셀만 전송)
+		// Phase 4: 서버 → 클라이언트 신호 전송
 		//=====================================================================
-		TArray<FDetachedDebrisInfo> DebrisToSend;
-		static int32 DebrisIdCounter = 0;
+		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
+		UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachSignal SENDING - %d groups detached"),
+			NewDetachedGroups.Num());
+		MulticastDetachSignal();
 
+		// 서버: 분리된 셀의 삼각형 삭제
 		for (const TArray<int32>& Group : NewDetachedGroups)
 		{
-			FDetachedDebrisInfo DebrisInfo;
-			DebrisInfo.DebrisId = ++DebrisIdCounter;
-
-			for (int32 CellId : Group)
-			{
-				DebrisInfo.CellIds.Add(CellId);
-			}
-
-			// 그룹 중심점 계산
-			DebrisInfo.InitialLocation = FCellDestructionSystem::CalculateGroupCenter(
-				GridCellCache, Group, GetComponentTransform());
-
-			// 초기 속도 계산 (폭발 방향)
-			TArray<FQuantizedDestructionInput> Inputs;
-			Inputs.Add(QuantizedInput);
-			DebrisInfo.InitialVelocity = FCellDestructionSystem::CalculateDebrisVelocity(
-				DebrisInfo.InitialLocation, Inputs);
-
-			DebrisToSend.Add(DebrisInfo);
-		}
-
-		// Multicast로 클라이언트에 전송
-		// Multicast로 클라이언트에 전송 (축적된 파괴된 셀 ID 포함)
-		if (DebrisToSend.Num() > 0)
-		{
-			// 총 셀 수 및 예상 바이트 계산
-			int32 TotalDebrisCells = 0;
-			for (const auto& Debris : DebrisToSend)
-			{
-				TotalDebrisCells += Debris.CellIds.Num();
-			}
-			const int32 TotalCellIds = AccumulatedDestroyedCellIds.Num() + TotalDebrisCells;
-			const int32 EstimatedBytes = (AccumulatedDestroyedCellIds.Num() * 4) + (DebrisToSend.Num() * 24) + (TotalDebrisCells * 4);
-
-			UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachedDebris SENDING - Debris=%d, DestroyedCells=%d, DebrisCells=%d, TotalCells=%d, ~%dKB"),
-				DebrisToSend.Num(), AccumulatedDestroyedCellIds.Num(), TotalDebrisCells, TotalCellIds, EstimatedBytes / 1024);
-
-			for (int32 i = 0; i < DebrisToSend.Num(); i++)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("[GridCell]   Debris[%d]: ID=%d, CellCount=%d, Location=%s"),
-					i, DebrisToSend[i].DebrisId, DebrisToSend[i].CellIds.Num(), *DebrisToSend[i].InitialLocation.ToString());
-			}
-			MulticastDetachedDebris(DebrisToSend, AccumulatedDestroyedCellIds);
-			AccumulatedDestroyedCellIds.Empty();
+			RemoveTrianglesForDetachedCells(Group);
 		}
 
 		// 분리된 셀들을 파괴됨 상태로 이동
 		CellState.MoveAllDetachedToDestroyed();
 
-		UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction [Server]: %d cells disconnected (%d groups), Multicast sent, moved to Destroyed"),
+		UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction [Server]: %d cells disconnected (%d groups)"),
 			DisconnectedCells.Num(), NewDetachedGroups.Num());
+	}
+	else
+	{
+		// 분리된 셀 없어도 파괴된 셀 있으면 파편 정리 (RemoveTrianglesForDetachedCells 통하지 않으므로)
+		CleanupSmallFragments();
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction: Destroyed=%d, DetachedGroups=%d"),
@@ -1129,6 +1064,13 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 
 	using namespace UE::Geometry;
 
+	// Anchor에서 분리된 셀 집합 미리 계산 (BFS)
+	TSet<int32> DisconnectedCells;
+	if (GridCellCache.IsValid())
+	{
+		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(GridCellCache, CellState.DestroyedCells);
+	}
+
 	int32 TotalRemoved = 0;
 
 	for (UDynamicMeshComponent* ChunkMesh : ChunkMeshComponents)
@@ -1175,54 +1117,71 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				Centroid /= ValidCount;
 				FVector WorldPos = MeshTransform.TransformPosition(FVector(Centroid));
 
-				// 파괴된 셀과 겹침 판정 (면적 가중치 기반)
-				bool bOverlapsDestroyedCells = false;
-				double OverlapRatio = 0.0;
-				double TotalArea = 0.0;
-				double OverlapArea = 0.0;
+				// CellState 기반 분리 판정: 컴포넌트가 속한 모든 셀이 파괴되었는지 확인
+				bool bShouldRemove = false;
+				int32 TotalCellCount = 0;
+				int32 DestroyedCellCount = 0;
 
-				if (GridCellCache.IsValid() && CellState.DestroyedCells.Num() > 0)
+				if (GridCellCache.IsValid())
 				{
+					// 컴포넌트가 속한 고유 셀 ID 수집
+					TSet<int32> ComponentCellIds;
 					for (int32 Tid : Comp.Indices)
 					{
 						if (!Mesh->IsTriangle(Tid)) continue;
 
-						// 슬리버 삼각형 필터링
-						double TriArea = Mesh->GetTriArea(Tid);
-						if (TriArea <= KINDA_SMALL_NUMBER) continue;
-
-						TotalArea += TriArea;
-
-						// 삼각형 중심점을 그리드 좌표로 변환
-						FVector3d TriCentroid = Mesh->GetTriCentroid(Tid);
-						FVector RelativePos = FVector(TriCentroid) - GridCellCache.GridOrigin;
-						FIntVector GridCoord(
-							FMath::FloorToInt(RelativePos.X / GridCellCache.CellSize.X),
-							FMath::FloorToInt(RelativePos.Y / GridCellCache.CellSize.Y),
-							FMath::FloorToInt(RelativePos.Z / GridCellCache.CellSize.Z)
-						);
-						int32 CellId = GridCellCache.CoordToId(GridCoord);
-
-						if (CellState.DestroyedCells.Contains(CellId))
+						// 버텍스 기반 셀 ID 계산 (삼각형이 걸친 모든 셀을 찾음)
+						FIndex3i Tri = Mesh->GetTriangle(Tid);
+						for (int32 j = 0; j < 3; ++j)
 						{
-							OverlapArea += TriArea;
+							FVector3d Vertex = Mesh->GetVertex(Tri[j]);
+							FVector RelativePos = FVector(Vertex) - GridCellCache.GridOrigin;
+							FIntVector GridCoord(
+								FMath::FloorToInt(RelativePos.X / GridCellCache.CellSize.X),
+								FMath::FloorToInt(RelativePos.Y / GridCellCache.CellSize.Y),
+								FMath::FloorToInt(RelativePos.Z / GridCellCache.CellSize.Z)
+							);
+
+							// 범위 체크: 유효한 좌표만 사용
+							if (GridCoord.X >= 0 && GridCoord.X < GridCellCache.GridSize.X &&
+								GridCoord.Y >= 0 && GridCoord.Y < GridCellCache.GridSize.Y &&
+								GridCoord.Z >= 0 && GridCoord.Z < GridCellCache.GridSize.Z)
+							{
+								int32 CellId = GridCellCache.CoordToId(GridCoord);
+								ComponentCellIds.Add(CellId);
+							}
 						}
 					}
 
-					OverlapRatio = (TotalArea > KINDA_SMALL_NUMBER) ? (OverlapArea / TotalArea) : 0.0;
+					TotalCellCount = ComponentCellIds.Num();
 
-					// 이중 조건: 최소 파괴 면적 + 비율 임계값
-					constexpr double MinDestroyedArea = 50.0;  // 최소 50 cm² 이상 겹쳐야 함
-					bOverlapsDestroyedCells = (OverlapArea > MinDestroyedArea) && (OverlapRatio >= 0.7);
+					// Anchor 연결성 검사: 컴포넌트의 셀 중 하나라도 Anchor에 연결되어 있는지 확인
+					bool bConnectedToAnchor = false;
+					for (int32 CellId : ComponentCellIds)
+					{
+						if (CellState.DestroyedCells.Contains(CellId))
+						{
+							DestroyedCellCount++;
+						}
+						// 파괴되지 않았고, Anchor에 연결된 셀이면 (DisconnectedCells에 없으면)
+						else if (!DisconnectedCells.Contains(CellId))
+						{
+							bConnectedToAnchor = true;
+						}
+					}
+
+					// 분리 조건: Anchor에 연결된 셀이 하나도 없으면 제거
+					bShouldRemove = !bConnectedToAnchor;
 				}
 
-				// 디버그 색상: 빨강 = 삭제 대상, 초록 = 유지
-				FColor PointColor = bOverlapsDestroyedCells ? FColor::Red : FColor::Green;
+				// 디버그 색상: 빨강 = 삭제 대상 (Anchor 분리), 초록 = 유지 (Anchor 연결)
+				FColor PointColor = bShouldRemove ? FColor::Red : FColor::Green;
 				DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
-				DrawDebugString(GetWorld(), WorldPos, FString::Printf(TEXT("%.0f%% (%.0fcm2)"), OverlapRatio * 100.0, OverlapArea), nullptr, PointColor, 10.0f);
+				DrawDebugString(GetWorld(), WorldPos, FString::Printf(TEXT("%s (%d/%d destroyed)"),
+					bShouldRemove ? TEXT("Detached") : TEXT("Anchored"), DestroyedCellCount, TotalCellCount), nullptr, PointColor, 10.0f);
 
-				// 파괴된 셀과 겹치면 파편 액터로 스폰 후 삭제
-				if (bOverlapsDestroyedCells)
+				// 모든 셀이 파괴된 컴포넌트는 파편으로 스폰 후 삭제
+				if (bShouldRemove)
 				{
 					// 메쉬 데이터 추출
 					TMap<int32, int32> OldToNewVertexMap;
@@ -1579,9 +1538,7 @@ void URealtimeDestructibleMeshComponent::MulticastApplyOpsCompact_Implementation
 	ApplyOpsDeterministic(Ops);
 }
 
-void URealtimeDestructibleMeshComponent::MulticastDetachedDebris_Implementation(
-	const TArray<FDetachedDebrisInfo>& DetachedDebris,
-	const TArray<int32>& DestroyedCellIds)
+void URealtimeDestructibleMeshComponent::MulticastDestroyedCells_Implementation(const TArray<int32>& DestroyedCellIds)
 {
 	UWorld* World = GetWorld();
 	if (!World)
@@ -1589,60 +1546,89 @@ void URealtimeDestructibleMeshComponent::MulticastDetachedDebris_Implementation(
 		return;
 	}
 
-	// 서버/클라 구분 로그
 	const ENetMode NetMode = World->GetNetMode();
-	FString NetModeStr = TEXT("Unknown");
-	switch (NetMode)
-	{
-	case NM_Standalone: NetModeStr = TEXT("Standalone"); break;
-	case NM_DedicatedServer: NetModeStr = TEXT("DedicatedServer"); break;
-	case NM_ListenServer: NetModeStr = TEXT("ListenServer"); break;
-	case NM_Client: NetModeStr = TEXT("Client"); break;
-	}
 
-	UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachedDebris RECEIVED - NetMode=%s, DebrisCount=%d, DestroyedCells=%d"),
-		*NetModeStr, DetachedDebris.Num(), DestroyedCellIds.Num());
-
-	// DedicatedServer: 렌더링 안 하므로 삼각형 삭제 스킵
+	// DedicatedServer는 스킵 (렌더링 없음)
 	if (NetMode == NM_DedicatedServer)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachedDebris SKIPPED (DedicatedServer - no rendering)"));
 		return;
 	}
 
-	// 클라이언트: 파괴된 셀 상태 업데이트 (Detached 전에 파괴된 셀들)
+	// 서버는 이미 로컬에서 처리했으므로 스킵
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	// 클라이언트: CellState에 파괴된 셀 추가
 	for (int32 CellId : DestroyedCellIds)
 	{
 		CellState.DestroyedCells.Add(CellId);
 	}
-	UE_LOG(LogTemp, Warning, TEXT("[GridCell] Client DestroyedCells updated: +%d cells, Total=%d"),
+
+	UE_LOG(LogTemp, Log, TEXT("[Client] MulticastDestroyedCells: +%d cells, Total=%d"),
 		DestroyedCellIds.Num(), CellState.DestroyedCells.Num());
+}
 
-	// 클라이언트: 서버가 보낸 분리된 셀 그룹으로 파편 스폰
-	UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachedDebris PROCESSING on Client - %d debris groups"), DetachedDebris.Num());
-
-	for (const FDetachedDebrisInfo& DebrisInfo : DetachedDebris)
+void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
+{
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		// 셀 ID를 int32로 변환
-		TArray<int32> CellIds;
-		CellIds.Reserve(DebrisInfo.CellIds.Num());
-		for (int32 CellId : DebrisInfo.CellIds)
-		{
-			CellIds.Add(CellId);
-		}
-
-		// 셀 상태 업데이트 (Detached로 저장 - 주황색으로 표시됨)
-		CellState.AddDetachedGroup(CellIds);
-
-		// 클라이언트: 분리된 셀의 삼각형 삭제 (시각적 처리)
-		RemoveTrianglesForDetachedCells(CellIds);
-
-		UE_LOG(LogTemp, Warning, TEXT("  Debris ID: %d, Cells: %d, Location: %s"),
-			DebrisInfo.DebrisId, CellIds.Num(), *DebrisInfo.InitialLocation.ToString());
+		return;
 	}
 
-	// 분리된 셀들을 파괴됨 상태로 이동 (디버그 색상: 주황 → 빨강)
+	const ENetMode NetMode = World->GetNetMode();
+
+	// DedicatedServer는 스킵 (렌더링 없음)
+	if (NetMode == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	// 서버는 이미 로컬에서 처리했으므로 스킵
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[Client] MulticastDetachSignal RECEIVED - Running local BFS"));
+
+	// 클라이언트: 자체 BFS 실행하여 분리된 셀 찾기
+	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+		GridCellCache,
+		CellState.DestroyedCells);
+
+	if (DisconnectedCells.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] BFS result: No disconnected cells"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[Client] BFS result: %d disconnected cells"), DisconnectedCells.Num());
+
+	// 분리된 셀 그룹화
+	TArray<TArray<int32>> DetachedGroups = FCellDestructionSystem::GroupDetachedCells(
+		GridCellCache,
+		DisconnectedCells,
+		CellState.DestroyedCells);
+
+	UE_LOG(LogTemp, Warning, TEXT("[Client] Grouped into %d debris groups"), DetachedGroups.Num());
+
+	// 각 그룹에 대해 처리
+	for (const TArray<int32>& Group : DetachedGroups)
+	{
+		// CellState에 Detached 그룹 추가
+		CellState.AddDetachedGroup(Group);
+
+		// 분리된 셀의 삼각형 삭제 (시각적 처리)
+		RemoveTrianglesForDetachedCells(Group);
+	}
+
+	// 분리된 셀들을 파괴됨 상태로 이동
 	CellState.MoveAllDetachedToDestroyed();
+
+	UE_LOG(LogTemp, Warning, TEXT("[Client] Detach processing complete"));
 }
 
 void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRealtimeDestructionOp>& Ops)

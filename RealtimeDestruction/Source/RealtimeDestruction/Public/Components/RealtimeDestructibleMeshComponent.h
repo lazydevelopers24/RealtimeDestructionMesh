@@ -304,13 +304,19 @@ public:
 	void MulticastApplyOpsCompact(const TArray<FCompactDestructionOp>& CompactOps);
 
 	/**
-	 * 분리된 파편 정보 + 파괴된 셀 Multicast RPC (서버 → 클라이언트)
-	 * 서버에서 BFS로 계산된 분리된 셀 그룹 + 축적된 파괴 셀 정보를 클라이언트에 전송
-	 * @param DetachedDebris - 분리된 파편 그룹들
-	 * @param DestroyedCellIds - Detached 발생까지 축적된 파괴된 셀 ID들
+	 * 파괴된 셀 ID 전송 RPC (서버 → 클라이언트)
+	 * 파괴 발생 시 즉시 전송하여 클라이언트 CellState 동기화
+	 * @param DestroyedCellIds - 새로 파괴된 셀 ID들
 	 */
 	UFUNCTION(NetMulticast, Reliable)
-	void MulticastDetachedDebris(const TArray<FDetachedDebrisInfo>& DetachedDebris, const TArray<int32>& DestroyedCellIds);
+	void MulticastDestroyedCells(const TArray<int32>& DestroyedCellIds);
+
+	/**
+	 * Detach 발생 신호 RPC (서버 → 클라이언트)
+	 * 클라이언트가 자체 BFS를 실행하여 Detached 셀 계산
+	 */
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastDetachSignal();
 
 	/** 파괴 요청 거부 RPC (서버 → 요청한 클라이언트) */
 	UFUNCTION(Client, Reliable)
@@ -869,9 +875,6 @@ private:
 	TArray<FCompactDestructionOp> PendingServerBatchOpsCompact;  // 압축용
 	float ServerBatchTimer = 0.0f;
 	int32 ServerBatchSequence = 0;  // 압축용 시퀀스
-
-	/** Detached 발생 시까지 축적된 파괴된 셀 ID (Multicast 후 초기화) */
-	TArray<int32> AccumulatedDestroyedCellIds;
 
 	//////////////////////////////////////////////////////////////////////////
 	// Late Join: Op 히스토리 (서버에서만 유지)
