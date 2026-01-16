@@ -179,7 +179,33 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 	{
 		return;
 	}
+	
+	// ===== DataAsset에서 Tool Shape 로드 (메시 생성 전에!) =====
+	// ===== 절~~~~때 아래로 빼지마 
+	FName SurfaceTypeForShape = DestructComp->SurfaceType;
+	bool bHasDecalConfig = false;
+	FDecalSizeConfig OverrideDecalConfig;
+	
+	if (DecalDataAsset)
+	{ 
+		bHasDecalConfig = DecalDataAsset->GetConfigRandom(DecalConfigID, SurfaceTypeForShape, OverrideDecalConfig);
+		if (bHasDecalConfig)
+		{
+			bool bShapeChanged = (CylinderRadius != OverrideDecalConfig.CylinderRadius ||
+				CylinderHeight != OverrideDecalConfig.CylinderHeight ||
+				SphereRadius != OverrideDecalConfig.SphereRadius);
 
+			CylinderRadius = OverrideDecalConfig.CylinderRadius;
+			CylinderHeight = OverrideDecalConfig.CylinderHeight;
+			SphereRadius = OverrideDecalConfig.SphereRadius;
+
+			if (bShapeChanged && ToolMeshPtr.IsValid())
+			{
+				ToolMeshPtr.Reset();
+			}
+		}
+	}
+	
 	float ToolRadius = ToolShape == EDestructionToolShape::Cylinder ? CylinderRadius : SphereRadius;
 	// 오버랩 영역에 여유분 추가
 	float OverlappedRadius = ToolRadius * 1.2f;
@@ -231,30 +257,7 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 			Targets.Add(ChunkIndex);
 		}
 	}	
-
-
-	// ===== DataAsset에서 Tool Shape 로드 (메시 생성 전에!) =====
-	FName SurfaceTypeForShape = DestructComp->SurfaceType;
-	if (DecalDataAsset)
-	{
-		FDecalSizeConfig TempConfig;
-		if (DecalDataAsset->GetConfig(DecalConfigID, SurfaceTypeForShape, TempConfig))
-		{
-			bool bShapeChanged = (CylinderRadius != TempConfig.CylinderRadius ||
-				CylinderHeight != TempConfig.CylinderHeight ||
-				SphereRadius != TempConfig.SphereRadius);
-
-			CylinderRadius = TempConfig.CylinderRadius;
-			CylinderHeight = TempConfig.CylinderHeight;
-			SphereRadius = TempConfig.SphereRadius;
-
-			if (bShapeChanged && ToolMeshPtr.IsValid())
-			{
-				ToolMeshPtr.Reset();
-			}
-		}
-	} 
-	// ===== 여기까지 추가 =====
+ 
 	
 	FVector Direction = GetToolDirection(Hit, Owner);
 	FVector ToolStart = Hit.ImpactPoint;
@@ -320,16 +323,13 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 			}
 		}
 
-		if (DecalDataAsset)
+		if (bHasDecalConfig)
 		{
-			FDecalSizeConfig FoundConfig;
-			if (DecalDataAsset->GetConfig(DecalConfigID, SurfaceType, FoundConfig))
-			{
-				Request.DecalSize = FoundConfig.DecalSize;
-				Request.DecalLocationOffset = FoundConfig.LocationOffset;
-				Request.DecalRotationOffset = FoundConfig.RotationOffset;
-				Request.DecalMaterial = FoundConfig.DecalMaterial; 
-			}
+			Request.DecalSize = OverrideDecalConfig.DecalSize;
+			Request.DecalLocationOffset = OverrideDecalConfig.LocationOffset;
+			Request.DecalRotationOffset = OverrideDecalConfig.RotationOffset;
+			Request.DecalMaterial = OverrideDecalConfig.DecalMaterial;
+			Request.bRandomRotation = OverrideDecalConfig.bRandomDecalRotation; 
 		}  
 
 		SetShapeParameters(Request);		
@@ -504,14 +504,7 @@ void UDestructionProjectileComponent::SetShapeParameters(FRealtimeDestructionReq
 		OutRequest.ShapeParams.bCapped = bCapped;
 		OutRequest.ShapeParams.SurfaceMargin = SurfaceMargin;
 		break;
-	}
-	GetCalculateDecalSize(OutRequest.SurfaceType, OutRequest.DecalLocationOffset,  OutRequest.DecalRotationOffset, OutRequest.DecalSize ); 
-
-	UE_LOG(LogTemp, Warning, TEXT("[Server] ToolShape: %d, ShapeParams - Radius: %.2f, Height: %.2f, RadiusSteps: %d"),
-		static_cast<int32>(OutRequest.ToolShape),
-		OutRequest.ShapeParams.Radius,
-		OutRequest.ShapeParams.Height,
-		OutRequest.ShapeParams.RadiusSteps);
+	} 
 }
 
 void UDestructionProjectileComponent::DrawDebugToolShape(const FVector& Center, const FVector& Direction, const FColor& Color) const
@@ -635,7 +628,7 @@ void UDestructionProjectileComponent::GetCalculateDecalSize(FName SurfaceType, F
 		FName ActualSurfaceType = SurfaceType.IsNone() ? FName("Default") : SurfaceType;
 
 		FDecalSizeConfig Config;
-		if (DecalDataAsset->GetConfig(DecalConfigID, ActualSurfaceType, Config))
+		if (DecalDataAsset->GetConfig(DecalConfigID, ActualSurfaceType, 0,Config))
 		{
 			LocationOffset = Config.LocationOffset;
 			RotatorOffset = Config.RotationOffset;

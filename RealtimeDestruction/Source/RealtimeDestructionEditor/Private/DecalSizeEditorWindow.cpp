@@ -501,6 +501,45 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateDecalSection()
 			]
 
 			// ========== Rotation ==========
+			+SVerticalBox::Slot()
+			.Padding(4.0f, 8.0f, 4.0f, 4.0f)
+			[
+				SNew(SHorizontalBox)
+
+				  + SHorizontalBox::Slot()
+                      .FillWidth(0.3f)
+                      .VAlign(VAlign_Center)
+                      [
+                          SNew(STextBlock)
+                          .Text(FText::FromString("Random Rotation"))
+                      ]
+                + SHorizontalBox::Slot()
+				.FillWidth(0.7f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SCheckBox)
+					.IsChecked_Lambda([this]()
+					{
+						FDecalSizeConfig* Config = GetCurrentDecalConfig();
+			  			if (Config)
+			  			{
+							  return Config->bRandomDecalRotation ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			  			}
+			  			return ECheckBoxState::Checked;  
+					})
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					{
+						FDecalSizeConfig* Config = GetCurrentDecalConfig();
+						 if (Config)
+						 {
+							 Config->bRandomDecalRotation = (NewState == ECheckBoxState::Checked);
+							 SaveToDataAsset();
+						 }
+					})
+				 
+				]
+			]
+			
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(4.0f, 8.0f, 4.0f, 4.0f)
@@ -986,9 +1025,91 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateConfigSelectionSection()
 						return FReply::Handled();
 					})
 				]
+			]	 
+
+			// Row3 : Varient Index 설정
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(2.0f)
+			[
+				SNew(SHorizontalBox)
+
+				+SHorizontalBox::Slot()
+				.FillWidth(0.3f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString("Variant Index"))
+				]
+
+				+SHorizontalBox::Slot()
+				.FillWidth(0.5)
+				[
+					SNew(SComboBox<TSharedPtr<FString>>)
+					.OptionsSource(&VariantIndexList)
+					.OnSelectionChanged_Lambda([this](TSharedPtr<FString> NewValue , ESelectInfo::Type)
+					{
+						if (NewValue.IsValid())
+						{
+							SaveToDataAsset();
+							int32 SelectedIndex = FCString::Atoi(**NewValue);
+							OnVariantIndexSelected(SelectedIndex);
+						}
+					} )
+					.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
+					{
+						return SNew(STextBlock).Text(FText::FromString(*Item));
+					})
+					.Content()
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]() -> FText
+						{
+							FDecalSizeConfig* Config = GetCurrentDecalConfig();
+							if (Config && !Config->VariantName.IsEmpty())
+							{
+								return FText::FromString(FString::Printf(TEXT("%d: %s"), CurVariantIndex, *Config->VariantName));
+							}
+							return FText::FromString(FString::Printf(TEXT("%d"), CurVariantIndex));
+						})
+					] 
+				]
+
+				+SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(4.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(FText::FromString("+"))
+                    .ToolTipText(FText::FromString("Add new Variant"))
+					.OnClicked_Lambda([this]()
+					 {
+						 AddNewVariant();
+						 return FReply::Handled();
+					 })
+				]
+				+SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(2.0f, 0.0f)
+				  [
+					  SNew(SButton)
+				  	  .Text(FText::FromString("-"))
+					  .ToolTipText(FText::FromString("Delete current Variant"))
+				  	.IsEnabled_Lambda([this]()
+					 { 
+						 FDecalSizeConfigArray* ConfigArray = GetCurrentDecalConfigArray();
+						 return ConfigArray && ConfigArray->Configs.Num() > 1;
+					 })
+					  .OnClicked_Lambda([this]()
+					  {
+					  	DeleteCurrentVariant();
+						return FReply::Handled();
+					  })
+				]
 			]
 
-			// Row 3: Rename Config ID
+			
+			// Row 4: Rename Config ID
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(2.0f)
@@ -1021,7 +1142,7 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateConfigSelectionSection()
 				]
 			]
 
-			// Row 4: Rename Surface Type
+			// Row 5: Rename Surface Type
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			.Padding(2.0f)
@@ -1049,6 +1170,48 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateConfigSelectionSection()
 						if (CommitType == ETextCommit::OnEnter || CommitType == ETextCommit::OnUserMovedFocus)
 						{
 							RenameCurrentSurfaceType(FName(*NewText.ToString()));
+						}
+					})
+				]
+			]
+			+ SVerticalBox::Slot() 
+			.AutoHeight()
+			.Padding(2.0f)
+			[
+				SNew(SHorizontalBox)
+
+				+SHorizontalBox::Slot()
+				.FillWidth(0.3f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString("Rename Variant"))
+				]
+
+				+ SHorizontalBox::Slot()
+				.FillWidth(0.7f)
+				[
+					
+					SNew(SEditableTextBox)
+					.Text_Lambda([this]() -> FText
+					{
+						FDecalSizeConfig* Config = GetCurrentDecalConfig();
+						return Config ? FText::FromString(Config->VariantName) : FText::GetEmpty();
+					})
+					.OnTextCommitted_Lambda([this](const FText& NewText, ETextCommit::Type CommitType)
+					{
+						if (CommitType == ETextCommit::OnEnter || CommitType == ETextCommit::OnUserMovedFocus)
+						{
+							FDecalSizeConfig* Config = GetCurrentDecalConfig();
+							if (Config)
+							{
+								Config->VariantName = NewText.ToString();
+								if (TargetDataAsset.IsValid())
+								{
+									TargetDataAsset->MarkPackageDirty();
+								}
+								RefreshVariantIndexList();
+							}
 						}
 					})
 				]
@@ -1272,7 +1435,7 @@ void SDecalSizeEditorWindow::LoadConfigFromDataAsset(FName ConfigID, FName Surfa
 	}
 
 	FDecalSizeConfig Config;
-	if (TargetDataAsset->GetConfig(ConfigID, SurfaceType, Config))
+	if (TargetDataAsset->GetConfig(ConfigID, SurfaceType, CurVariantIndex, Config))
 	{
 		SelectedDecalMaterial = Config.DecalMaterial;
 
@@ -1348,8 +1511,59 @@ void SDecalSizeEditorWindow::RefreshSurfaceTypeList()
 			break;
 		}
 	}
+ 
+	CurVariantIndex = 0;
+	RefreshVariantIndexList();
 }
+
+void SDecalSizeEditorWindow::RefreshVariantIndexList()
+{
+	VariantIndexList.Empty();
+
+	FDecalSizeConfigArray* ConfigArray = GetCurrentDecalConfigArray();
+	if (ConfigArray)
+	{
+		for (int32 i = 0; i < ConfigArray->Configs.Num(); i++)
+		{
+			const FDecalSizeConfig& Config = ConfigArray->Configs[i];
+			FString DisplayName;
+			if (Config.VariantName.IsEmpty())
+			{
+				DisplayName = FString::Printf(TEXT("%d"), i);
+			}
+			else
+			{
+				DisplayName = FString::Printf(TEXT("%d: %s"), i, *Config.VariantName);
+			}
+			VariantIndexList.Add(MakeShared<FString>(DisplayName));
+		}
+	}
+
+	// 인덱스 범위 체크
+	if (ConfigArray && ConfigArray->Configs.Num() > 0)
+	{
+		CurVariantIndex = FMath::Clamp(CurVariantIndex, 0, ConfigArray->Configs.Num() - 1);
+	}
+	else
+	{
+		CurVariantIndex = 0;
+	}
+	
+}
+
 FDecalSizeConfig* SDecalSizeEditorWindow::GetCurrentDecalConfig()
+{
+	FDecalSizeConfigArray* ConfigArray = GetCurrentDecalConfigArray();
+	if (ConfigArray && ConfigArray->Configs.Num() > 0)
+	{
+		// 현재 선택된 인덱스의 Config 반환 (기본: 0)
+		int32 Index = FMath::Clamp(CurVariantIndex, 0, ConfigArray->Configs.Num() - 1);
+		return &ConfigArray->Configs[Index];
+	}
+	return nullptr;
+}
+
+FDecalSizeConfigArray* SDecalSizeEditorWindow::GetCurrentDecalConfigArray()
 {
 	if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone() || CurrentSurfaceType.IsNone())
 	{
@@ -1358,12 +1572,10 @@ FDecalSizeConfig* SDecalSizeEditorWindow::GetCurrentDecalConfig()
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
 
-	// ConfigID로 ProjectileConfig 찾기
 	for (FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
 	{
 		if (Config.ConfigID == CurrentConfigID)
 		{
-			// SurfaceType으로 DecalConfig 찾기
 			return Config.SurfaceConfigs.Find(CurrentSurfaceType);
 		}
 	}
@@ -1377,7 +1589,7 @@ void SDecalSizeEditorWindow::OnConfigIDSelected(FName SelectedConfigID)
 	CurrentSurfaceType = NAME_None;
 
 	RefreshSurfaceTypeList();
-
+ 
 	if (SurfaceTypeList.Num() > 0)
 	{
 		CurrentSurfaceType = *SurfaceTypeList[0];
@@ -1385,6 +1597,7 @@ void SDecalSizeEditorWindow::OnConfigIDSelected(FName SelectedConfigID)
 	}
 
 	//TODO: SUrface type 콤보박스 갱신
+
 }
 
 void SDecalSizeEditorWindow::OnSurfaceTypeSelected(FName SelectedSurfaceType)
@@ -1416,6 +1629,37 @@ void SDecalSizeEditorWindow::OnSurfaceTypeSelected(FName SelectedSurfaceType)
 			Viewport->RefreshPreview();
 		}
 	}
+	
+	CurVariantIndex = 0;
+	RefreshVariantIndexList();
+}
+
+void SDecalSizeEditorWindow::OnVariantIndexSelected(int32 SelectedIndex)
+{
+	CurVariantIndex = SelectedIndex;
+
+	FDecalSizeConfig* Config = GetCurrentDecalConfig();
+	if (Config && Viewport.IsValid())
+	{
+		SelectedDecalMaterial = Config->DecalMaterial;
+
+		Viewport->SetDecalMaterial(SelectedDecalMaterial);
+		Viewport->SetDecalSize(Config->DecalSize);
+		
+		// Transform 설정
+		FTransform DecalTransform;
+		DecalTransform.SetLocation(Config->LocationOffset);
+		DecalTransform.SetRotation(Config->RotationOffset.Quaternion());
+		Viewport->SetDecalTransform(DecalTransform);
+
+	
+		// Tool Shape 설정
+		Viewport->SetPreviewCylinderRadius(Config->CylinderRadius);
+		Viewport->SetPreviewCylinderHeight(Config->CylinderHeight);
+		Viewport->SetPreviewSphere(Config->SphereRadius);
+
+		Viewport->RefreshPreview(); 
+	}
 }
 
 void SDecalSizeEditorWindow::AddNewConfigID()
@@ -1435,8 +1679,9 @@ void SDecalSizeEditorWindow::AddNewConfigID()
 	NewConfig.ConfigID = NewConfigID;
 
 	// 기본 SurfaceType Default 추가
-	FDecalSizeConfig DefaultSurface;
-	NewConfig.SurfaceConfigs.Add(FName("Default"), DefaultSurface);
+	FDecalSizeConfigArray DefaultSurfaceArray;
+	DefaultSurfaceArray.Configs.Add(FDecalSizeConfig());
+	NewConfig.SurfaceConfigs.Add(FName("Default"), DefaultSurfaceArray);
 
 	DataAsset->ProjectileConfigs.Add(NewConfig);
 	DataAsset->MarkPackageDirty();
@@ -1465,7 +1710,8 @@ void SDecalSizeEditorWindow::AddNewSurfaceType()
 			FName NewSurfaceType = EnsureUniqueSurfaceType(FName("NewSurface"));
 
 			// 새 DecalConfig 추가
-			FDecalSizeConfig NewDecalConfig;
+			FDecalSizeConfigArray NewDecalConfig;
+			NewDecalConfig.Configs.Add(FDecalSizeConfig());
 			Config.SurfaceConfigs.Add(NewSurfaceType, NewDecalConfig);
 
 			DataAsset->MarkPackageDirty();
@@ -1476,6 +1722,35 @@ void SDecalSizeEditorWindow::AddNewSurfaceType()
 			break;
 		}
 	}
+}
+
+void SDecalSizeEditorWindow::AddNewVariant()
+{
+	FDecalSizeConfigArray* ConfigArray = GetCurrentDecalConfigArray();
+
+	if (!ConfigArray)
+	{
+		return;
+	}
+
+	FDecalSizeConfig NewConfig;
+	if (ConfigArray->Configs.Num() > 0)
+	{
+		// Decal size를 다시 맞춰야하는 불편함을 없애기 위해서 curVariantIndex를 복사 
+		NewConfig = ConfigArray->Configs[CurVariantIndex];
+	}
+
+	ConfigArray->Configs.Add(NewConfig);
+
+	if (TargetDataAsset.IsValid())
+	{
+		TargetDataAsset->MarkPackageDirty();
+	}
+
+	// 새로 추가된 Variant 선택
+	RefreshVariantIndexList();
+	CurVariantIndex = ConfigArray->Configs.Num() - 1;
+	OnVariantIndexSelected(CurVariantIndex);
 }
 
 FName SDecalSizeEditorWindow::EnsureUniqueConfigID(FName NewName)
@@ -1616,6 +1891,28 @@ void SDecalSizeEditorWindow::DeleteCurrentSurfaceType()
 	
 }
 
+void SDecalSizeEditorWindow::DeleteCurrentVariant()
+{
+	FDecalSizeConfigArray* ConfigArray = GetCurrentDecalConfigArray();
+	if (!ConfigArray || ConfigArray->Configs.Num() <= 1)
+	{
+		// 최소 1개는 유지
+		return;
+	}
+
+	ConfigArray->Configs.RemoveAt(CurVariantIndex);
+
+	if (TargetDataAsset.IsValid())
+	{
+		TargetDataAsset->MarkPackageDirty();
+	}
+
+	// 인덱스 조정
+	RefreshVariantIndexList();
+	CurVariantIndex = FMath::Clamp(CurVariantIndex - 1, 0, ConfigArray->Configs.Num() - 1);
+	OnVariantIndexSelected(CurVariantIndex);
+}
+
 void SDecalSizeEditorWindow::RenameCurrentConfigID(FName NewName)
 {
 	if (NewName.IsNone() || NewName == CurrentConfigID || !TargetDataAsset.IsValid())
@@ -1653,7 +1950,7 @@ void SDecalSizeEditorWindow::RenameCurrentSurfaceType(FName NewName)
     {
         if (Config.ConfigID == CurrentConfigID)
         {
-            FDecalSizeConfig* ExistingConfig = Config.SurfaceConfigs.Find(CurrentSurfaceType);
+            FDecalSizeConfigArray* ExistingConfig = Config.SurfaceConfigs.Find(CurrentSurfaceType);
 
             if (!ExistingConfig)
             {
@@ -1665,7 +1962,7 @@ void SDecalSizeEditorWindow::RenameCurrentSurfaceType(FName NewName)
                 NewName = EnsureUniqueSurfaceType(NewName);
             }
 
-            FDecalSizeConfig ConfigCopy = *ExistingConfig;
+            FDecalSizeConfigArray ConfigCopy = *ExistingConfig;
             Config.SurfaceConfigs.Remove(CurrentSurfaceType);
             Config.SurfaceConfigs.Add(NewName, ConfigCopy);
 

@@ -89,9 +89,13 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	UPROPERTY()
 	FName SurfaceType = FName("Default");
 
+	UPROPERTY()
+	bool bRandomRotation = false;
+	
 	/** Decal 설정 조회용 ID (네트워크 전송용) */
 	UPROPERTY()
 	FName DecalConfigID = FName("Default");
+	
 };
 
 USTRUCT(BlueprintType)

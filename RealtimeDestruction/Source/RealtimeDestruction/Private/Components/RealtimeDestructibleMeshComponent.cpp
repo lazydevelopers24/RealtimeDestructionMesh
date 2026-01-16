@@ -1690,7 +1690,7 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 		if (DataAssetToUse && ModifiableRequest.bSpawnDecal)
 		{
 			FDecalSizeConfig FoundConfig;
-			if (DataAssetToUse->GetConfig(ModifiableRequest.DecalConfigID, ModifiableRequest.SurfaceType, FoundConfig))
+			if (DataAssetToUse->GetConfigRandom(ModifiableRequest.DecalConfigID, ModifiableRequest.SurfaceType, FoundConfig))
 			{
 				ModifiableRequest.DecalMaterial = FoundConfig.DecalMaterial;
 				ModifiableRequest.DecalSize = FoundConfig.DecalSize;
@@ -3019,18 +3019,24 @@ UDecalComponent* URealtimeDestructibleMeshComponent::SpawnTemporaryDecal(const F
 	 
 	  
 	// decal 방향 설정 
-	FVector DecalForwardVector = -Request.ImpactNormal;  
-	FRotator DecalRotation = Request.ImpactNormal.Rotation();
-	 
+	FRotator DecalRotation = Request.ImpactNormal.Rotation() + RotationOffsetToUse;
+
+	if (Request.bRandomRotation)
+	{
+		float RandomRoll = FMath::RandRange(0.0f, 360.0f);
+		DecalRotation.Roll+= RandomRoll;
+	}
 	FRotator TransformBasis = DecalRotation;
 	TransformBasis.Yaw += 180.0f;  // 에디터 좌표계와 일치시킴
 
 	FTransform DecalTransform(TransformBasis, Request.ImpactPoint);
-	FVector WorldOffset = DecalTransform.TransformVector(Request.DecalLocationOffset);
+	FVector WorldOffset = DecalTransform.TransformVector(LocationOffsetToUse);
 	FVector DecalLocation = Request.ImpactPoint + (Request.ImpactNormal * 0.5f) + WorldOffset;
 		
 
-	Decal->SetWorldLocationAndRotation(DecalLocation, DecalRotation); 
+	Decal->SetWorldLocationAndRotation(DecalLocation, DecalRotation);
+
+	
 	Decal->RegisterComponent();   
 
 	return Decal;

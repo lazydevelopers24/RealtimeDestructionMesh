@@ -11,6 +11,9 @@ struct REALTIMEDESTRUCTION_API FDecalSizeConfig
  
 	/** Decal Material */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
+	FString VariantName;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
 	TObjectPtr<UMaterialInterface> DecalMaterial = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
@@ -22,6 +25,9 @@ struct REALTIMEDESTRUCTION_API FDecalSizeConfig
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FRotator RotationOffset = FRotator::ZeroRotator;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool bRandomDecalRotation = true;
+	
 	// Tool Shape
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float CylinderRadius = 10.0f;
@@ -37,6 +43,41 @@ struct REALTIMEDESTRUCTION_API FDecalSizeConfig
 };
 
 USTRUCT(BlueprintType)
+struct REALTIMEDESTRUCTION_API FDecalSizeConfigArray
+{
+	GENERATED_BODY()
+	
+	/** 해당 surface에서 사용 가능한 decal 목록 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
+	TArray<FDecalSizeConfig> Configs;
+	
+	/** 랜덤 선택 */
+	const FDecalSizeConfig* GetRandom() const
+	{
+		if (Configs.Num() == 0)
+		{
+			return nullptr;
+		}
+
+		if (Configs.Num() == 1)
+		{
+			return &Configs[0];
+		}
+
+		int32 Index;
+		Index = FMath::RandRange(0, Configs.Num() - 1);
+
+		return &Configs[Index]; 
+	}
+
+	/** 개수 출력 */
+	int32 Num() { return Configs.Num(); }
+
+	/** 유효성 검사 */
+	bool IsValid() const { return (Configs.Num() > 0) && (Configs[0].IsValid()); }
+};
+
+USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FProjectileDecalConfig
 {
 	GENERATED_BODY()
@@ -45,7 +86,7 @@ struct REALTIMEDESTRUCTION_API FProjectileDecalConfig
 	FName ConfigID = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
-	TMap<FName,	FDecalSizeConfig> SurfaceConfigs;
+	TMap<FName,	FDecalSizeConfigArray> SurfaceConfigs;
 };
 
 UCLASS(BlueprintType)
@@ -59,7 +100,10 @@ public:
 	TArray<FProjectileDecalConfig> ProjectileConfigs;
 public:
 	UFUNCTION(BlueprintCallable, Category = "Decal")
-	bool GetConfig(FName ConfigID, FName SurfaceType, FDecalSizeConfig& OutConfig ) const;
+	bool GetConfig(FName ConfigID, FName SurfaceType, int32 VariantIndex, FDecalSizeConfig& OutConfig ) const;
+ 
+	UFUNCTION(BlueprintCallable, Category = "Decal")
+	bool GetConfigRandom(FName ConfigID, FName SurfaceType, FDecalSizeConfig& OutConfig ) const;
  
 	const FProjectileDecalConfig* FindProjectileConfig(FName ConfigID) const; 
 	TArray<FName> GetAllConfigIDs() const;

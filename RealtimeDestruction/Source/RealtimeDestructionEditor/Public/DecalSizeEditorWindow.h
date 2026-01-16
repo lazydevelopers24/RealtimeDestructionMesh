@@ -10,7 +10,7 @@ class SDecalSizeEditorViewport;
 class IDetailsView;
 
 struct FDecalSizeConfig;
-
+struct FDecalSizeConfigArray;
 /**
  * Decal Size 편집 전용 에디터 윈도우  
  */
@@ -47,20 +47,25 @@ private:
 	 
 	void RefreshConfigIDList();           
 	void RefreshSurfaceTypeList();  
-
-	FDecalSizeConfig* GetCurrentDecalConfig();
-
+	void RefreshVariantIndexList();
+	
+	FDecalSizeConfig* GetCurrentDecalConfig(); 
+	FDecalSizeConfigArray* GetCurrentDecalConfigArray();
+	
 	void OnConfigIDSelected(FName SelectedConfigID);
 	void OnSurfaceTypeSelected(FName SelectedSurfaceType);
-
+	void OnVariantIndexSelected(int32 SelectedIndex);
+	
 	void AddNewConfigID();
 	void AddNewSurfaceType();
+	void AddNewVariant();
 
 	FName EnsureUniqueConfigID(FName NewName);
 	FName EnsureUniqueSurfaceType(FName NewName);
 
 	void DeleteCurrentConfigID();
 	void DeleteCurrentSurfaceType();
+	void DeleteCurrentVariant();
 
 	void RenameCurrentConfigID(FName NewName);
 	void RenameCurrentSurfaceType(FName NewName);
@@ -98,5 +103,12 @@ private:
 
 	/** SurfaceType 목록 (콤보박스용) - 현재 선택된 ConfigID의 Surface들 */
 	TArray<TSharedPtr<FName>> SurfaceTypeList;
+
+	/** 현재 선택된 Surface Type에 맞는 Variant Index 목록 */
+	TArray<TSharedPtr<FString>> VariantIndexList;
+	
+	/** 현재 편집중인 matrial 인덱스 */
+	int32 CurVariantIndex = 0;
+
 	
 };
