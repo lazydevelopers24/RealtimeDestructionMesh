@@ -365,9 +365,10 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 
 void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request)
 {
-	constexpr bool bSubCellTestEnabled = true;
+	constexpr bool bSubCellTestEnabled = false;
 	
 	TArray<int32> NewlyDestroyedCells;
+	TSet<int32> DisconnectedCells;
 
 	// 구조적 무결성 비활성화 또는 GridCellCache 미생성 시 스킵
 	if (!bEnableStructuralIntegrity || !GridCellCache.IsValid())
@@ -412,12 +413,19 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 	// 양자화된 입력 생성
 	FQuantizedDestructionInput QuantizedInput = FQuantizedDestructionInput::FromDestructionShape(Shape);
 
-	// 서브셀 시스템 사용. 함수 맨 위에 스위치 bool 변수 하드코딩 해둠.
+	// 서버/클라 체크 (Phase 2 이후에 필요)
+	const bool bIsServer = World && (NetMode == NM_DedicatedServer ||
+	                                  NetMode == NM_ListenServer ||
+	                                  NetMode == NM_Standalone);
+
+	//=========================================================================
+	// Phase 1 & 2: SubCell vs Cell 분기
+	//=========================================================================
 	if (bSubCellTestEnabled)
 	{
-		//=========================================================================
-		// [SubCell Test] Phase 1: SubCell 레벨 파괴 처리
-		//=========================================================================
+		//=====================================================================
+		// [SubCell] Phase 1: SubCell 레벨 파괴 처리
+		//=====================================================================
 		FDestructionResult DestructionResult = FCellDestructionSystem::ProcessCellDestructionWithSubCells(
 			GridCellCache,
 			QuantizedInput,
@@ -429,6 +437,12 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			return; // 파괴 없음
 		}
 
+		if (DestructionResult.NewlyDestroyedCells.Num() > 0)
+		{
+			RecentDirectDestroyedCellIds.Reset();
+			RecentDirectDestroyedCellIds.Append(DestructionResult.NewlyDestroyedCells);
+		}
+
 		// 히스토리에 추가 (NarrowPhase용)
 		DestructionInputHistory.Add(QuantizedInput);
 
@@ -438,158 +452,84 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			MulticastDestroyedCells(DestructionResult.NewlyDestroyedCells);
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Phase 1: %d SubCells destroyed, %d Cells fully destroyed, %d Cells affected"),
+		UE_LOG(LogTemp, Log, TEXT("[SubCell] Phase 1: %d SubCells destroyed, %d Cells fully destroyed, %d Cells affected"),
 			DestructionResult.DeadSubCellCount,
 			DestructionResult.NewlyDestroyedCells.Num(),
 			DestructionResult.AffectedCells.Num());
 
-		//=========================================================================
-		// [SubCell Test] Phase 2: SubCell 레벨 BFS로 분리된 Cell 찾기 (서버만)
-		//=========================================================================
-		UWorld* World_SubCell = GetWorld();
-		const ENetMode NetMode_SubCell = World_SubCell ? World_SubCell->GetNetMode() : NM_Standalone;
-		const bool bIsServer_SubCell = World_SubCell && (NetMode_SubCell == NM_DedicatedServer ||
-		                                                  NetMode_SubCell == NM_ListenServer ||
-		                                                  NetMode_SubCell == NM_Standalone);
-
-		if (!bIsServer_SubCell)
+		//=====================================================================
+		// [SubCell] Phase 2: SubCell 레벨 BFS로 분리된 Cell 찾기 (서버만)
+		//=====================================================================
+		if (!bIsServer)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[SubCell Test] Phase 2 SKIPPED - Client"));
+			UE_LOG(LogTemp, Warning, TEXT("[SubCell] Phase 2 SKIPPED - Client"));
 			return;
 		}
 
-		TSet<int32> DisconnectedCells_SubCell = FCellDestructionSystem::FindDisconnectedCellsWithSubCells(
+		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCellsWithSubCells(
 			GridCellCache,
 			CellState,
 			DestructionResult.AffectedCells);
 
-		UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Phase 2: %d Cells disconnected"), DisconnectedCells_SubCell.Num());
+		UE_LOG(LogTemp, Log, TEXT("[SubCell] Phase 2: %d Cells disconnected"), DisconnectedCells.Num());
+	}
+	else
+	{
+		//=====================================================================
+		// [Cell] Phase 1: Cell 레벨 파괴 처리
+		//=====================================================================
+		NewlyDestroyedCells = FCellDestructionSystem::CalculateDestroyedCells(
+			GridCellCache,
+			QuantizedInput,
+			GetComponentTransform(),
+			CellState.DestroyedCells);
 
-		if (DisconnectedCells_SubCell.Num() > 0)
+		if (NewlyDestroyedCells.Num() == 0)
 		{
-			//=====================================================================
-			// [SubCell Test] Phase 3: 분리된 셀 그룹화
-			//=====================================================================
-			// TArray<TArray<int32>> NewDetachedGroupsWithoutSubCells = FCellDestructionSystem::GroupDetachedCells(
-			// 	GridCellCache,
-			// 	DisconnectedCells_SubCell,
-			// 	CellState.DestroyedCells);
-			//
-			// for (const TArray<int32>& Group : NewDetachedGroupsWithoutSubCells)
-			// {
-			// 	CellState.AddDetachedGroup(Group);
-			// }
-
-			TArray<FDetachedGroupWithSubCell> NewDetachedGroupsWithSubCells = FCellDestructionSystem::GroupDetachedCellsWithSubCells(
-				GridCellCache,
-				DisconnectedCells_SubCell,
-				CellState);
-
-			// CellState에 SubCell 정보 포함하여 저장
-			// ForCellLevelAPICompatibility: Phase4가 Cell 레벨 API 사용 중이라 임시 변수 유지
-			TArray<TArray<int32>> ForCellLevelAPICompatibility;
-			for (const FDetachedGroupWithSubCell& Group : NewDetachedGroupsWithSubCells)
-			{
-				CellState.AddDetachedGroup(Group);  // SubCell 정보 포함하여 저장
-				ForCellLevelAPICompatibility.Add(Group.DetachedCellIds);
-			}
-
-			// // Phase 3 디버그 로그: SubCell Flooding 결과
-			// for (int32 GroupIdx = 0; GroupIdx < NewDetachedGroupsWithSubCells.Num(); ++GroupIdx)
-			// {
-			// 	const FDetachedGroupWithSubCell& Group = NewDetachedGroupsWithSubCells[GroupIdx];
-			// 	UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Phase 3 Group[%d]: %d DetachedCells, %d ConnectedCells with flooded SubCells"),
-			// 		GroupIdx, Group.DetachedCellIds.Num(), Group.IncludedSubCells.Num());
-			//
-			// 	for (const auto& SubCellPair : Group.IncludedSubCells)
-			// 	{
-			// 		FString SubCellList;
-			// 		for (int32 SubCellId : SubCellPair.Value.Values)
-			// 		{
-			// 			SubCellList += FString::Printf(TEXT("%d "), SubCellId);
-			// 		}
-			// 		UE_LOG(LogTemp, Log, TEXT("[SubCell Test]   ConnectedCell[%d]: SubCells=[%s]"),
-			// 			SubCellPair.Key, *SubCellList.TrimEnd());
-			// 	}
-			// }
-
-			//=====================================================================
-			// [SubCell Test] Phase 4: 서버 → 클라이언트 신호 전송
-			//=====================================================================
-			// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
-			UE_LOG(LogTemp, Warning, TEXT("[SubCell] MulticastDetachSignal SENDING - %d groups detached"),
-				ForCellLevelAPICompatibility.Num());
-			MulticastDetachSignal();
-
-			// 서버: 분리된 셀의 삼각형 삭제 (서버도 렌더링하는 경우)
-			for (const TArray<int32>& Group : ForCellLevelAPICompatibility)
-			{
-				RemoveTrianglesForDetachedCells(Group);
-			}
-
-			CellState.MoveAllDetachedToDestroyed();
-
-			UE_LOG(LogTemp, Log, TEXT("[SubCell Test] Complete: %d cells disconnected (%d groups)"),
-				DisconnectedCells_SubCell.Num(), ForCellLevelAPICompatibility.Num());
-		}
-		else
-		{
-			// 분리된 셀 없어도 파괴된 셀 있으면 파편 정리 (RemoveTrianglesForDetachedCells 통하지 않으므로)
-			CleanupSmallFragments();
+			return; // 파괴된 셀 없음
 		}
 
-		return;
-	}
-	
-	//=========================================================================
-	// Phase 1: 파괴 형상에 의해 직접 파괴된 셀 계산
-	//=========================================================================
-	NewlyDestroyedCells = FCellDestructionSystem::CalculateDestroyedCells(
-		GridCellCache,
-		QuantizedInput,
-		GetComponentTransform(),
-		CellState.DestroyedCells);
+		if (NewlyDestroyedCells.Num() > 0)
+		{
+			RecentDirectDestroyedCellIds.Reset();
+			RecentDirectDestroyedCellIds.Append(NewlyDestroyedCells);
+		}
 
-	if (NewlyDestroyedCells.Num() == 0)
-	{
-		return; // 파괴된 셀 없음 - BFS 검사 불필요
-	}
+		// 직접 파괴된 셀 상태 업데이트
+		CellState.DestroyCells(NewlyDestroyedCells);
 
-	// 직접 파괴된 셀 상태 업데이트
-	CellState.DestroyCells(NewlyDestroyedCells);
+		// 파괴된 셀 즉시 전송 (클라이언트 CellState 동기화)
+		if (NewlyDestroyedCells.Num() > 0)
+		{
+			MulticastDestroyedCells(NewlyDestroyedCells);
+		}
 
-	// 파괴된 셀 즉시 전송 (클라이언트 CellState 동기화)
-	if (NewlyDestroyedCells.Num() > 0)
-	{
-		MulticastDestroyedCells(NewlyDestroyedCells);
-	}
+		// 히스토리에 추가 (NarrowPhase용)
+		DestructionInputHistory.Add(QuantizedInput);
 
-	// 히스토리에 추가 (NarrowPhase용)
-	DestructionInputHistory.Add(QuantizedInput);
+		UE_LOG(LogTemp, Log, TEXT("[Cell] Phase 1: %d cells directly destroyed"), NewlyDestroyedCells.Num());
 
-	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction: %d cells directly destroyed"),
-		NewlyDestroyedCells.Num());
+		//=====================================================================
+		// [Cell] Phase 2: BFS로 앵커에서 분리된 셀 찾기 (서버만)
+		//=====================================================================
+		if (!bIsServer)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Cell] Phase 2 SKIPPED - Client"));
+			return;
+		}
 
-	//=========================================================================
-	// Phase 2: BFS로 앵커에서 분리된 셀 찾기 (서버에서만 실행)
-	//=========================================================================
-	const bool bIsServer = World && (NetMode == NM_DedicatedServer ||
-	                                  NetMode == NM_ListenServer ||
-	                                  NetMode == NM_Standalone);
+		UE_LOG(LogTemp, Warning, TEXT("[Cell] Phase 2: FindDisconnectedCells - NetMode=%s"), *NetModeStr);
+		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+			GridCellCache,
+			CellState.DestroyedCells);
 
-	if (!bIsServer)
-	{
-		// 클라이언트: BFS 스킵, 서버에서 MulticastDetachSignal로 신호 받으면 실행
-		UE_LOG(LogTemp, Warning, TEXT("[GridCell] FindDisconnectedCells SKIPPED - NetMode=Client"));
-		return;
+		UE_LOG(LogTemp, Log, TEXT("[Cell] Phase 2: %d Cells disconnected"), DisconnectedCells.Num());
 	}
 
-	// 서버: BFS 실행
-	UE_LOG(LogTemp, Warning, TEXT("[GridCell] FindDisconnectedCells CALLED - NetMode=%s"), *NetModeStr);
-	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-		GridCellCache,
-		CellState.DestroyedCells);
-
+	//=========================================================================
+	// Phase 3 & 4: 공통 처리 (Cell Level API)
+	// 네트워크 규약상 SubCell 정보 전송 불가 → 항상 Cell 단위로 처리
+	//=========================================================================
 	if (DisconnectedCells.Num() > 0)
 	{
 		//=====================================================================
@@ -600,7 +540,6 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			DisconnectedCells,
 			CellState.DestroyedCells);
 
-		// 분리된 그룹들을 CellState.DetachedGroups에 저장
 		for (const TArray<int32>& Group : NewDetachedGroups)
 		{
 			CellState.AddDetachedGroup(Group);
@@ -620,7 +559,6 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			RemoveTrianglesForDetachedCells(Group);
 		}
 
-		// 분리된 셀들을 파괴됨 상태로 이동
 		CellState.MoveAllDetachedToDestroyed();
 
 		UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction [Server]: %d cells disconnected (%d groups)"),
@@ -632,7 +570,7 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		CleanupSmallFragments();
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction: Destroyed=%d, DetachedGroups=%d"),
+	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction Complete: Destroyed=%d, DetachedGroups=%d"),
 		CellState.DestroyedCells.Num(), CellState.DetachedGroups.Num());
 }
 
@@ -1175,11 +1113,14 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				}
 
 				// 디버그 색상: 빨강 = 삭제 대상 (Anchor 분리), 초록 = 유지 (Anchor 연결)
-				FColor PointColor = bShouldRemove ? FColor::Red : FColor::Green;
-				DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
-				DrawDebugString(GetWorld(), WorldPos, FString::Printf(TEXT("%s (%d/%d destroyed)"),
-					bShouldRemove ? TEXT("Detached") : TEXT("Anchored"), DestroyedCellCount, TotalCellCount), nullptr, PointColor, 10.0f);
-
+				if (bShowCellSpawnPosition)
+				{
+					FColor PointColor = bShouldRemove ? FColor::Red : FColor::Green;
+					DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
+					DrawDebugString(GetWorld(), WorldPos, FString::Printf(TEXT("%s (%d/%d destroyed)"),
+						bShouldRemove ? TEXT("Detached") : TEXT("Anchored"), DestroyedCellCount, TotalCellCount), nullptr, PointColor, 10.0f);
+				}
+				
 				// 모든 셀이 파괴된 컴포넌트는 파편으로 스폰 후 삭제
 				if (bShouldRemove)
 				{
@@ -1335,7 +1276,10 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 										: TEXT(""));
 
 								// 디버그: 스폰 위치에 파란 구체 표시
-								DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+								if (bShowCellSpawnPosition)
+								{
+									DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+								}
 							}
 						}
 					}
@@ -1558,6 +1502,12 @@ void URealtimeDestructibleMeshComponent::MulticastDestroyedCells_Implementation(
 	if (GetOwner() && GetOwner()->HasAuthority())
 	{
 		return;
+	}
+	
+	if (DestroyedCellIds.Num() > 0)
+	{
+		RecentDirectDestroyedCellIds.Reset();
+		RecentDirectDestroyedCellIds.Append(DestroyedCellIds);
 	}
 
 	// 클라이언트: CellState에 파괴된 셀 추가
@@ -2578,6 +2528,7 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 	{
 		const bool bIsDestroyed = CellState.DestroyedCells.Contains(CellId);
 		const bool bIsDetached = CellState.IsCellDetached(CellId);
+		const bool bIsRecentlyDestroyed = RecentDirectDestroyedCellIds.Contains(CellId);
 
 		// 파괴된 셀 표시 옵션 확인 (분리 대기 중인 셀도 포함)
 		if ((bIsDestroyed || bIsDetached) && !bShowDestroyedCells)
@@ -2585,9 +2536,13 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 			continue;
 		}
 
-		// 셀 색상 결정: 파괴됨=빨강, 분리대기=주황, 앵커=밝은녹색, 일반=시안
+		// 셀 색상 결정: 최근 파괴=노랑, 파괴됨=빨강, 분리대기=주황, 앵커=밝은녹색, 일반=시안
 		FColor CellColor;
-		if (bIsDestroyed)
+		if (bIsRecentlyDestroyed)
+		{
+			CellColor = FColor(255, 255, 0);
+		}
+		else if (bIsDestroyed)
 		{
 			CellColor = FColor::Red;
 		}
