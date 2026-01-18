@@ -86,7 +86,7 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	TObjectPtr<UMaterialInterface> DecalMaterial = nullptr;
 	
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, Category = "RealtimeDestructibleMesh")
 	FName SurfaceType = FName("Default");
 
 	UPROPERTY()
@@ -349,23 +349,23 @@ public:
 
 
 	/** 서버 검증: 사거리 설정 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Validation")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
 	float MaxDestructionRange = 5000.0f;
 
 	/** 서버 검증: 연사 제한 (초당 최대 파괴 횟수) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Validation")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
 	float MaxDestructionsPerSecond = 10.0f;
 
 	/** 서버 검증: 단일 RPC 최대 요청 수 (초과 시 킥) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Validation", meta = (ClampMin = "1", ClampMax = "200"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation", meta = (ClampMin = "1", ClampMax = "200"))
 	int32 MaxRequestsPerRPC = 50;
 
 	/** 서버 검증: 최대 허용 파괴 반경 (초과 시 킥) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Validation", meta = (ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation", meta = (ClampMin = "1.0"))
 	float MaxAllowedRadius = 500.0f;
 
 	/** 서버 검증: 시야 체크 활성화 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Validation")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
 	bool bEnableLineOfSightCheck = true;
 
 	/** 연사 제한 추적 정보 */
@@ -409,12 +409,6 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerBatching")
 	bool bUseCompactMulticast = true;
-
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Replication")
-	bool BuildMeshSnapshot(FRealtimeMeshSnapshot& Out);
-
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Replication")
-	bool ApplyMeshSnapshot(const FRealtimeMeshSnapshot& In);
 
 	//////////////////////////////////////////////////////////////////////////
 	// Late Join: Op 히스토리 기반 동기화
@@ -472,7 +466,7 @@ public:
 	UPROPERTY()
 	FVector CachedCellSize; 
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|HoleDecal")
 	FName SurfaceType = FName("Default");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced")
@@ -567,18 +561,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|HoleDecal")
 	TObjectPtr<UDecalMaterialDataAsset> DecalDataAsset = nullptr;
- 
-	// [deprecated]
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|HoleDecal")
-	TObjectPtr<UMaterialInterface> HoleDecal = nullptr;
-
-	// [deprecated]
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|HoleDecal")
-	FVector DecalSize = FVector(10.0f, 10.0f, 10.0f);
- 
-	/** Decal Material (projectile에서 조회한 결과) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
-	TObjectPtr<UMaterialInterface> DecalMaterial = nullptr;
 
 	/**
 	 * 이 메시가 받을 수 있는 최대 구멍 개수
@@ -627,9 +609,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
 	bool bEnableMultiWorkers = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Replication")
-	bool bDebugPenetration = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 0.001))
 	float AngleThreshold = 0.001f;
@@ -718,7 +697,7 @@ public:
 	bool BuildGridCells();
 
 	/** 에디터 버튼: 격자 셀 빌드 */
-	UFUNCTION(CallInEditor, Category = "GridCell")
+	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh")
 	void EditorBuildGridCells();
 
 	/** 격자 셀 캐시 유효 여부 */
@@ -780,9 +759,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	FIntVector SliceCount;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
-	float SliceAngleVariation = 0.3f;
-
 	/** 격자 셀 크기 (cm). 값이 작을수록 해상도가 높아지지만 성능 비용 증가 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "1.0"))
 	FVector GridCellSize = FVector(5.0f);
@@ -794,17 +770,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
 
-
 #if WITH_EDITOR
 	/**
 	 * SourceStatic 메쉬로부터 GC를 생성, FracturedGeometryCollection에 저장합니다.
 	 * 이후 GC가 DynamicMesh로 변환될 수 있도록 BuildCellMeshesFromGeometryCollection 메소드 호출까지 담당합니다.
 	 */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|ChunkMesh")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	void AutoFractureAndAssign();
 
 	/** 파괴전 Mesh의 상태로 되돌리기 */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|ChunkMesh")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	void RevertFracture();
 
 #endif
@@ -823,14 +798,14 @@ protected:
 	bool bShowGridCellDebug = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
-	bool bShowCellConnectivityLines = false;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowDestroyedCells = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowCellSpawnPosition = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
+	bool bDebugPenetration = false;
+	
 	/** 최근 직접 파괴된 셀 ID (디버그 강조 표시용) */
 	TSet<int32> RecentDirectDestroyedCellIds;
 	

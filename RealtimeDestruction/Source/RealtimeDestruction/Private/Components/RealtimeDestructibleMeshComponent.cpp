@@ -1074,7 +1074,7 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				if (bShowCellSpawnPosition)
 				{
 					FColor PointColor = bShouldRemove ? FColor::Red : FColor::Green;
-				DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
+					DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
 					DrawDebugString(GetWorld(), WorldPos, FString::Printf(TEXT("%s (%d/%d destroyed)"),
 						bShouldRemove ? TEXT("Detached") : TEXT("Anchored"), DestroyedCellCount, TotalCellCount), nullptr, PointColor, 10.0f);
 				}
@@ -1236,10 +1236,10 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 								// 디버그: 스폰 위치에 파란 구체 표시
 								if (bShowCellSpawnPosition)
 								{
-								DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+									DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+								}
 							}
 						}
-					}
 					}
 
 					// 원본 메쉬에서 삼각형 삭제
@@ -1603,140 +1603,6 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 		// 비동기 경로로 처리 (워커 스레드 사용)
 		EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal);
 	}
-}
-
-bool URealtimeDestructibleMeshComponent::BuildMeshSnapshot(FRealtimeMeshSnapshot& Out)
-{
-	Out.Version = 1;
-	Out.Payload.Empty();
-
-	// Cell 메시 모드
-	if (ChunkMeshComponents.Num() > 0)
-	{
-		FMemoryWriter Ar(Out.Payload);
-
-		// Cell 개수 저장
-		int32 CellCount = ChunkMeshComponents.Num();
-		Ar << CellCount;
-
-		// 각 Cell 메시 직렬화
-		for (const auto& CellComp : ChunkMeshComponents)
-		{
-			if (CellComp && CellComp->GetDynamicMesh())
-			{
-				FDynamicMesh3 MeshCopy;
-				CellComp->GetDynamicMesh()->ProcessMesh([&MeshCopy](const FDynamicMesh3& ReadMesh)
-				{
-					MeshCopy = ReadMesh;
-				});
-				MeshCopy.Serialize(Ar);
-			}
-		}
-
-		// 현재 구멍 수 저장
-		int32 HoleCount = CurrentHoleCount;
-		Ar << HoleCount;
-
-		UE_LOG(LogTemp, Display, TEXT("[BuildMeshSnapshot] Cell 모드: %d cells, %d bytes"),
-			CellCount, Out.Payload.Num());
-		return true;
-	}
-
-	// 단일 메시 모드
-	UDynamicMesh* DynMesh = GetDynamicMesh();
-	if (!DynMesh)
-	{
-		return false;
-	}
-
-	FMemoryWriter Ar(Out.Payload);
-
-	// Cell 개수 0 = 단일 메시 모드
-	int32 CellCount = 0;
-	Ar << CellCount;
-
-	// 메시 직렬화
-	FDynamicMesh3 MeshCopy;
-	DynMesh->ProcessMesh([&MeshCopy](const FDynamicMesh3& ReadMesh)
-	{
-		MeshCopy = ReadMesh;
-	});
-	MeshCopy.Serialize(Ar);
-
-	// 현재 구멍 수 저장
-	int32 HoleCount = CurrentHoleCount;
-	Ar << HoleCount;
-
-	UE_LOG(LogTemp, Display, TEXT("[BuildMeshSnapshot] 단일 메시 모드: %d bytes"), Out.Payload.Num());
-	return true;
-}
-
-bool URealtimeDestructibleMeshComponent::ApplyMeshSnapshot(const FRealtimeMeshSnapshot& In)
-{
-	if (In.Payload.Num() == 0)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[ApplyMeshSnapshot] 빈 스냅샷"));
-		return false;
-	}
-
-	FMemoryReader Ar(In.Payload);
-
-	// Cell 개수 읽기
-	int32 CellCount = 0;
-	Ar << CellCount;
-
-	// Cell 메시 모드
-	if (CellCount > 0)
-	{
-		if (ChunkMeshComponents.Num() != CellCount)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[ApplyMeshSnapshot] Cell 개수 불일치: 예상 %d, 실제 %d"),
-				CellCount, ChunkMeshComponents.Num());
-			return false;
-		}
-
-		// 각 Cell 메시 역직렬화
-		for (int32 i = 0; i < CellCount; ++i)
-		{
-			FDynamicMesh3 LoadedMesh;
-			LoadedMesh.Serialize(Ar);
-
-			if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetDynamicMesh())
-			{
-				ChunkMeshComponents[i]->SetMesh(MoveTemp(LoadedMesh));
-			}
-		}
-
-		// 구멍 수 복원
-		int32 HoleCount = 0;
-		Ar << HoleCount;
-		CurrentHoleCount = HoleCount;
-
-		UE_LOG(LogTemp, Display, TEXT("[ApplyMeshSnapshot] Cell 모드 적용: %d cells, HoleCount: %d"),
-			CellCount, CurrentHoleCount);
-		return true;
-	}
-
-	// 단일 메시 모드
-	UDynamicMesh* DynMesh = GetDynamicMesh();
-	if (!DynMesh)
-	{
-		return false;
-	}
-
-	FDynamicMesh3 LoadedMesh;
-	LoadedMesh.Serialize(Ar);
-
-	// 메시 적용
-	SetMesh(MoveTemp(LoadedMesh));
-
-	// 구멍 수 복원
-	int32 HoleCount = 0;
-	Ar << HoleCount;
-	CurrentHoleCount = HoleCount;
-
-	UE_LOG(LogTemp, Display, TEXT("[ApplyMeshSnapshot] 단일 메시 모드 적용, HoleCount: %d"), CurrentHoleCount);
-	return true;
 }
 
 void URealtimeDestructibleMeshComponent::GetDestructionSettings(int32& OutMaxHoleCount, int32& OutMaxBatchSize)

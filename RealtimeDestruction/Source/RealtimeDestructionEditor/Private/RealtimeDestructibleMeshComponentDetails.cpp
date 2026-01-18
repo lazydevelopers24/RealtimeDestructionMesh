@@ -1,14 +1,7 @@
 #include "RealtimeDestructibleMeshComponentDetails.h"
 
 #include "Components/RealtimeDestructibleMeshComponent.h"
-
 #include "DetailLayoutBuilder.h"
-#include "DetailCategoryBuilder.h"
-#include "DetailWidgetRow.h"
-#include "Widgets/Text/STextBlock.h"
-#include "Widgets/Layout/SBox.h"
-
-#define LOCTEXT_NAMESPACE "RealtimeDestructibleMeshComponentDetails"
 
 TSharedRef<IDetailCustomization> FRealtimeDestructibleMeshComponentDetails::MakeInstance()
 {
@@ -30,25 +23,12 @@ void FRealtimeDestructibleMeshComponentDetails::CustomizeDetails(IDetailLayoutBu
 		}
 	}
 
-	// "Cell Mesh" 카테고리 - 안내 텍스트
-	IDetailCategoryBuilder& CellMeshCategory = DetailBuilder.EditCategory(
-		"CellMesh",
-		LOCTEXT("CellMeshCategoryName", "Cell Mesh"),
-		ECategoryPriority::Important
-	);
+	//////////////////////////////////////////////////////////////////////////
+	// 카테고리 순서 지정
+	// Transform 다음에 RealtimeDestructibleMesh 카테고리가 오도록 설정
+	//////////////////////////////////////////////////////////////////////////
 
-	// 안내 텍스트
-	CellMeshCategory.AddCustomRow(LOCTEXT("CellMeshInfoRow", "Info"))
-		[
-			SNew(SBox)
-			.Padding(FMargin(0.f, 4.f))
-			[
-				SNew(STextBlock)
-				.Text(LOCTEXT("CellMeshInfo", "GeometryCollection을 사용하여 메시를 분리합니다.\n\n1. Fracture Mode에서 GeometryCollection 에셋 생성\n2. FracturedGeometryCollection에 할당\n3. BuildCellMeshesFromGeometryCollection 호출"))
-				.Font(IDetailLayoutBuilder::GetDetailFontItalic())
-				.AutoWrapText(true)
-			]
-		];
+	// RealtimeDestructibleMesh 최상위 카테고리를 Important로 설정하여 상단 배치
+	// 하위 카테고리는 기본 순서 유지
+	DetailBuilder.EditCategory("RealtimeDestructibleMesh", FText::GetEmpty(), ECategoryPriority::Important);
 }
-
-#undef LOCTEXT_NAMESPACE

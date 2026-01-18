@@ -3,11 +3,13 @@
 #include "RealtimeDestructionEditor.h"
 
 #include "DecalMaterialDataAssetDetails.h"
+#include "RealtimeDestructibleMeshComponentDetails.h"
 #include "Components/DestructionProjectileComponent.h"
+#include "Components/RealtimeDestructibleMeshComponent.h"
 #include "UnrealEdGlobals.h"
 #include "Editor/UnrealEdEngine.h"
 #include "DestructionProjectileComponentVisualizer.h"
-#include "DecalSizeEditorWindow.h" 
+#include "DecalSizeEditorWindow.h"
 #include "DestructionProjectileComponentDetails.h"
 #include "PropertyEditorModule.h"
 #include "Data/DecalMaterialDataAsset.h" 
@@ -39,6 +41,11 @@ void FRealtimeDestructionEditorModule::StartupModule()
 		FOnGetDetailCustomizationInstance::CreateStatic(&FDecalMaterialDataAssetDetails::MakeInstance)
 	);
 
+	PropertyModule.RegisterCustomClassLayout(
+		URealtimeDestructibleMeshComponent::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FRealtimeDestructibleMeshComponentDetails::MakeInstance)
+	);
+
 	UE_LOG(LogTemp, Log, TEXT("RealtimeDestructionEditor module started"));
 }
 
@@ -55,9 +62,8 @@ void FRealtimeDestructionEditorModule::ShutdownModule()
 	{
 		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		PropertyModule.UnregisterCustomClassLayout(UDestructionProjectileComponent::StaticClass()->GetFName());
- 
-		PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
-		PropertyModule.UnregisterCustomClassLayout(UDecalMaterialDataAsset::StaticClass()->GetFName()); 
+		PropertyModule.UnregisterCustomClassLayout(UDecalMaterialDataAsset::StaticClass()->GetFName());
+		PropertyModule.UnregisterCustomClassLayout(URealtimeDestructibleMeshComponent::StaticClass()->GetFName());
 	} 
 
 	UE_LOG(LogTemp, Log, TEXT("RealtimeDestructionEditor module shutdown"));
