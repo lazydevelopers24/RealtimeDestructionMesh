@@ -3284,29 +3284,6 @@ int32 URealtimeDestructibleMeshComponent::BuildChunkMeshesFromGeometryCollection
 		++ExtractedCount;
 	}
 
-	// Bounds 계산
-	CellBounds.SetNum(NumTransforms);
-	for (int32 i = 0; i < NumTransforms; ++i)
-	{
-		if (ChunkMeshComponents[i])
-		{
-			const FDynamicMesh3* Mesh = ChunkMeshComponents[i]->GetMesh();
-			if (Mesh && Mesh->TriangleCount() > 0)
-			{
-				UE::Geometry::FAxisAlignedBox3d MeshBounds = Mesh->GetBounds();
-				CellBounds[i] = FBox(
-					FVector(MeshBounds.Min.X, MeshBounds.Min.Y, MeshBounds.Min.Z),
-					FVector(MeshBounds.Max.X, MeshBounds.Max.Y, MeshBounds.Max.Z)
-				);
-			}
-			else
-			{
-				CellBounds[i] = FBox(ForceInit);
-			}
-
-		}
-	}
-
 	// GeometryCollection에서 머티리얼 복사
 	const TArray<UMaterialInterface*>& GCMaterials = FracturedGeometryCollection->Materials;
 	if (GCMaterials.Num() > 0)
@@ -3640,31 +3617,6 @@ void URealtimeDestructibleMeshComponent::FindChunksAlongLineInternal(const FVect
 	}
 }
 
-FBox URealtimeDestructibleMeshComponent::CalculateCellBounds(int32 CellId) const
-{
-	FBox ResultBounds(ForceInit);
-
-	if (!ChunkMeshComponents.IsValidIndex(CellId) || !ChunkMeshComponents[CellId])
-	{
-		return ResultBounds;
-	}
-
-	// CellMesh의 모든 Vertex를 순회하여 Bounds 계산
-	const UE::Geometry::FDynamicMesh3* Mesh = ChunkMeshComponents[CellId]->GetMesh();
-	if (!Mesh)
-	{
-		return ResultBounds;
-	}
-
-	for (int32 Vid : Mesh->VertexIndicesItr())
-	{
-		FVector3d Pos = Mesh->GetVertex(Vid);
-		ResultBounds += FVector(Pos.X, Pos.Y, Pos.Z);
-	}
-
-	return ResultBounds;
-}
-
 #if WITH_EDITOR
 void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
@@ -3697,7 +3649,6 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 			}
 		}
 		ChunkMeshComponents.Empty();
-		CellBounds.Empty();
 		GridToChunkMap.Reset();
 		bChunkMeshesValid = false;
 
@@ -3957,7 +3908,6 @@ void URealtimeDestructibleMeshComponent::RevertFracture()
 	}
 
 	ChunkMeshComponents.Empty();
-	CellBounds.Empty();
 	GridToChunkMap.Reset();
 	
 	bChunkMeshesValid = false;

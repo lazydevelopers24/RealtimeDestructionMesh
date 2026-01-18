@@ -649,18 +649,18 @@ protected:
 	 * Fracture Mode로 생성한 GC를 여기에 할당하면
 	 * 런타임에 DynamicMesh로 추출하여 사용
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	TObjectPtr<UGeometryCollection> FracturedGeometryCollection;
 
 	/** Cell별 분리된 메시 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|CellMesh")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	TArray<TObjectPtr<UDynamicMeshComponent>> ChunkMeshComponents;
 
 	// PrimComp으로 Key값 설정, FHitResult의 GetComponent는 PrimitiveComp* 반환
 	TMap<UPrimitiveComponent*, int32> ChunkIndexMap;
 
-	/** 그리드 인덱스 -> ChunkId(CellMeshComponents 배열 인덱스) 매핑 테이블
-	 *  슬라이싱 후 고정되며, BuildCellMeshesFromGeometryCollection에서 계산됨 */
+	/** 그리드 인덱스 -> ChunkId(ChunkMeshComponents 배열 인덱스) 매핑 테이블
+	 *  슬라이싱 후 고정되며, BuildChunkMeshesFromGeometryCollection에서 계산됨 */
 	UPROPERTY()
 	TArray<int32> GridToChunkMap;
 
@@ -668,11 +668,8 @@ protected:
 
 	/** Multi Worker, Subtract 체크용 */
 	TArray<uint64> ChunkSubtractBusyBits;
-
-	/** Cell별 바운딩 박스 (빠른 충돌 체크용) */
-	TArray<FBox> CellBounds;
-
-	/** Cell 메시가 유효한지 (빌드 완료 여부) */
+	
+	/** Chunk 메시가 유효한지 (빌드 완료 여부) */
 	UPROPERTY()
 	bool bChunkMeshesValid = false;
 
@@ -705,11 +702,11 @@ public:
 	 * 에디터에서 Fracture Mode로 미리 분할해둔 GC 사용
 	 * @return 추출된 메시 개수
 	 */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh", meta = (DisplayName = "Build Cell Meshes From GC"))
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|ChunkMesh", meta = (DisplayName = "Build Chunk Meshes From GC"))
 	int32 BuildChunkMeshesFromGeometryCollection();
 
 	/** Cell 메시 유효 여부 */
-	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
+	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	bool IsChunkMeshesValid() const { return bChunkMeshesValid; }
 
 	/**
@@ -776,18 +773,14 @@ public:
 	 * @param InitialVelocity - 초기 속도 (폭발 방향)
 	 */
 	void SpawnDebrisFromCells(const TArray<int32>& DetachedCellIds, const FVector& InitialLocation, const FVector& InitialVelocity);
-
-	//[deprecated]
-	/** Cell 개수 반환 */
-	//UFUNCTION(BlueprintPure, Category="RealtimeDestructibleMesh|CellMesh")
-	//int32 GetChunkMeshCount() const { return CellMeshes.Num(); }
-	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
+	
+	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetChunkMeshCount() const { return ChunkMeshComponents.Num(); }
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	FIntVector SliceCount;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	float SliceAngleVariation = 0.3f;
 
 	/** 격자 셀 크기 (cm). 값이 작을수록 해상도가 높아지지만 성능 비용 증가 */
@@ -798,7 +791,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "0.0"))
 	float FloorHeightThreshold = 10.0f;
 
-	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
+	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
 
 
@@ -807,11 +800,11 @@ public:
 	 * SourceStatic 메쉬로부터 GC를 생성, FracturedGeometryCollection에 저장합니다.
 	 * 이후 GC가 DynamicMesh로 변환될 수 있도록 BuildCellMeshesFromGeometryCollection 메소드 호출까지 담당합니다.
 	 */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	void AutoFractureAndAssign();
 
 	/** 파괴전 Mesh의 상태로 되돌리기 */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|CellMesh")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	void RevertFracture();
 
 #endif
@@ -890,9 +883,6 @@ private:
 	TUniquePtr<FRealtimeBooleanProcessor> BooleanProcessor;
 
 	bool InitializeFromStaticMeshInternal(UStaticMesh* InMesh, bool bForce);
-
-	/** Cell 바운딩 박스 계산 */
-	FBox CalculateCellBounds(int32 CellId) const;
 
 	UDynamicMesh* CreateToolMeshFromRequest(const FRealtimeDestructionRequest& Request);
 
