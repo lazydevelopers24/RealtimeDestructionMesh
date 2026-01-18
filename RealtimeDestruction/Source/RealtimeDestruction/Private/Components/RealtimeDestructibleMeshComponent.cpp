@@ -1007,31 +1007,46 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				{
 					// 컴포넌트가 속한 고유 셀 ID 수집
 					TSet<int32> ComponentCellIds;
+
+					// 헬퍼 람다: 위치 → 셀 ID 추가
+					auto AddCellIdFromPosition = [&](const FVector& Position)
+					{
+						FVector RelativePos = Position - GridCellCache.GridOrigin;
+						FIntVector GridCoord(
+							FMath::FloorToInt(RelativePos.X / GridCellCache.CellSize.X),
+							FMath::FloorToInt(RelativePos.Y / GridCellCache.CellSize.Y),
+							FMath::FloorToInt(RelativePos.Z / GridCellCache.CellSize.Z)
+						);
+
+						if (GridCoord.X >= 0 && GridCoord.X < GridCellCache.GridSize.X &&
+							GridCoord.Y >= 0 && GridCoord.Y < GridCellCache.GridSize.Y &&
+							GridCoord.Z >= 0 && GridCoord.Z < GridCellCache.GridSize.Z)
+						{
+							ComponentCellIds.Add(GridCellCache.CoordToId(GridCoord));
+						}
+					};
+
 					for (int32 Tid : Comp.Indices)
 					{
 						if (!Mesh->IsTriangle(Tid)) continue;
 
-						// 버텍스 기반 셀 ID 계산 (삼각형이 걸친 모든 셀을 찾음)
 						FIndex3i Tri = Mesh->GetTriangle(Tid);
-						for (int32 j = 0; j < 3; ++j)
-						{
-							FVector3d Vertex = Mesh->GetVertex(Tri[j]);
-							FVector RelativePos = FVector(Vertex) - GridCellCache.GridOrigin;
-							FIntVector GridCoord(
-								FMath::FloorToInt(RelativePos.X / GridCellCache.CellSize.X),
-								FMath::FloorToInt(RelativePos.Y / GridCellCache.CellSize.Y),
-								FMath::FloorToInt(RelativePos.Z / GridCellCache.CellSize.Z)
-							);
+						FVector3d V0 = Mesh->GetVertex(Tri[0]);
+						FVector3d V1 = Mesh->GetVertex(Tri[1]);
+						FVector3d V2 = Mesh->GetVertex(Tri[2]);
 
-							// 범위 체크: 유효한 좌표만 사용
-							if (GridCoord.X >= 0 && GridCoord.X < GridCellCache.GridSize.X &&
-								GridCoord.Y >= 0 && GridCoord.Y < GridCellCache.GridSize.Y &&
-								GridCoord.Z >= 0 && GridCoord.Z < GridCellCache.GridSize.Z)
-							{
-								int32 CellId = GridCellCache.CoordToId(GridCoord);
-								ComponentCellIds.Add(CellId);
-							}
-						}
+						// 버텍스 3개 검사
+						AddCellIdFromPosition(FVector(V0));
+						AddCellIdFromPosition(FVector(V1));
+						AddCellIdFromPosition(FVector(V2));
+
+						// 삼각형 중심점 검사
+						AddCellIdFromPosition(FVector(Mesh->GetTriCentroid(Tid)));
+
+						// Edge 중점 3개 검사
+						AddCellIdFromPosition(FVector((V0 + V1) * 0.5));
+						AddCellIdFromPosition(FVector((V1 + V2) * 0.5));
+						AddCellIdFromPosition(FVector((V2 + V0) * 0.5));
 					}
 
 					TotalCellCount = ComponentCellIds.Num();
@@ -3717,14 +3732,15 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 		}
 	}
 }
+#endif // WITH_EDITOR
 
 int32 URealtimeDestructibleMeshComponent::GetMaterialIDFromFaceIndex(int32 FaceIndex)
 {
 	if (FaceIndex == INDEX_NONE)
 	{
 		return 0;
-	} 
-	 
+	}
+
 	if (UDynamicMesh* DynMesh = GetDynamicMesh())
 	{
 		const UE::Geometry::FDynamicMesh3& Mesh = DynMesh->GetMeshRef();
@@ -3738,6 +3754,7 @@ int32 URealtimeDestructibleMeshComponent::GetMaterialIDFromFaceIndex(int32 FaceI
 	return 0;
 }
 
+#if WITH_EDITOR
 void URealtimeDestructibleMeshComponent::AutoFractureAndAssign()
 {
 	// 0. 스태틱 메시 유효성 검사

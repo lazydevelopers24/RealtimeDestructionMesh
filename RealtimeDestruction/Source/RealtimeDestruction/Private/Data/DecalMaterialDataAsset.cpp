@@ -1,7 +1,5 @@
 ﻿#include "Data/DecalMaterialDataAsset.h" 
 
-#include "LandscapeRender.h"
-
 bool UDecalMaterialDataAsset::GetConfig(FName ConfigID, FName SurfaceType, int32 VariantIndex,
 	FDecalSizeConfig& OutConfig) const
 {
