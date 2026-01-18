@@ -1611,7 +1611,7 @@ bool URealtimeDestructibleMeshComponent::BuildMeshSnapshot(FRealtimeMeshSnapshot
 	Out.Payload.Empty();
 
 	// Cell 메시 모드
-	if (bUseCellMeshes && ChunkMeshComponents.Num() > 0)
+	if (ChunkMeshComponents.Num() > 0)
 	{
 		FMemoryWriter Ar(Out.Payload);
 
@@ -2546,7 +2546,7 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 {
 	Super::OnRegister();
 
-	if (bUseCellMeshes && ChunkMeshComponents.Num() > 0)
+	if (ChunkMeshComponents.Num() > 0)
 	{
 		return;  // Cell 모드에서 이미 셀이 있으면 스킵
 	}
@@ -2610,7 +2610,7 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 	}
 
 	// 기존 저장 데이터 호환: CellMeshComponents가 있으면 bCellMeshesValid 자동 설정
-	if (!bCellMeshesValid && ChunkMeshComponents.Num() > 1)
+	if (!bChunkMeshesValid && ChunkMeshComponents.Num() > 1)
 	{
 		int32 ValidCount = 0;
 		for (const auto& Cell : ChunkMeshComponents)
@@ -2619,15 +2619,14 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 		}
 		if (ValidCount > 0)
 		{
-			bCellMeshesValid = true;
-			bUseCellMeshes = true;
+			bChunkMeshesValid = true;
 			UE_LOG(LogTemp, Log, TEXT("BeginPlay: Auto-detected %d valid CellMeshComponents, setting bCellMeshesValid=true"), ValidCount);
 		}
 	}
 
 	// 런타임 시작 시 GridCell 상태 로그
 	UE_LOG(LogTemp, Log, TEXT("BeginPlay: bCellMeshesValid=%d, GridCellCache.IsValid=%d, CellMeshComponents.Num=%d"),
-		bCellMeshesValid, GridCellCache.IsValid(), ChunkMeshComponents.Num());
+		bChunkMeshesValid, GridCellCache.IsValid(), ChunkMeshComponents.Num());
 
 	/** Culstering 관련 초기화 */
 	if (bEnableClustering)
@@ -3332,13 +3331,12 @@ int32 URealtimeDestructibleMeshComponent::BuildChunkMeshesFromGeometryCollection
 		UE_LOG(LogTemp, Log, TEXT("BuildCellMeshesFromGeometryCollection: Copied %d materials from GeometryCollection"), GCMaterials.Num());
 	}
 
-	bCellMeshesValid = ExtractedCount > 0;
-	bUseCellMeshes = bCellMeshesValid;
+	bChunkMeshesValid = ExtractedCount > 0;
 
 	UE_LOG(LogTemp, Log, TEXT("BuildCellMeshesFromGeometryCollection: Extracted %d meshes from %d transforms"),
 		ExtractedCount, NumTransforms);
 
-	if (bCellMeshesValid)
+	if (bChunkMeshesValid)
 	{
 		if (UDynamicMesh* ParentMesh = GetDynamicMesh())
 		{
@@ -3677,10 +3675,9 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 		: NAME_None;
 
 	// FracturedGeometryCollection 또는 bUseCellMeshes가 변경되면 자동 빌드
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, FracturedGeometryCollection) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, bUseCellMeshes))
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, FracturedGeometryCollection))
 	{
-		if (bUseCellMeshes && FracturedGeometryCollection)
+		if (FracturedGeometryCollection)
 		{
 			int32 CellCount = BuildChunkMeshesFromGeometryCollection();
 			UE_LOG(LogTemp, Log, TEXT("PostEditChangeProperty: Auto-built %d cell meshes"), CellCount);
@@ -3702,7 +3699,7 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 		ChunkMeshComponents.Empty();
 		CellBounds.Empty();
 		GridToChunkMap.Reset();
-		bCellMeshesValid = false;
+		bChunkMeshesValid = false;
 
 		// 새 메시로 초기화
 		bIsInitialized = false;  // 강제 재초기화
@@ -3938,7 +3935,7 @@ void URealtimeDestructibleMeshComponent::AutoFractureAndAssign()
 void URealtimeDestructibleMeshComponent::RevertFracture()
 {
 	// Cell로 나눠진 상태가 아니면  return
-	if (!bUseCellMeshes && ChunkMeshComponents.Num() == 0)
+	if (ChunkMeshComponents.Num() == 0)
 	{
 		return;
 	}
@@ -3962,11 +3959,8 @@ void URealtimeDestructibleMeshComponent::RevertFracture()
 	ChunkMeshComponents.Empty();
 	CellBounds.Empty();
 	GridToChunkMap.Reset();
-
-	// 원본 메쉬로 데이터 리셋
-	bUseCellMeshes = false;
-	bCellMeshesValid = false;
-	//SetVisibility(true, true);
+	
+	bChunkMeshesValid = false;
 	SetSourceMeshEnabled(true);
 
 	ResetToSourceMesh();
@@ -3988,29 +3982,28 @@ FRealtimeDestructibleMeshComponentInstanceData::FRealtimeDestructibleMeshCompone
 	{
 		SavedSourceStaticMesh = SourceComponent->SourceStaticMesh;
 		bSavedIsInitialized = SourceComponent->bIsInitialized;
-		bSavedUseCellMeshes = SourceComponent->bUseCellMeshes;
-		bSavedCellMeshesValid = SourceComponent->bCellMeshesValid;
+		bSavedChunkMeshesValid = SourceComponent->bChunkMeshesValid;
 
 		SavedSliceCount = SourceComponent->SliceCount;
 		bSavedShowGridCellDebug = SourceComponent->bShowGridCellDebug;
 
 		// 포인터 대신 컴포넌트 이름을 저장 (PIE 복제 시 이름으로 찾기 위함)
-		SavedCellComponentNames.Empty();
-		SavedCellComponentNames.Reserve(SourceComponent->ChunkMeshComponents.Num());
+		SavedChunkComponentNames.Empty();
+		SavedChunkComponentNames.Reserve(SourceComponent->ChunkMeshComponents.Num());
 		for (const UDynamicMeshComponent* Cell : SourceComponent->ChunkMeshComponents)
 		{
 			if (Cell)
 			{
-				SavedCellComponentNames.Add(Cell->GetName());
+				SavedChunkComponentNames.Add(Cell->GetName());
 			}
 			else
 			{
-				SavedCellComponentNames.Add(FString());  // nullptr은 빈 문자열로
+				SavedChunkComponentNames.Add(FString());  // nullptr은 빈 문자열로
 			}
 		}
 
-		UE_LOG(LogTemp, Warning, TEXT("InstanceData Constructor: bUseCellMeshes=%d, bCellMeshesValid=%d, CellMeshComponents.Num=%d, SavedNames.Num=%d"),
-			bSavedUseCellMeshes, bSavedCellMeshesValid, SourceComponent->ChunkMeshComponents.Num(), SavedCellComponentNames.Num());
+		UE_LOG(LogTemp, Warning, TEXT("InstanceData Constructor: bCellMeshesValid=%d, CellMeshComponents.Num=%d, SavedNames.Num=%d"),
+			bSavedChunkMeshesValid, SourceComponent->ChunkMeshComponents.Num(), SavedChunkComponentNames.Num());
 	}
 }
 
@@ -4018,8 +4011,8 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 	UActorComponent* Component,
 	const ECacheApplyPhase CacheApplyPhase)
 {
-	UE_LOG(LogTemp, Warning, TEXT("ApplyToComponent: Phase=%d, bSavedUseCellMeshes=%d, bSavedCellMeshesValid=%d, SavedCellNames.Num=%d"),
-		(int32)CacheApplyPhase, bSavedUseCellMeshes, bSavedCellMeshesValid, SavedCellComponentNames.Num());
+	UE_LOG(LogTemp, Warning, TEXT("ApplyToComponent: Phase=%d, bSavedCellMeshesValid=%d, SavedCellNames.Num=%d"),
+		(int32)CacheApplyPhase, bSavedChunkMeshesValid, SavedChunkComponentNames.Num());
 
 	Super::ApplyToComponent(Component, CacheApplyPhase);
 
@@ -4031,23 +4024,22 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 		DestructComp->bShowGridCellDebug = bSavedShowGridCellDebug;
 
 		// Cell 모드 상태 복원
-		DestructComp->bUseCellMeshes = bSavedUseCellMeshes;
-		DestructComp->bCellMeshesValid = bSavedCellMeshesValid;
+		DestructComp->bChunkMeshesValid = bSavedChunkMeshesValid;
 
 		// PIE에서는 포인터가 유효하지 않으므로 이름으로 복제된 컴포넌트를 찾음
 		if (AActor* Owner = DestructComp->GetOwner())
 		{
 			DestructComp->ChunkMeshComponents.Empty();
-			DestructComp->ChunkMeshComponents.SetNum(SavedCellComponentNames.Num());
+			DestructComp->ChunkMeshComponents.SetNum(SavedChunkComponentNames.Num());
 
 			TArray<UDynamicMeshComponent*> FoundCells;
 			Owner->GetComponents<UDynamicMeshComponent>(FoundCells);
 
 			UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: Found %d DynamicMeshComponents in owner"), FoundCells.Num());
 
-			for (int32 i = 0; i < SavedCellComponentNames.Num(); ++i)
+			for (int32 i = 0; i < SavedChunkComponentNames.Num(); ++i)
 			{
-				if (SavedCellComponentNames[i].IsEmpty())
+				if (SavedChunkComponentNames[i].IsEmpty())
 				{
 					// 인덱스 0은 루트(nullptr)
 					DestructComp->ChunkMeshComponents[i] = nullptr;
@@ -4058,7 +4050,7 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 				UDynamicMeshComponent* FoundCell = nullptr;
 				for (UDynamicMeshComponent* Cell : FoundCells)
 				{
-					if (Cell && Cell->GetName() == SavedCellComponentNames[i])
+					if (Cell && Cell->GetName() == SavedChunkComponentNames[i])
 					{
 						FoundCell = Cell;
 						break;
@@ -4073,11 +4065,11 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 					{
 						FoundCell->AttachToComponent(DestructComp, FAttachmentTransformRules::KeepRelativeTransform);
 					}
-					UE_LOG(LogTemp, Verbose, TEXT("ApplyToComponent: Found Cell_%d by name: %s"), i, *SavedCellComponentNames[i]);
+					UE_LOG(LogTemp, Verbose, TEXT("ApplyToComponent: Found Cell_%d by name: %s"), i, *SavedChunkComponentNames[i]);
 				}
 				else
 				{
-					UE_LOG(LogTemp, Warning, TEXT("ApplyToComponent: Could not find Cell by name: %s"), *SavedCellComponentNames[i]);
+					UE_LOG(LogTemp, Warning, TEXT("ApplyToComponent: Could not find Cell by name: %s"), *SavedChunkComponentNames[i]);
 					DestructComp->ChunkMeshComponents[i] = nullptr;
 				}
 			}
@@ -4086,7 +4078,7 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 		}
 
 		// Cell 모드가 활성화 되어 있고, 유효하면
-		if (bSavedUseCellMeshes && bSavedCellMeshesValid)
+		if (bSavedChunkMeshesValid)
 		{
 			// GridToChunkMap은 저장되지 않으므로 재구축
 			DestructComp->BuildGridToChunkMap();

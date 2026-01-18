@@ -210,10 +210,7 @@ public:
 	bool bSavedIsInitialized = false;
 
 	UPROPERTY()
-	bool bSavedUseCellMeshes = false;
-
-	UPROPERTY()
-	bool bSavedCellMeshesValid = false;
+	bool bSavedChunkMeshesValid = false;
 
 	UPROPERTY()
 	FIntVector SavedSliceCount = FIntVector::ZeroValue;
@@ -223,7 +220,7 @@ public:
 
 	UPROPERTY()
 	// 포인터 대신 컴포넌트 이름 저장 (PIE 복제 시 이름으로 찾기 위함)
-	TArray<FString> SavedCellComponentNames;
+	TArray<FString> SavedChunkComponentNames;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -647,17 +644,12 @@ protected:
 	// Cell Mesh Parallel Processing
 	//////////////////////////////////////////////////////////////////////////
 
-	/** Cell별 메시 분리 모드 활성화 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
-	bool bUseCellMeshes = false;
-
 	/**
 	 * 에디터에서 미리 분할해둔 GeometryCollection
 	 * Fracture Mode로 생성한 GC를 여기에 할당하면
 	 * 런타임에 DynamicMesh로 추출하여 사용
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh",
-		meta = (EditCondition = "bUseCellMeshes"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
 	TObjectPtr<UGeometryCollection> FracturedGeometryCollection;
 
 	/** Cell별 분리된 메시 */
@@ -682,7 +674,7 @@ protected:
 
 	/** Cell 메시가 유효한지 (빌드 완료 여부) */
 	UPROPERTY()
-	bool bCellMeshesValid = false;
+	bool bChunkMeshesValid = false;
 
 	/** 격자 셀 캐시 (에디터에서 생성, 런타임 변경 없음) */
 	UPROPERTY()
@@ -718,7 +710,7 @@ public:
 
 	/** Cell 메시 유효 여부 */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
-	bool IsCellMeshesValid() const { return bCellMeshesValid; }
+	bool IsChunkMeshesValid() const { return bChunkMeshesValid; }
 
 	/**
 	 * 격자 셀 캐시 생성 (에디터에서 호출)
@@ -788,9 +780,9 @@ public:
 	//[deprecated]
 	/** Cell 개수 반환 */
 	//UFUNCTION(BlueprintPure, Category="RealtimeDestructibleMesh|CellMesh")
-	//int32 GetCellMeshCount() const { return CellMeshes.Num(); }
+	//int32 GetChunkMeshCount() const { return CellMeshes.Num(); }
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|CellMesh")
-	int32 GetCellMeshCount() const { return ChunkMeshComponents.Num(); }
+	int32 GetChunkMeshCount() const { return ChunkMeshComponents.Num(); }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|CellMesh")
 	FIntVector SliceCount;
