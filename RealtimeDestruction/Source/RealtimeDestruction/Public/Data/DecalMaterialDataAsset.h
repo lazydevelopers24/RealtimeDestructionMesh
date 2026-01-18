@@ -1,7 +1,8 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"
+#include "Engine/DataAsset.h"  
+#include "Components/DestructionTypes.h" 
 #include "DecalMaterialDataAsset.generated.h"
  
 USTRUCT(BlueprintType)
@@ -29,6 +30,9 @@ struct REALTIMEDESTRUCTION_API FDecalSizeConfig
 	bool bRandomDecalRotation = true;
 	
 	// Tool Shape
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	EDestructionToolShape ToolShape = EDestructionToolShape::Cylinder;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float CylinderRadius = 10.0f;
 

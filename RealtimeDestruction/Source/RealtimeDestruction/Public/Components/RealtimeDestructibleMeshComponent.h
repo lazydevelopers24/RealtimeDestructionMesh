@@ -137,6 +137,10 @@ struct REALTIMEDESTRUCTION_API FCompactDestructionOp
 	UPROPERTY()
 	FVector_NetQuantize10 ImpactNormal;
 
+	// Tool 의 중심점 
+	UPROPERTY()
+	FVector_NetQuantize10 ToolCenterWorld;
+
 	// 총알 진행 방향 (직렬화 시 ~6 bytes)
 	UPROPERTY()
 	FVector_NetQuantize10 ToolForwardVector;

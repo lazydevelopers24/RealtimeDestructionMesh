@@ -19,7 +19,8 @@
 #include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "HAL/PlatformTime.h"
 #include "DynamicMesh/DynamicMesh3.h"
-#include "Misc/MessageDialog.h" 
+#include "Misc/MessageDialog.h"  
+#include "Engine/OverlapResult.h"
 
 #if WITH_EDITOR
 #include "PropertyEditorModule.h"
@@ -193,11 +194,13 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 		{
 			bool bShapeChanged = (CylinderRadius != OverrideDecalConfig.CylinderRadius ||
 				CylinderHeight != OverrideDecalConfig.CylinderHeight ||
-				SphereRadius != OverrideDecalConfig.SphereRadius);
+				SphereRadius != OverrideDecalConfig.SphereRadius ||
+				ToolShape != OverrideDecalConfig.ToolShape);
 
 			CylinderRadius = OverrideDecalConfig.CylinderRadius;
 			CylinderHeight = OverrideDecalConfig.CylinderHeight;
 			SphereRadius = OverrideDecalConfig.SphereRadius;
+			ToolShape = OverrideDecalConfig.ToolShape;
 
 			if (bShapeChanged && ToolMeshPtr.IsValid())
 			{
@@ -356,14 +359,217 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 		}
 	}
 	
-		// 이벤트 브로드캐스트
-		OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
+	// 이벤트 브로드캐스트
+	OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
 	
-		// 투사체 제거
-		if (bDestroyOnHit)
+	// 투사체 제거
+	if (bDestroyOnHit)
+	{
+		Owner->Destroy();
+	}
+}
+
+void UDestructionProjectileComponent::ProcessSphereDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FVector& ExplosionCenter)
+{
+	if (!DestructComp)
+	{
+		return;
+	}
+	AActor* Owner = GetOwner();
+
+	if (!Owner)
+	{
+		return;
+	}
+
+	// DataAsset에서 Tool Shape 로드 
+	FName SurfaceTypeForShape = DestructComp->SurfaceType;
+	bool bHasDecalConfig = false;
+	FDecalSizeConfig OverrideDecalConfig;
+
+	if (DecalDataAsset)
+	{
+		bHasDecalConfig = DecalDataAsset->GetConfigRandom(DecalConfigID, SurfaceTypeForShape, OverrideDecalConfig);
+		if (bHasDecalConfig)
 		{
-			Owner->Destroy();
+			bool bShapeChanged = (SphereRadius != OverrideDecalConfig.SphereRadius);
+
+			SphereRadius = OverrideDecalConfig.SphereRadius;
+
+			if (bShapeChanged)
+			{
+				ToolMeshPtr.Reset();
+				EnsureToolMesh();
+			}
+
 		}
+	}
+
+	// 영향받는 청크 찾기
+	TArray<int32> AffectedChunks;
+	AffectedChunks.Reserve(32);
+
+	DestructComp->FindChunksInRadius(ExplosionCenter, SphereRadius * 1.2f, AffectedChunks, false);
+
+	if (AffectedChunks.Num() == 0)
+	{
+		return;
+	}
+
+	if (!ToolMeshPtr.IsValid())
+	{
+		if (!EnsureToolMesh())
+		{
+			return;
+		}
+	}
+
+	// 네트워크 컴포넌트
+	APawn* InstigatorPawn = Owner->GetInstigator();
+	APlayerController* PC = InstigatorPawn ? Cast<APlayerController>(InstigatorPawn->GetController()) : nullptr;
+	UDestructionNetworkComponent* NetworkComp = PC ? PC->FindComponentByClass<UDestructionNetworkComponent>() : nullptr;
+
+	// GameInstance Subsystem에 Decal Data Assset 설정
+	if (DecalDataAsset)
+	{
+		if (UGameInstance* GI = GetWorld()->GetGameInstance())
+		{
+			if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+			{
+				if (!Subsystem->GetDecalDataAsset())
+				{
+					Subsystem->SetDecalDataAsset(DecalDataAsset); 
+				}
+			}
+		}
+	}
+	//  구  
+	TArray<FHitResult> HitResults;
+
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(Owner);
+	QueryParams.bReturnFaceIndex = true;
+	 
+	// 타겟 액터 방향 계산
+	AActor* TargetActor = DestructComp->GetOwner();
+	FVector DirToTarget = (TargetActor->GetActorLocation() - ExplosionCenter).GetSafeNormal();
+
+
+	bool bFoundAny = GetWorld()->SweepMultiByChannel(
+		HitResults, // 결과 배열
+		ExplosionCenter,
+		ExplosionCenter + DirToTarget ,
+		FQuat::Identity,
+		ECC_Visibility,
+		FCollisionShape::MakeSphere(SphereRadius * 1.1f),
+		QueryParams
+	);
+	  
+	FVector DecalImpactPoint = FVector::ZeroVector;
+	FVector DecalImpactNormal = FVector::ZeroVector;
+	FVector DirectionToActor = FVector::ZeroVector;
+
+	bool bHitFound = false;
+	float ClosestDistance = FLT_MAX;
+
+	if (bFoundAny)
+	{
+		// 발견된 모든 충돌체 중에서, 인자로 받은 DestructComp와 일치하는 것을 찾음
+		for (const FHitResult& Hit : HitResults)
+		{
+			// 최단거리 비교
+			if (Hit.GetActor() == TargetActor)
+			{ 
+				float Dist = FVector::DistSquared(ExplosionCenter, Hit.ImpactPoint);
+				if (Dist < ClosestDistance)
+				{
+					ClosestDistance = Dist;
+					DecalImpactPoint = Hit.ImpactPoint;
+					DecalImpactNormal = Hit.ImpactNormal;
+					DirectionToActor = (DecalImpactPoint - ExplosionCenter).GetSafeNormal();
+					bHitFound = true;
+				}
+			}
+			 
+		}
+	} 
+	 
+	if (!bHitFound)
+	{
+		return;
+	}
+	 
+
+	// 청크 루프 (Boolean Subtract)
+	bool bFirstChunk = true; 
+	
+	DrawDebugSphere(GetWorld(), ExplosionCenter, SphereRadius, 24, FColor::Red, true, -1.0f, 0, 3.0f);
+	DrawDebugPoint(GetWorld(), ExplosionCenter, 20.0f, FColor::Yellow, true, -1.0f); 
+	DrawDebugLine(GetWorld(), ExplosionCenter, DecalImpactPoint, FColor::Green, true, -1.0f);
+	for (int32 ChunkIndex : AffectedChunks)
+	{
+		UDynamicMeshComponent* ChunkComp = DestructComp->GetChunkMeshComponent(ChunkIndex);
+		if (!ChunkComp || !ChunkComp->IsVisible()) continue;
+
+		// ======= 청크 중 전체 파괴 로직 ======= 
+		FBoxSphereBounds ChunkBounds = ChunkComp->Bounds;
+		float DistToCenter = FVector::Dist(ExplosionCenter, ChunkBounds.Origin);
+		float ChunkRadius = ChunkBounds.SphereRadius;
+		bool bFullyContained = (DistToCenter + ChunkRadius) <= SphereRadius;
+
+		if (bFullyContained)
+		{
+			// Boolean 연산 없이 바로 삭제
+			//ChunkComp->SetVisibility(false);
+			//ChunkComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			//// 또는 DestructComp->RemoveChunk(ChunkIndex); 
+			//UE_LOG(LogTemp, Warning, TEXT("Delete entire chunk!!"));
+
+			continue;
+		}
+
+		// ======= 청크 중 일부 파괴 로직 ======= 
+		FRealtimeDestructionRequest Request;
+		Request.ToolCenterWorld = ExplosionCenter;
+
+		// 데칼용 데이터는 위에서 미리 구한 것 사용
+		Request.ImpactPoint = DecalImpactPoint;
+		Request.ImpactNormal = DecalImpactNormal;
+		Request.ToolForwardVector = DirectionToActor;
+
+		Request.ChunkIndex = ChunkIndex;
+		Request.ToolMeshPtr = ToolMeshPtr;
+		Request.ToolShape = EDestructionToolShape::Sphere;
+		Request.Depth = SphereRadius;
+
+		// 첫 번째 청크에만 데칼
+		Request.bSpawnDecal = bFirstChunk;
+		bFirstChunk = false;
+
+		Request.SurfaceType = DestructComp->SurfaceType;
+		Request.DecalConfigID = DecalConfigID;
+		Request.ShapeParams.Radius = SphereRadius;
+		Request.ShapeParams.StepsPhi = SphereStepsPhi;
+		Request.ShapeParams.StepsTheta = SphereStepsTheta;
+
+		if (bHasDecalConfig)
+		{
+			Request.DecalSize = OverrideDecalConfig.DecalSize;
+			Request.DecalLocationOffset = OverrideDecalConfig.LocationOffset;
+			Request.DecalRotationOffset = OverrideDecalConfig.RotationOffset;
+			Request.DecalMaterial = OverrideDecalConfig.DecalMaterial;
+			Request.bRandomRotation = OverrideDecalConfig.bRandomDecalRotation;
+		}
+
+		if (NetworkComp)
+		{
+			NetworkComp->RequestDestruction(DestructComp, Request);
+		}
+		else
+		{
+			DestructComp->RequestDestruction(Request);
+		}
+	}
 }
 
 bool UDestructionProjectileComponent::EnsureToolMesh()
@@ -458,10 +664,14 @@ void UDestructionProjectileComponent::SetShapeParameters(FRealtimeDestructionReq
 		break;
 		}
 	case EDestructionToolShape::Sphere:
-		{
+	{
 		OutRequest.Depth = SphereRadius;
+		if (OutRequest.ToolCenterWorld.IsZero())
+		{
 			OutRequest.ToolCenterWorld = OutRequest.ImpactPoint + (OutRequest.ToolForwardVector * PenetrationOffset);
+
 		}
+	}
 		break;
 	default:
 		{
@@ -617,6 +827,104 @@ void UDestructionProjectileComponent::RequestDestructionManual(const FHitResult&
 			GetOwner()->Destroy();
 		}
 	}
+}
+
+void UDestructionProjectileComponent::RequestDestructionAtLocation(const FVector& Center)
+{
+	AActor* Owner = GetOwner();
+
+	if (!Owner)
+	{
+		return;
+	} 
+
+	// 기존 ToolShape 저장 ( At Location은 Sphere만 지원 ) 
+	EDestructionToolShape PreviousShape = ToolShape;
+	ToolShape = EDestructionToolShape::Sphere; 
+	bool bNeedRecreate = (PreviousShape != ToolShape); 
+
+	// 메시 재생성 필요하면 Reset
+	if (bNeedRecreate && ToolMeshPtr.IsValid())
+	{
+		ToolMeshPtr.Reset();
+	}
+
+	// ToolMesh 생성 (없거나 Reset된 경우)
+	if (!ToolMeshPtr.IsValid())
+	{
+		if (!EnsureToolMesh())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("RequestDestructionAtLocation: Tool mesh is invalid."));
+			return;
+		}
+	}
+
+	if (DecalDataAsset)
+	{
+		FDecalSizeConfig OverrideConfig;
+		// SurfaceType 없으므로 Default 사용
+		if (DecalDataAsset->GetConfigRandom(DecalConfigID, FName("Default"), OverrideConfig))
+		{
+			bool bRadiusChanged = (SphereRadius != OverrideConfig.SphereRadius);
+
+			SphereRadius = OverrideConfig.SphereRadius;
+
+			if (bRadiusChanged && ToolMeshPtr.IsValid())
+			{
+				ToolMeshPtr.Reset();
+			}
+		}
+	}
+	// SphereOverlap 으로 주변 DestructibleMesh 찾기
+	TArray<FOverlapResult> OverlapResults;
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(Owner); // 본인은 빼고 
+	 
+	float OverlapRadius = SphereRadius; 
+	bool bHasOverlap = GetWorld()->OverlapMultiByChannel(
+		OverlapResults,
+		Center,
+		FQuat::Identity,
+		ECC_Visibility,
+		FCollisionShape::MakeSphere(OverlapRadius),
+		QueryParams
+	);
+	 
+	if (!bHasOverlap)
+	{
+		return;
+	} 
+
+	// Overlap 된 Actor에서 DestructibleMeshComponent 찾기
+	TSet<URealtimeDestructibleMeshComponent*> ProcessedComps; // 중복 처리 방지
+	UE_LOG(LogTemp, Warning, TEXT("OverlapResults Text : %d"), OverlapResults.Num());
+
+	// 사실 상 Chunk 수집 
+	for (const FOverlapResult& Result : OverlapResults)
+	{
+		AActor* HitActor = Result.GetActor();
+
+		if (!HitActor)
+		{ 
+			continue;
+		}
+
+		URealtimeDestructibleMeshComponent* DestructComp =
+			HitActor->FindComponentByClass<URealtimeDestructibleMeshComponent>();
+
+		if (!DestructComp || ProcessedComps.Contains(DestructComp))
+		{
+			continue;
+		}
+
+		ProcessedComps.Add(DestructComp);
+		ProcessSphereDestructionRequestForChunk(DestructComp, Center);
+	}
+
+	// 이벤트 브로드 캐스트
+	OnDestructionRequested.Broadcast(Center, FVector::UpVector);
+
+	// 투사체 제거는 사용자가 처리해야 됨
 }
 
 void UDestructionProjectileComponent::GetCalculateDecalSize(FName SurfaceType, FVector& LocationOffset, FRotator& RotatorOffset,

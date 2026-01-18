@@ -20,6 +20,10 @@
 #include "HAL/CriticalSection.h"
 
 TRACE_DECLARE_INT_COUNTER(Counter_ThreadCount, TEXT("RealtimeDestruction/ThreadCount"));
+TRACE_DECLARE_INT_COUNTER(Counter_UnionThreadCount, TEXT("RealtimeDestruction/UnionThreadCount"));
+TRACE_DECLARE_INT_COUNTER(Counter_SubtractWorkerCount, TEXT("RealtimeDestruction/SubtractThreadCount"));
+TRACE_DECLARE_INT_COUNTER(Counter_ActiveChunks, TEXT("RealtimeDestruction/ActiveChunks"));
+
 TRACE_DECLARE_FLOAT_COUNTER(Counter_Throughput, TEXT("RealtimeDestruction/Throughput"));
 TRACE_DECLARE_INT_COUNTER(Counter_BatchSize, TEXT("RealtimeDestruction/BatchSize"));
 TRACE_DECLARE_FLOAT_COUNTER(Counter_WorkTime, TEXT("RealtimeDestruction/WorkTimeMs"));
@@ -197,31 +201,57 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 	FTransform ComponentToWorld = Op.TargetMesh->GetComponentTransform();
 
 	const FVector LocalImpact = ComponentToWorld.InverseTransformPosition(Operation.Request.ToolCenterWorld);
-	const FVector LocalNormal = ComponentToWorld.InverseTransformVector(Operation.Request.ToolForwardVector).
-		GetSafeNormal();
-	FQuat ToolRotation = FRotationMatrix::MakeFromZ(LocalNormal).ToQuat(); // cylinder, cone일 경우 방향에 맞게 회전이 필요하다.
 
+	
 	// 스케일 보정: 회전된 좌표계 기준으로 각 축의 스케일 계산
 	const FVector ComponentScale = ComponentToWorld.GetScale3D();
 
-	// ToolMesh의 로컬 축이 회전 후 컴포넌트 로컬 좌표계에서 향하는 방향
-	FVector ToolAxisX = ToolRotation.RotateVector(FVector::XAxisVector);
-	FVector ToolAxisY = ToolRotation.RotateVector(FVector::YAxisVector);
-	FVector ToolAxisZ = ToolRotation.RotateVector(FVector::ZAxisVector);
+	switch (Operation.Request.ToolShape)
+	{
+	case EDestructionToolShape::Cylinder:
+	{
+		const FVector LocalNormal = ComponentToWorld.InverseTransformVector(Operation.Request.ToolForwardVector).GetSafeNormal();
+		FQuat ToolRotation = FRotationMatrix::MakeFromZ(LocalNormal).ToQuat(); // cylinder, cone일 경우 방향에 맞게 회전이 필요하다.
 
-	// 각 축이 ComponentScale에 의해 늘어나는 양 계산
-	FVector ScaledAxisX = ToolAxisX * ComponentScale;
-	FVector ScaledAxisY = ToolAxisY * ComponentScale;
-	FVector ScaledAxisZ = ToolAxisZ * ComponentScale;
+		// ToolMesh의 로컬 축이 회전 후 컴포넌트 로컬 좌표계에서 향하는 방향
+		FVector ToolAxisX = ToolRotation.RotateVector(FVector::XAxisVector);
+		FVector ToolAxisY = ToolRotation.RotateVector(FVector::YAxisVector);
+		FVector ToolAxisZ = ToolRotation.RotateVector(FVector::ZAxisVector);
 
-	// 보정 스케일: 원래 크기로 되돌리기
-	FVector AdjustedScale = FVector(
-		1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisX.Size()),
-		1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisY.Size()),
-		1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisZ.Size())
-	);
 
-	Op.ToolTransform = FTransform(ToolRotation, LocalImpact, AdjustedScale);
+		// 각 축이 ComponentScale에 의해 늘어나는 양 계산
+		FVector ScaledAxisX = ToolAxisX * ComponentScale;
+		FVector ScaledAxisY = ToolAxisY * ComponentScale;
+		FVector ScaledAxisZ = ToolAxisZ * ComponentScale;
+
+
+		// 보정 스케일: 원래 크기로 되돌리기
+		FVector AdjustedScale = FVector(
+			1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisX.Size()),
+			1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisY.Size()),
+			1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisZ.Size())
+		);
+
+		Op.ToolTransform = FTransform(ToolRotation, LocalImpact, AdjustedScale);
+	}
+		break;
+		
+	case EDestructionToolShape::Sphere:
+	{ 
+		  FVector InverseScale = FVector(
+          1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.X),
+          1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.Y),
+          1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.Z)
+      );
+
+      Op.ToolTransform = FTransform(FQuat::Identity, LocalImpact, InverseScale);
+	}
+		break;
+
+	default:
+		break;
+	}
+	  
 
 	Op.bIsPenetration = Operation.bIsPenetration;
 	Op.TemporaryDecal = TemporaryDecal;
@@ -260,6 +290,12 @@ void FRealtimeBooleanProcessor::EnqueueRemaining(FBulletHole&& Operation)
 
 void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBatch, int32 BatchID, int32 ChunkIndex)
 {
+	int32 CurrentWorkers = ActiveUnionWorkers.fetch_add(1) + 1;
+
+	TRACE_COUNTER_SET(Counter_UnionThreadCount, CurrentWorkers);
+	TRACE_COUNTER_SET(Counter_BatchSize, InBatch.Num());
+		
+
 	if (!OwnerComponent.IsValid() || ChunkIndex == INDEX_NONE)
 	{
 		ActiveUnionWorkers.fetch_sub(1);
@@ -382,11 +418,12 @@ void FRealtimeBooleanProcessor::StartUnionWorkerForChunk(FBulletHoleBatch&& InBa
 			                  // Chunk별 Queue에 Enqueue
 			                  Processor->ChunkUnionResultsQueues[ChunkIndex]->Enqueue(MoveTemp(Result));
 
-			                  // Subtract Worker 트리거
-			                  Processor->TriggerSubtractWorkerForChunk(ChunkIndex);
-		                  }
-		                  ActiveUnionWorkers.fetch_sub(1);
-	                  });
+				// Subtract Worker 트리거
+				Processor->TriggerSubtractWorkerForChunk(ChunkIndex);
+			} 
+			ActiveUnionWorkers.fetch_sub(1);
+			TRACE_COUNTER_SET(Counter_UnionThreadCount, ActiveUnionWorkers.load());
+		}); 
 }
 
 
@@ -405,7 +442,7 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 	// GT로 전환하여 비트마스크 체크 (비트 연산은 GT에서만)
 	AsyncTask(ENamedThreads::GameThread,
 		[OwnerComponent = OwnerComponent, LifeTimeToken = LifeTime, ChunkIndex, this]()
-		{ 
+		{
 			if (!OwnerComponent.IsValid())
 			{
 				return;
@@ -424,14 +461,25 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 				return;
 			}
 
+			TRACE_COUNTER_SET(Counter_ActiveChunks, ++ActiveChunkCount);
+				
+
 			// Subtract Worker 시작 (비동기)
 			UE::Tasks::Launch(
 				UE_SOURCE_LOCATION,
 				[OwnerComponent, LifeTimeToken, ChunkIndex, Processor]() mutable
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE("MultiWorker_Subtract");
+
+					static std::atomic<int32> ActiveSubtractWorkers{ 0 };
+					int32 CurrentWorkers = ActiveSubtractWorkers.fetch_add(1) + 1;
+					TRACE_COUNTER_SET(Counter_SubtractWorkerCount, CurrentWorkers);
+
 					auto SafeClearBusy = [&]()
 						{
+							ActiveSubtractWorkers.fetch_sub(1);
+							TRACE_COUNTER_SET(Counter_SubtractWorkerCount, ActiveSubtractWorkers.load()); 
+
 							AsyncTask(ENamedThreads::GameThread, [OwnerComponent, ChunkIndex]()
 								{
 									if (OwnerComponent.IsValid())
@@ -614,6 +662,9 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 						}
 					}
 
+					ActiveSubtractWorkers.fetch_sub(1);
+					TRACE_COUNTER_SET(Counter_SubtractWorkerCount, ActiveSubtractWorkers.load());
+
 					// GT에서 비트 해제 및 다음 트리거
 					AsyncTask(ENamedThreads::GameThread,
 						[OwnerComponent, LifeTimeToken, ChunkIndex]()
@@ -622,20 +673,27 @@ void FRealtimeBooleanProcessor::TriggerSubtractWorkerForChunk(int32 ChunkIndex)
 							 
 							if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 							{
+								ActiveSubtractWorkers.fetch_sub(1);   
+								TRACE_COUNTER_SET(Counter_SubtractWorkerCount, ActiveSubtractWorkers.load());   
 								return;
 							}
 							FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
 							if (!Processor)
 							{
+								ActiveSubtractWorkers.fetch_sub(1);
+								TRACE_COUNTER_SET(Counter_SubtractWorkerCount, ActiveSubtractWorkers.load());
 								return;
 							}
 
 							OwnerComponent->ClearChunkBusy(ChunkIndex);
+							TRACE_COUNTER_SET(Counter_ActiveChunks, --Processor->ActiveChunkCount);
 							// Queue에 남은 것 처리
 							if (ChunkIndex < Processor->ChunkUnionResultsQueues.Num() &&
 								Processor->ChunkUnionResultsQueues[ChunkIndex] &&
 								!Processor->ChunkUnionResultsQueues[ChunkIndex]->IsEmpty())
 							{
+								ActiveSubtractWorkers.fetch_sub(1);   
+								TRACE_COUNTER_SET(Counter_SubtractWorkerCount, ActiveSubtractWorkers.load());   
 								Processor->TriggerSubtractWorkerForChunk(ChunkIndex);
 							}
 
@@ -827,7 +885,7 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 		FBulletHole Op;
 		while (Queue.Dequeue(Op))
 		{
-			auto TargetMesh = Op.TargetMesh.Get();
+			auto TargetMesh = Op.TargetMesh.Get(); 
 			if (!TargetMesh)
 			{
 				continue;
@@ -1053,6 +1111,19 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				FDynamicMesh3 ResultMesh;
 				{
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Subtract");
+					if (CombinedToolMesh.TriangleCount() > 0)
+					{
+						FAxisAlignedBox3d ToolBounds = CombinedToolMesh.GetBounds();
+						FAxisAlignedBox3d TargetBounds = WorkMesh.GetBounds();
+
+						UE_LOG(LogTemp, Warning, TEXT("[Boolean Debug] CombinedToolMesh Center: %s, Size: %s"),
+							*FVector(ToolBounds.Center()).ToString(),
+							*FVector(ToolBounds.Extents()).ToString());
+
+						UE_LOG(LogTemp, Warning, TEXT("[Boolean Debug] WorkMesh(Target) Center: %s, Size: %s"),
+							*FVector(TargetBounds.Center()).ToString(),
+							*FVector(TargetBounds.Extents()).ToString());
+					}
 					bSubtractSuccess = ApplyMeshBooleanAsync(&WorkMesh, &CombinedToolMesh, &ResultMesh,
 					                                         EGeometryScriptBooleanOperation::Subtract, Options);
 				}

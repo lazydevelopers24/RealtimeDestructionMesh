@@ -1408,6 +1408,7 @@ void SDecalSizeEditorWindow::SaveToDataAsset()
 	Config->CylinderRadius = Viewport->GetPreviewCylinderRadius();
 	Config->CylinderHeight = Viewport->GetPreviewCylinderHeight();
 	Config->SphereRadius = Viewport->GetPreviewSphereRadius();
+	Config->ToolShape = Viewport->GetPreviewToolShape(); 
 	 
 #if WITH_EDITORONLY_DATA
 	// Tool Shape
@@ -1452,6 +1453,7 @@ void SDecalSizeEditorWindow::LoadConfigFromDataAsset(FName ConfigID, FName Surfa
 		Viewport->SetPreviewCylinderRadius(Config.CylinderRadius);
 		Viewport->SetPreviewCylinderHeight(Config.CylinderHeight);
 		Viewport->SetPreviewSphere(Config.SphereRadius);
+		Viewport->SetPreviewToolShape(Config.ToolShape);
 	}
 
 #if WITH_EDITOR
@@ -1625,6 +1627,7 @@ void SDecalSizeEditorWindow::OnSurfaceTypeSelected(FName SelectedSurfaceType)
 			Viewport->SetPreviewCylinderRadius(Config->CylinderRadius);
 			Viewport->SetPreviewCylinderHeight(Config->CylinderHeight);
 			Viewport->SetPreviewSphere(Config->SphereRadius);
+			Viewport->SetPreviewToolShape(Config->ToolShape);
 
 			Viewport->RefreshPreview();
 		}
@@ -1657,7 +1660,7 @@ void SDecalSizeEditorWindow::OnVariantIndexSelected(int32 SelectedIndex)
 		Viewport->SetPreviewCylinderRadius(Config->CylinderRadius);
 		Viewport->SetPreviewCylinderHeight(Config->CylinderHeight);
 		Viewport->SetPreviewSphere(Config->SphereRadius);
-
+		Viewport->SetPreviewToolShape(Config->ToolShape);
 		Viewport->RefreshPreview(); 
 	}
 }

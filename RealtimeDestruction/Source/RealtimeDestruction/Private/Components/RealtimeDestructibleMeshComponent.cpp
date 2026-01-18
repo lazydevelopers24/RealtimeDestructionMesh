@@ -52,6 +52,8 @@ FCompactDestructionOp FCompactDestructionOp::Compress(const FRealtimeDestruction
 	Compact.ImpactNormal = Request.ImpactNormal;
 	Compact.ToolForwardVector = Request.ToolForwardVector;
 
+	Compact.ToolCenterWorld = Request.ToolCenterWorld;
+
 	// 반지름 압축 (1-255 cm) - ShapeParams에서 가져옴
 	Compact.Radius = static_cast<uint8>(FMath::Clamp(Request.ShapeParams.Radius, 1.0f, 255.0f));
 
@@ -115,7 +117,8 @@ FRealtimeDestructionRequest FCompactDestructionOp::Decompress() const
 		break;
 	case EDestructionToolShape::Sphere:
 		// Sphere: ImpactPoint에서 Forward 방향으로 PenetrationOffset 만큼 이동
-		Request.ToolCenterWorld = Request.ImpactPoint + (Request.ToolForwardVector * PenetrationOffset);
+		//Request.ToolCenterWorld = Request.ImpactPoint + (Request.ToolForwardVector * PenetrationOffset);
+		Request.ToolCenterWorld = ToolCenterWorld;
 		break;
 	default:
 		Request.ToolCenterWorld = Request.ImpactPoint - (Request.ToolForwardVector * SurfaceMargin);
@@ -338,9 +341,18 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 		FRealtimeDestructionRequest PenetrationRequest = Request;
 
 		/*
-		 * deprecated_realdestruction
-		 */
-		// Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
+		//	 * deprecated_realdestruction
+		//	 */
+		//	 // Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
+		//	FVector Offset = Request.ImpactNormal * (-AdjustPenetration * 0.5f);
+		//	PenetrationRequest.ImpactPoint = Request.ImpactPoint + Offset;
+		//	PenetrationRequest.ToolShape = EDestructionToolShape::Cylinder;
+		//	deprecated_realdestruction
+		// */
+		//// Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
+		//	* deprecated_realdestruction
+		//	*/
+		//	// Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
 		FVector Offset = Request.ImpactNormal * (-AdjustPenetration * 0.5f);
 		PenetrationRequest.ImpactPoint = Request.ImpactPoint + Offset;
 		PenetrationRequest.ToolShape = EDestructionToolShape::Cylinder;
@@ -2431,6 +2443,38 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
+
+	// 1. 하드웨어 정보
+	int32 PhysicalCores = FPlatformMisc::NumberOfCores();
+	int32 LogicalCores = FPlatformMisc::NumberOfCoresIncludingHyperthreads();
+
+	// 2. 언리얼 Worker 스레드 수 (엔진이 권장하는 수)
+	int32 RecommendedWorkers = FPlatformMisc::NumberOfWorkerThreadsToSpawn();
+
+	// 3. 실제 TaskGraph Worker 스레드 수
+	int32 TaskGraphWorkers = FTaskGraphInterface::Get().GetNumWorkerThreads();
+
+	// 4. 언리얼 필수 스레드 (대략적인 수치)
+	// - Game Thread: 1
+	// - Render Thread: 1 (RHI Thread 포함 시 +1)
+	// - Audio Thread: 1
+	// - Stats Thread: 1 (WITH_STATS일 때)
+	// - 기타 시스템 스레드: 2~3
+	const int32 ReservedThreads = 4;  // GT, RT, Audio, 기타
+
+	// 5. 실제 가용 Worker 스레드
+	int32 AvailableWorkers = FMath::Max(0, RecommendedWorkers);
+
+	UE_LOG(LogTemp, Warning, TEXT("========== Thread Info =========="));
+	UE_LOG(LogTemp, Warning, TEXT("Physical Cores: %d"), PhysicalCores);
+	UE_LOG(LogTemp, Warning, TEXT("Logical Cores (with HT): %d"), LogicalCores);
+	UE_LOG(LogTemp, Warning, TEXT("Reserved Threads (GT/RT/Audio/etc): ~%d"), ReservedThreads);
+	UE_LOG(LogTemp, Warning, TEXT("TaskGraph Workers: %d"), TaskGraphWorkers);
+	UE_LOG(LogTemp, Warning, TEXT("Recommended Workers: %d"), RecommendedWorkers);
+	UE_LOG(LogTemp, Warning, TEXT("Available for Boolean: %d"), AvailableWorkers);
+
+
+	UE_LOG(LogTemp, Warning, TEXT("================================="));
 	UE_LOG(LogTemp, Display, TEXT("CellMesh Num %d"), ChunkMeshComponents.Num());
 
 	// 멀티플레이어 동기화를 위해 Owner Actor의 Replication 활성화
@@ -2775,7 +2819,41 @@ UDecalComponent* URealtimeDestructibleMeshComponent::SpawnTemporaryDecal(const F
 	//Request에 decalSize가 없을 때, 기본값 사용
 	//Decal->DecalSize = Request.DecalSize.IsNearlyZero() ? DecalSize : Request.DecalSize;
 	Decal->DecalSize = Request.DecalSize.IsNearlyZero() ? SizeToUse : Request.DecalSize;
-	
+
+	// Sphere타입은 폭발 중심과의 거리에 반비례하여 데칼 크기 조절
+	// (projectile 도 동일하게 처리해도 무방)
+	if (Request.ToolShape == EDestructionToolShape::Sphere)
+	{
+		const float Distance = FVector::Dist(Request.ToolCenterWorld, Request.ImpactPoint);
+		const float MaxRadius = Request.ShapeParams.Radius;
+
+		if (MaxRadius > KINDA_SMALL_NUMBER)
+		{
+
+			if (Distance < MaxRadius)
+			{  
+				const float Ratio = Distance / MaxRadius;
+				const float SphericalScale = FMath::Sqrt(1.0f - (Ratio * Ratio));
+
+				if (SphericalScale <= 0.1f)
+				{
+					return nullptr;
+				}
+
+				FVector OriginalSize = Decal->DecalSize;
+				Decal->DecalSize = FVector(
+					OriginalSize.X,                      // 깊이는 유지
+					OriginalSize.Y * SphericalScale,     // 너비 스케일
+					OriginalSize.Z * SphericalScale      // 높이 스케일
+				);
+			}
+			else
+			{
+				return nullptr;
+			}
+		}
+	}
+
 	//데칼이 항상 보이도록 처리 
 	Decal->SetFadeScreenSize(0.0f);
 	Decal->FadeStartDelay = 0.0f;

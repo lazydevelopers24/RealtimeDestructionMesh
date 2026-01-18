@@ -240,6 +240,10 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category="Destruction")
 	void RequestDestructionManual(const FHitResult& HitResult);
+
+	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	void RequestDestructionAtLocation(const FVector& Center);
+
 public:
 	UFUNCTION(BlueprintCallable, Category="Destruction|Decal")
 	void GetCalculateDecalSize(FName SurfaceType,FVector& LocationOffset,  FRotator& RotatorOffset, FVector& SizeOffset) const;
@@ -257,6 +261,7 @@ protected:
 		UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
 
 	void ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit);
+	void ProcessSphereDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FVector& ExplosionCenter );
 
 private:
 	bool EnsureToolMesh();

@@ -328,10 +328,11 @@ private:
 	FBooleanThreadTuner AutoTuner;
 
 	bool bEnableMultiWorkers;
+	std::atomic<int32> ActiveChunkCount{ 0 };
 
 	/** 현재 Union 작업 중인 Worker 수 */
 	std::atomic<int32> ActiveUnionWorkers{ 0 };
-
+	
 	/** Subtract 작업 중 플래그 (Subtract는 한 곳에서만 실행 ) */
 	std::atomic<bool> bSubtractInProgress{ false };
 
