@@ -53,6 +53,14 @@ public:
 		float AnchorHeightThreshold,
 		FGridCellCache& OutCache);
 
+	static void SetAnchorsByFinitePlane(
+		const FTransform& PlaneTransform,
+		const FTransform& MeshTransform,
+		FGridCellCache& OutCache,
+		bool bIsEraser);
+
+	static void ClearAllAnchors(FGridCellCache& OutCache);
+
 private:
 	/**
 	 * 바운딩 박스로부터 격자 크기 계산

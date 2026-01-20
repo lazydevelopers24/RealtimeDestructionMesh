@@ -35,6 +35,7 @@
 #include "StructuralIntegrity/CellDestructionSystem.h"
 #include "Data/DecalMaterialDataAsset.h"
 #include "ProceduralMeshComponent.h"
+#include "Selection.h"
 #include "Net/UnrealNetwork.h"
 #include "Subsystems/DestructionGameInstanceSubsystem.h"
 
@@ -327,7 +328,7 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 	//UpdateCellStateFromDestruction(Request);
 	FDestructionResult Result = DestructionLogic(Request);
 	PendingDestructionResults.Add(Result);
-
+	
 	UDecalComponent* TempDecal = nullptr;
 	if (!bIsPenetration && Request.bSpawnDecal)
 	{
@@ -339,7 +340,7 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 	{
 		FRealtimeDestructionRequest PenetrationRequest = Request;
 
-		//	 // Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
+		//	// Cylinder 중심을 벽 중간으로 이동 (Normal 반대 방향으로 Height/2만큼)
 		FVector Offset = Request.ImpactNormal * (-AdjustPenetration * 0.5f);
 		PenetrationRequest.ImpactPoint = Request.ImpactPoint + Offset;
 		PenetrationRequest.ToolShape = EDestructionToolShape::Cylinder;
@@ -367,7 +368,7 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 //=============================================================================
 
 void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request)
-{ 
+{
 	// ===== 로그 추가 =====
 	static int32 CallCount = 0;
 	CallCount++;
@@ -439,10 +440,10 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 			CellState);
 	}
 
-	if (!DestructionResult.HasAnyDestruction())
-	{
+		if (!DestructionResult.HasAnyDestruction())
+		{
 		return DestructionResult; // 파괴 없음
-	}
+		}
 
 	// 가장 최근 파괴된 셀 디버그 시각화를 위한 정보 갱신
 	if (DestructionResult.NewlyDestroyedCells.Num() > 0)
@@ -451,8 +452,8 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 		RecentDirectDestroyedCellIds.Append(DestructionResult.NewlyDestroyedCells);
 	}
 
-	// 히스토리에 추가 (NarrowPhase용)
-	DestructionInputHistory.Add(QuantizedInput);
+		// 히스토리에 추가 (NarrowPhase용)
+		DestructionInputHistory.Add(QuantizedInput);
 
 	// 파괴된 셀 데이터 전송 (클라이언트 CellState 동기화)
 	if (DestructionResult.NewlyDestroyedCells.Num() > 0)
@@ -500,16 +501,16 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 			DestructionResult.DeadSubCellCount,
 			DestructionResult.NewlyDestroyedCells.Num(),
 			DestructionResult.AffectedCells.Num());
-	}
+		}
 	else
-	{
+		{
 		UE_LOG(LogTemp, Log, TEXT("[Update Cell State] Phase 1: %d cells directly destroyed"),
 			DestructionResult.NewlyDestroyedCells.Num());
-	}
+			}
 
 	//=====================================================================
 // Phase 1.5: SuperCell 상태 업데이트 (bEnableSuperCell이 true일 때만)
-		//=====================================================================
+	//=====================================================================
 	if (bEnableSupercell && SupercellCache.IsValid())
 	{
 		// 영향받은 Cell들이 속한 SuperCell을 Broken으로 마킹
@@ -528,15 +529,15 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 			const ENetMode CurrentNetMode = GetWorld()->GetNetMode();
 			if (CurrentNetMode == NM_Standalone)
 			{
-				for (const auto& SubCellPair : DestructionResult.NewlyDeadSubCells)
+			for (const auto& SubCellPair : DestructionResult.NewlyDeadSubCells)
+			{
+				for (int32 SubCellId : SubCellPair.Value.Values)
 				{
-					for (int32 SubCellId : SubCellPair.Value.Values)
-					{
-						SupercellCache.OnSubCellDestroyed(SubCellPair.Key, SubCellId);
-					}
+					SupercellCache.OnSubCellDestroyed(SubCellPair.Key, SubCellId);
 				}
 			}
 		}
+	}
 	}
 
 	return DestructionResult;
@@ -616,7 +617,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		//=====================================================================
 		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
 		UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachSignal SENDING - %d groups detached"),
-			NewDetachedGroups.Num());
+		       NewDetachedGroups.Num());
 		MulticastDetachSignal();
 
 		// 서버: 분리된 셀의 삼각형 삭제
@@ -658,7 +659,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction [Server]: %d cells disconnected (%d groups)"),
-			DisconnectedCells.Num(), NewDetachedGroups.Num());
+		       DisconnectedCells.Num(), NewDetachedGroups.Num());
 	}
 	else
 	{
@@ -668,7 +669,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 
 	
 		for (const FDestructionResult& Result : AllResults)
-		{
+	{
 			ProcessDecalRemoval(Result);
 		}
 
@@ -677,8 +678,8 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 			FDestructionResult DetachResult;
 			DetachResult.NewlyDestroyedCells = DisconnectedCells.Array();
 
-		ProcessDecalRemoval(DetachResult);
-	}
+			ProcessDecalRemoval(DetachResult);
+		}
 
 	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction Complete: Destroyed=%d, DetachedGroups=%d"),
 		CellState.DestroyedCells.Num(), CellState.DetachedGroups.Num());
@@ -1869,7 +1870,7 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 								// 디버그: 스폰 위치에 파란 구체 표시
 								if (bShowCellSpawnPosition)
 								{
-									DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+								DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
 								}
 							}
 						}
@@ -2110,7 +2111,7 @@ void URealtimeDestructibleMeshComponent::MulticastDestroyedCells_Implementation(
 		if (bEnableSupercell && SupercellCache.IsValid())
 		{
 			SupercellCache.OnCellDestroyed(CellId);
-		}
+	}
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Client] MulticastDestroyedCells: +%d cells, Total=%d"),
@@ -2212,15 +2213,15 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 
 		// DecalMaterial 조회 (네트워크로 전송된 ConfigID로 로컬에서 조회)
 		// 1. 컴포넌트에 설정된 DecalDataAsset 사용
-		// 2. 없으면 GameInstanceSubsystem에서 조회 
+		// 2. 없으면 GameInstanceSubsystem에서 조회
 		UDecalMaterialDataAsset* DataAssetToUse = nullptr;
-		if (UGameInstance* GI = GetWorld()->GetGameInstance())
-		{
-			if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+			if (UGameInstance* GI = GetWorld()->GetGameInstance())
 			{
+				if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+				{
 				DataAssetToUse = Subsystem->FindDataAssetByConfigID(ModifiableRequest.DecalConfigID);
+				}
 			}
-		}
 
 
 		if (DataAssetToUse && ModifiableRequest.bSpawnDecal)
@@ -3187,7 +3188,7 @@ void URealtimeDestructibleMeshComponent::SetSourceMeshEnabled(bool bEnabled)
 	RecreatePhysicsState();
 }
 
-void URealtimeDestructibleMeshComponent::RegisterDecalToSubCells(UDecalComponent* Decal, const FRealtimeDestructionRequest& Request)
+void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* Decal, const FRealtimeDestructionRequest& Request)
 {
 	if (!Decal)
 	{
@@ -3216,7 +3217,6 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToSubCells(UDecalComponent
 	FVector EffectiveExtent = Decal->DecalSize;
 	EffectiveExtent.X = TargetDepth * 0.5f;
 
-	// 박스의 중심점을 밀어넣어서 [0 ~ Depth]범위 탐색
 	FVector SearchCenter = Decal->GetComponentLocation();
 
 	FCellDestructionShape DecalShape;
@@ -3231,7 +3231,7 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToSubCells(UDecalComponent
 	FBox ThinLocalBox(-EffectiveExtent, EffectiveExtent);
 	FTransform ThinBoxTransform(Decal->GetComponentQuat(), SearchCenter);
 	FBox ThinWorldBox = ThinLocalBox.TransformBy(ThinBoxTransform);
-	
+
 	const FTransform& MeshTransform = GetComponentTransform();
 	TArray<int32> CandidateCells = GridCellCache.GetCellsInAABB(ThinWorldBox, MeshTransform);
 	
@@ -3247,8 +3247,8 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToSubCells(UDecalComponent
 		if (QuantizedDecal.IntersectsOBB(CellWorldOBB))
 		{
 			NewDecal.CoveredCells.Add(CellID);
-			}
-			}
+		}
+	}
 
 	if (NewDecal.CoveredCells.Num() > 0)
 	{
@@ -3283,10 +3283,10 @@ void URealtimeDestructibleMeshComponent::ProcessDecalRemoval(const FDestructionR
 			int32 CellID = Decal.CoveredCells[CoverageIndex];
 
 			if (Result.NewlyDestroyedCells.Contains(CellID))
-				{
-					Decal.CoveredCells.RemoveAtSwap(CoverageIndex);
-				}
+			{
+				Decal.CoveredCells.RemoveAtSwap(CoverageIndex);
 			}
+		}
 
 		if (Decal.CoveredCells.Num() == 0)
 		{
@@ -3316,7 +3316,7 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 
 void URealtimeDestructibleMeshComponent::InitializeComponent()
 {
-	Super::InitializeComponent();
+	Super::InitializeComponent(); 
 }
 void URealtimeDestructibleMeshComponent::BeginPlay()
 {
@@ -3643,7 +3643,7 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 				FRealtimeDestructionRequest Request = CompactOp.Decompress();
 				FDestructionResult Result = DestructionLogic(Request);
 				AllResults.Add(Result);
-			} 
+			}
 
 			DisconnectedCellStateLogic(AllResults);
 
@@ -3691,7 +3691,7 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 		// 데디서버: Multicast는 자기 자신에게 실행 안 됨, GridCell 판정만 직접 처리
 		UWorld* WorldNonCompact = GetWorld();
 		if (WorldNonCompact && WorldNonCompact->GetNetMode() == NM_DedicatedServer)
-		{ 
+		{
 			UE_LOG(LogTemp, Warning, TEXT(""));
 			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH START] Ops=%d (non-compact) ##########"), PendingServerBatchOpsCompact.Num());
 
@@ -3819,7 +3819,7 @@ UDecalComponent* URealtimeDestructibleMeshComponent::SpawnTemporaryDecal(const F
 	
 	Decal->RegisterComponent();
 
-	RegisterDecalToSubCells(Decal, Request);
+	RegisterDecalToCells(Decal, Request);
 
 	return Decal;
 }
@@ -3961,7 +3961,7 @@ int32 URealtimeDestructibleMeshComponent::BuildChunkMeshesFromGeometryCollection
 		UDynamicMeshComponent* CellComp = NewObject<UDynamicMeshComponent>(
 			GetOwner(),
 			UDynamicMeshComponent::StaticClass(),
-			*FString::Printf(TEXT("Cell_%d"), TransformIdx),
+			*FString::Printf(TEXT("Chunk_%d"), TransformIdx),
 			RF_Transactional
 		);
 
@@ -4368,7 +4368,7 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		GridCellCache.GridSize.X, GridCellCache.GridSize.Y, GridCellCache.GridSize.Z,
 		GridCellCache.GetValidCellCount(),
 		GridCellCache.GetAnchorCount());
-
+	
 	// 5. SuperCell 캐시 빌드 (BFS 최적화용)
 	SupercellCache.BuildFromGridCache(GridCellCache);
 
@@ -5035,6 +5035,221 @@ void URealtimeDestructibleMeshComponent::ClientDestructionRejected_Implementatio
 	// 블루프린트/C++ 이벤트 브로드캐스트
 	OnDestructionRejected.Broadcast(static_cast<int32>(Sequence), Reason);
 }
+
+#if WITH_EDITOR
+void URealtimeDestructibleMeshComponent::AddAnchorPlane()
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+	
+	FString PlaneName = FString::Printf(TEXT("AnchorPlane_%d"), AnchorPlanes.Num());
+	UStaticMeshComponent* NewPlane = NewObject<UStaticMeshComponent>(Owner, *PlaneName);
+
+	UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMesh)
+	{
+		NewPlane->SetStaticMesh(CubeMesh);
+	}
+
+	NewPlane->SetHiddenInGame(true);
+	NewPlane->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	NewPlane->SetCastShadow(false);
+	NewPlane->bIsEditorOnly = true;
+
+	NewPlane->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+
+	NewPlane->SetRelativeScale3D(FVector(0.01f, 1.0f, 1.0f));
+	
+	float MeshTopZ = 50.0f;
+	float Margin = 20.0f;
+
+	if (SourceStaticMesh)
+	{
+		FBox AssetBox = SourceStaticMesh->GetBoundingBox();
+		MeshTopZ = AssetBox.Max.Z;
+		Margin = FMath::Max(20.0f, (AssetBox.Max.Z - AssetBox.Min.Z) * 0.1f);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("AddAnchorPlane: SourceStaticMesh is NULL! Using default height."));
+	}
+
+	float StackingOffset = AnchorPlanes.Num() * (Margin * 0.5f);
+
+	FVector NewLocation = FVector(0.0f, 0.0f, MeshTopZ + Margin + StackingOffset);
+	NewPlane->SetRelativeLocation(NewLocation);	
+	
+	NewPlane->RegisterComponent();
+
+	AnchorPlanes.Add(NewPlane);
+
+	GetOwner()->AddInstanceComponent(NewPlane);
+	GetOwner()->Modify();
+    
+	UE_LOG(LogTemp, Log, TEXT("Added Anchor Plane. Current Count: %d"), AnchorPlanes.Num());
+}
+
+void URealtimeDestructibleMeshComponent::AddEraserPlane()
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+	
+	FString PlaneName = FString::Printf(TEXT("EraserPlate_%d"), EraserPlanes.Num());
+	UStaticMeshComponent* NewEraser = NewObject<UStaticMeshComponent>(GetOwner(), *PlaneName);
+
+	UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMesh)
+	{
+		NewEraser->SetStaticMesh(CubeMesh);
+	}
+
+	UMaterialInterface* RedMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineDebugMaterials/LevelColorationLitMaterial.LevelColorationLitMaterial"));
+	if (RedMat)
+	{
+		NewEraser->SetMaterial(0, RedMat);
+	}
+
+	NewEraser->SetHiddenInGame(true);
+	NewEraser->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	NewEraser->SetCastShadow(false);
+	NewEraser->bIsEditorOnly = true;
+
+	NewEraser->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+
+	NewEraser->SetRelativeScale3D(FVector(0.01f, 1.0f, 1.0f));
+
+	float MeshTopZ = 50.0f;
+	float Margin = 20.0f;
+
+	if (SourceStaticMesh)
+	{
+		FBox AssetBox = SourceStaticMesh->GetBoundingBox();
+		MeshTopZ = AssetBox.Max.Z;
+		Margin = FMath::Max(20.0f, (AssetBox.Max.Z - AssetBox.Min.Z) * 0.1f);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("AddEraserPlane: SourceStaticMesh is NULL! Using default height."));
+	}
+
+	float StackingOffset = AnchorPlanes.Num() * (Margin * 0.5f);
+
+	FVector NewLocation = FVector(0.0f, 0.0f, MeshTopZ + Margin + StackingOffset);
+	NewEraser->SetRelativeLocation(NewLocation);	
+	
+	NewEraser->RegisterComponent();
+
+	EraserPlanes.Add(NewEraser);
+
+	GetOwner()->AddInstanceComponent(NewEraser);
+	GetOwner()->Modify();
+    
+	UE_LOG(LogTemp, Log, TEXT("Added Eraser Plane. Current Count: %d"), AnchorPlanes.Num());
+}
+
+void URealtimeDestructibleMeshComponent::ApplyAnchorPlane()
+{
+	if (GridCellCache.GetTotalCellCount() == 0)
+	{
+		BuildGridCells();
+	}
+
+	int32 AddedCount = 0;
+	
+
+	
+
+	const FTransform& MeshTransform = GetComponentTransform();
+
+	// 추가 모드
+	for (UStaticMeshComponent* Plane : AnchorPlanes)
+	{
+		if (IsValid(Plane))
+		{
+			FGridCellBuilder::SetAnchorsByFinitePlane(
+				Plane->GetComponentTransform(),
+				MeshTransform,
+				GridCellCache,
+				false
+			);
+
+			AddedCount++;
+		}
+	}
+
+	int32 EraserCount = 0;
+	// 지우기 모드
+	for (UStaticMeshComponent* Eraser : EraserPlanes)
+	{
+		if (IsValid(Eraser))
+		{
+			FGridCellBuilder::SetAnchorsByFinitePlane(
+				Eraser->GetComponentTransform(),
+				MeshTransform,
+				GridCellCache,
+				true // bIsEraser = true (삭제)
+			);
+
+			EraserCount++;
+		}
+	}
+
+	if (AddedCount > 0)
+	{
+		MarkPackageDirty(); // 에셋 변경 표시
+		UE_LOG(LogTemp, Log, TEXT("Applied %d, Removed %d Anchor Planes!"), AddedCount, EraserCount);
+	}
+}
+
+
+void URealtimeDestructibleMeshComponent::ClearAnchorPlanes()
+{
+	for(auto Plane: AnchorPlanes)
+	{
+		if (IsValid(Plane))
+		{
+			Plane->DestroyComponent();
+		}
+	}
+	AnchorPlanes.Empty();
+
+	for(auto Plane: EraserPlanes)
+	{
+		if (IsValid(Plane))
+		{
+			Plane->DestroyComponent();
+		}
+	}
+	EraserPlanes.Empty();
+	
+	GetOwner()->Modify();
+	UE_LOG(LogTemp, Log, TEXT("All Anchor Planes cleared."));
+}
+
+void URealtimeDestructibleMeshComponent::ClearAllAnchorCells()
+{
+	if (GridCellCache.GetTotalCellCount() == 0)
+	{
+		return;
+	}
+
+	GEditor->BeginTransaction(FText::FromString("Clear All Anchor Cells"));
+
+	FGridCellBuilder::ClearAllAnchors(GridCellCache);
+
+	MarkPackageDirty();
+
+	GEditor->EndTransaction();
+
+	UE_LOG(LogTemp, Warning, TEXT("All Anchor Cells have been CLEARED. (Planes are still there)"));
+}
+#endif
 
 TStructOnScope<FActorComponentInstanceData> URealtimeDestructibleMeshComponent::GetComponentInstanceData() const
 {

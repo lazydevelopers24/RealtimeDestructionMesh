@@ -162,6 +162,76 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 	return true;
 }
 
+void FGridCellBuilder::SetAnchorsByFinitePlane(
+	const FTransform& PlaneTransform,
+	const FTransform& MeshTransform,
+	FGridCellCache& OutCache,
+	bool bIsEraser)
+{
+	const int32 TotalCells = OutCache.GetTotalCellCount();
+	int32 AddedAnchors = 0;
+
+	const float CubeExtent = 50.0f;
+
+	for (int32 CellId = 0; CellId < TotalCells; ++CellId)
+	{
+		if (!OutCache.GetCellExists(CellId))
+		{
+			continue;
+		}
+
+		FVector LocalPos = OutCache.IdToLocalCenter(CellId);
+		FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
+
+		FVector CubeSpacePos = PlaneTransform.InverseTransformPosition(WorldPos);
+
+		bool bInsideY = FMath::Abs(CubeSpacePos.Y) <= CubeExtent;
+		bool bInsideZ = FMath::Abs(CubeSpacePos.Z) <= CubeExtent;
+
+		if (bInsideY && bInsideZ)
+		{
+			if (CubeSpacePos.X > 0.0f) 
+			{
+				if (bIsEraser)
+				{
+					if (OutCache.GetCellExists(CellId))
+					{
+						OutCache.SetCellIsAnchor(CellId, false);
+					}
+				}
+				else
+				{
+					if (!OutCache.GetCellIsAnchor(CellId))
+					{
+						OutCache.SetCellIsAnchor(CellId, true);
+						AddedAnchors++;
+					}
+				}
+				
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("SetAnchorsByFinitePlane: %d cells marked as Anchor."), AddedAnchors);
+}
+
+void FGridCellBuilder::ClearAllAnchors(FGridCellCache& OutCache)
+{
+	const int32 TotalCells = OutCache.GetTotalCellCount();
+	int32 ClearedCount = 0;
+
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		if (OutCache.GetCellExists(i) && OutCache.GetCellIsAnchor(i))
+		{
+			OutCache.SetCellIsAnchor(i, false);
+			ClearedCount++;
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("ClearAllAnchors: %d cells reset."), ClearedCount);
+}
+
 //=============================================================================
 // Private Methods
 //=============================================================================
