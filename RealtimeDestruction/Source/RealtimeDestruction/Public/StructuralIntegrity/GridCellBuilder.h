@@ -107,6 +107,11 @@ private:
 		const UBodySetup* BodySetup,
 		FGridCellCache& OutCache);
 
+	/** StaticMesh의 실제 삼각형 기반 복셀화 */
+	static void VoxelizeWithTriangles(
+		const UStaticMesh* SourceMesh,
+		FGridCellCache& OutCache);
+	
 	/**
 	 * 점이 Convex Hull 내부에 있는지 판단
 	 */

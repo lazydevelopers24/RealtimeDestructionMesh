@@ -80,22 +80,23 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	// 3. 비트필드 초기화 (0으로 초기화됨)
 	OutCache.InitializeBitfields();
 
-	// 4. Collision 기반 복셀화 (우선순위: Convex > Box > Sphere > Capsule > BoundingBox)
-	UBodySetup* BodySetup = SourceMesh->GetBodySetup();
-	if (BodySetup)
-	{
-		VoxelizeWithCollision(BodySetup, OutCache);
-	}
-	else
-	{
-		// BodySetup 없으면 바운딩 박스로 채우기
-		UE_LOG(LogTemp, Warning, TEXT("FGridCellBuilder: No BodySetup, filling bounding box"));
-		for (int32 i = 0; i < TotalCells; i++)
-		{
-			OutCache.SetCellExists(i, true);
-			OutCache.RegisterValidCell(i);
-		}
-	}
+	// // 4. Collision 기반 복셀화 (우선순위: Convex > Box > Sphere > Capsule > BoundingBox)
+	// UBodySetup* BodySetup = SourceMesh->GetBodySetup();
+	// if (BodySetup)
+	// {
+	// 	VoxelizeWithCollision(BodySetup, OutCache);
+	// }
+	// else
+	// {
+	// 	// BodySetup 없으면 바운딩 박스로 채우기
+	// 	UE_LOG(LogTemp, Warning, TEXT("FGridCellBuilder: No BodySetup, filling bounding box"));
+	// 	for (int32 i = 0; i < TotalCells; i++)
+	// 	{
+	// 		OutCache.SetCellExists(i, true);
+	// 		OutCache.RegisterValidCell(i);
+	// 	}
+	// }
+	 VoxelizeWithTriangles(SourceMesh, OutCache);
 
 	// 6. 인접 관계 계산
 	CalculateNeighbors(OutCache);
@@ -358,6 +359,95 @@ void FGridCellBuilder::VoxelizeWithConvex(
 	VoxelizeWithCollision(BodySetup, OutCache);
 }
 
+
+  void FGridCellBuilder::VoxelizeWithTriangles(
+      const UStaticMesh* SourceMesh,
+      FGridCellCache& OutCache)
+  {
+      // 1. MeshDescription 가져오기 (LOD 0)
+      const FMeshDescription* MeshDesc = SourceMesh->GetMeshDescription(0);
+
+      if (!MeshDesc)
+      {
+          // MeshDescription 없으면 바운딩 박스로 채우기 (fallback)
+          const int32 TotalCells = OutCache.GetTotalCellCount();
+          for (int32 i = 0; i < TotalCells; i++)
+          {
+              OutCache.SetCellExists(i, true);
+              OutCache.RegisterValidCell(i);
+          }
+          return;
+      }
+
+      // 2. 정점 위치 Attribute 가져오기
+      FStaticMeshConstAttributes Attributes(*MeshDesc);
+      TVertexAttributesConstRef<FVector3f> VertexPositions =
+          Attributes.GetVertexPositions();
+
+      // 3. 모든 삼각형 순회
+      for (const FTriangleID TriID : MeshDesc->Triangles().GetElementIDs())
+      {
+          // 삼각형의 3개 정점 인덱스 가져오기
+          TArrayView<const FVertexID> TriVertices =
+              MeshDesc->GetTriangleVertices(TriID);
+
+          // 3개 정점 좌표
+          const FVector V0 = FVector(VertexPositions[TriVertices[0]]);
+          const FVector V1 = FVector(VertexPositions[TriVertices[1]]);
+          const FVector V2 = FVector(VertexPositions[TriVertices[2]]);
+
+          // 4. 삼각형의 AABB 계산
+          FVector TriMin, TriMax;
+          TriMin.X = FMath::Min3(V0.X, V1.X, V2.X);
+          TriMin.Y = FMath::Min3(V0.Y, V1.Y, V2.Y);
+          TriMin.Z = FMath::Min3(V0.Z, V1.Z, V2.Z);
+          TriMax.X = FMath::Max3(V0.X, V1.X, V2.X);
+          TriMax.Y = FMath::Max3(V0.Y, V1.Y, V2.Y);
+          TriMax.Z = FMath::Max3(V0.Z, V1.Z, V2.Z);
+
+          // 5. 삼각형 AABB가 걸치는 셀 범위 계산
+          const int32 MinCellX = FMath::Clamp(
+              FMath::FloorToInt((TriMin.X - OutCache.GridOrigin.X) / OutCache.CellSize.X),
+              0, OutCache.GridSize.X - 1);
+          const int32 MinCellY = FMath::Clamp(
+              FMath::FloorToInt((TriMin.Y - OutCache.GridOrigin.Y) / OutCache.CellSize.Y),
+              0, OutCache.GridSize.Y - 1);
+          const int32 MinCellZ = FMath::Clamp(
+              FMath::FloorToInt((TriMin.Z - OutCache.GridOrigin.Z) / OutCache.CellSize.Z),
+              0, OutCache.GridSize.Z - 1);
+
+          const int32 MaxCellX = FMath::Clamp(
+              FMath::FloorToInt((TriMax.X - OutCache.GridOrigin.X) / OutCache.CellSize.X),
+              0, OutCache.GridSize.X - 1);
+          const int32 MaxCellY = FMath::Clamp(
+              FMath::FloorToInt((TriMax.Y - OutCache.GridOrigin.Y) / OutCache.CellSize.Y),
+              0, OutCache.GridSize.Y - 1);
+          const int32 MaxCellZ = FMath::Clamp(
+              FMath::FloorToInt((TriMax.Z - OutCache.GridOrigin.Z) / OutCache.CellSize.Z),
+              0, OutCache.GridSize.Z - 1);
+
+          // 6. 해당 범위의 모든 셀을 유효하게 설정
+          for (int32 Z = MinCellZ; Z <= MaxCellZ; Z++)
+          {
+              for (int32 Y = MinCellY; Y <= MaxCellY; Y++)
+              {
+                  for (int32 X = MinCellX; X <= MaxCellX; X++)
+                  {
+                      const int32 CellId = OutCache.CoordToId(X, Y, Z);
+
+                      if (!OutCache.GetCellExists(CellId))
+                      {
+                          OutCache.SetCellExists(CellId, true);
+                          OutCache.RegisterValidCell(CellId);
+                      }
+                  }
+              }
+          }
+      }
+
+      UE_LOG(LogTemp, Log, TEXT("VoxelizeWithTriangles: Valid cells = %d"),
+          OutCache.GetValidCellCount());
+}
 bool FGridCellBuilder::IsPointInsideConvex(
 	const FKConvexElem& ConvexElem,
 	const FVector& Point)
