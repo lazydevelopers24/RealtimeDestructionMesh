@@ -814,7 +814,8 @@ public:
 	 * @param Request - 파괴 요청 정보
 	 */
 	void UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request);
-
+	FDestructionResult DestructionLogic(const FRealtimeDestructionRequest& Request);
+	void DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults); 
 	/**
 	 * GridCellId를 ChunkId로 변환
 	 * @param GridCellId - 격자 셀 ID
@@ -968,6 +969,7 @@ private:
 
 	/** 적용된 모든 Op 히스토리 (Late Join 동기화용) */
 	TArray<FCompactDestructionOp> AppliedOpHistory;
+	TArray<FDestructionResult> PendingDestructionResults;
 
 	/** Op 히스토리 최대 크기 (메모리 제한) */
 	static constexpr int32 MaxOpHistorySize = 10000;

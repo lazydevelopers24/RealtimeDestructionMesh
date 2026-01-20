@@ -324,8 +324,10 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 	bool bIsPenetration = CheckPenetration(Request, AdjustPenetration);
 
 	// Cell 상태 업데이트 (Boolean 처리와 별개로 수행)
-	UpdateCellStateFromDestruction(Request);
-	
+	//UpdateCellStateFromDestruction(Request);
+	FDestructionResult Result = DestructionLogic(Request);
+	PendingDestructionResults.Add(Result);
+
 	UDecalComponent* TempDecal = nullptr;
 	if (!bIsPenetration && Request.bSpawnDecal)
 	{
@@ -365,7 +367,13 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 //=============================================================================
 
 void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request)
-{
+{ 
+	// ===== 로그 추가 =====
+	static int32 CallCount = 0;
+	CallCount++;
+	UE_LOG(LogTemp, Warning, TEXT("[UpdateCellState #%d] Called from somewhere"), CallCount);
+
+
 	TRACE_CPUPROFILER_EVENT_SCOPE(UpdateCellStateFromDestruction);
 	// 구조적 무결성 비활성화 또는 GridCellCache 미생성 시 스킵
 	if (!bEnableStructuralIntegrity || !GridCellCache.IsValid())
@@ -373,8 +381,18 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		return;
 	}
 
+	FDestructionResult Result = DestructionLogic(Request);
+
+	TArray<FDestructionResult> Results;
+	Results.Add(Result);
+	DisconnectedCellStateLogic(Results);
+	
+
+}
+
+FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FRealtimeDestructionRequest& Request)
+{
 	FDestructionResult DestructionResult;
-	TSet<int32> DisconnectedCells;
 
 	// Request를 FDestructionShape로 변환
 	FCellDestructionShape Shape;
@@ -421,10 +439,10 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			CellState);
 	}
 
-		if (!DestructionResult.HasAnyDestruction())
-		{
-			return; // 파괴 없음
-		}
+	if (!DestructionResult.HasAnyDestruction())
+	{
+		return DestructionResult; // 파괴 없음
+	}
 
 	// 가장 최근 파괴된 셀 디버그 시각화를 위한 정보 갱신
 	if (DestructionResult.NewlyDestroyedCells.Num() > 0)
@@ -433,8 +451,8 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		RecentDirectDestroyedCellIds.Append(DestructionResult.NewlyDestroyedCells);
 	}
 
-		// 히스토리에 추가 (NarrowPhase용)
-		DestructionInputHistory.Add(QuantizedInput);
+	// 히스토리에 추가 (NarrowPhase용)
+	DestructionInputHistory.Add(QuantizedInput);
 
 	// 파괴된 셀 데이터 전송 (클라이언트 CellState 동기화)
 	if (DestructionResult.NewlyDestroyedCells.Num() > 0)
@@ -482,16 +500,16 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			DestructionResult.DeadSubCellCount,
 			DestructionResult.NewlyDestroyedCells.Num(),
 			DestructionResult.AffectedCells.Num());
-		}
+	}
 	else
-		{
+	{
 		UE_LOG(LogTemp, Log, TEXT("[Update Cell State] Phase 1: %d cells directly destroyed"),
 			DestructionResult.NewlyDestroyedCells.Num());
-			}
+	}
 
-			//=====================================================================
-	// Phase 1.5: SuperCell 상태 업데이트 (bEnableSuperCell이 true일 때만)
-			//=====================================================================
+	//=====================================================================
+// Phase 1.5: SuperCell 상태 업데이트 (bEnableSuperCell이 true일 때만)
+		//=====================================================================
 	if (bEnableSupercell && SupercellCache.IsValid())
 	{
 		// 영향받은 Cell들이 속한 SuperCell을 Broken으로 마킹
@@ -521,20 +539,62 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		}
 	}
 
+	return DestructionResult;
+}
+
+void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults)
+{
+	//파괴된게 없으면 패스
+	bool bHasAnyDestruction = false;
+	for (const FDestructionResult& Result : AllResults)
+	{
+		if (Result.HasAnyDestruction())
+		{
+			bHasAnyDestruction = true;
+			break;
+		}
+	} 
+	if (!bHasAnyDestruction)
+	{
+		return;
+	}
+
+
 	//=====================================================================
 	// Phase 2: BFS로 앵커에서 분리된 셀 찾기
 	// 통합 API 사용: bEnableSupercell, bEnableSubcell 플래그에 따라 자동 선택
 	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
-	//=====================================================================
+	//======================================================== 
+
+	// Standalon용 BFS 성능 LOG
+	//int32 BFSCallCount = 0;
+	//BFSCallCount++;
+	//double BFSStartTime = FPlatformTime::Seconds();
+	//
+	//UE_LOG(LogTemp, Warning, TEXT("[BFS #%d] FindDisconnectedCells START (TotalCells: %d)"),
+	//	BFSCallCount, GridCellCache.GetTotalCellCount()); 
+
+	// ===== 여기에 로그 추가 =====
+	UE_LOG(LogTemp, Warning, TEXT("    [Batch BFS] FindDisconnectedCells called"));
+
 	const ENetMode NetMode = GetWorld()->GetNetMode();
-		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
 		GridCellCache,
 		SupercellCache,
 		CellState,
 		bEnableSupercell && SupercellCache.IsValid(),
 		bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
 
+	// Standalon용 BFS 성능 LOG
+	//double BFSEndTime = FPlatformTime::Seconds();
+	//UE_LOG(LogTemp, Warning, TEXT("[BFS #%d] FindDisconnectedCells END - took %.3f ms, found %d disconnected"),
+	//	BFSCallCount, (BFSEndTime - BFSStartTime) * 1000.0, DisconnectedCells.Num());
+
+
+
 	UE_LOG(LogTemp, Log, TEXT("[Cell] Phase 2: %d Cells disconnected"), DisconnectedCells.Num());
+
+
 
 	if (DisconnectedCells.Num() > 0)
 	{
@@ -556,7 +616,7 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		//=====================================================================
 		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
 		UE_LOG(LogTemp, Warning, TEXT("[GridCell] MulticastDetachSignal SENDING - %d groups detached"),
-		       NewDetachedGroups.Num());
+			NewDetachedGroups.Num());
 		MulticastDetachSignal();
 
 		// 서버: 분리된 셀의 삼각형 삭제
@@ -598,7 +658,7 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction [Server]: %d cells disconnected (%d groups)"),
-		       DisconnectedCells.Num(), NewDetachedGroups.Num());
+			DisconnectedCells.Num(), NewDetachedGroups.Num());
 	}
 	else
 	{
@@ -606,11 +666,16 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 		CleanupSmallFragments();
 	}
 
-	ProcessDecalRemoval(DestructionResult);
-	if (DisconnectedCells.Num() > 0)
-	{
-		FDestructionResult DetachResult;
-		DetachResult.NewlyDestroyedCells = DisconnectedCells.Array();
+	
+		for (const FDestructionResult& Result : AllResults)
+		{
+			ProcessDecalRemoval(Result);
+		}
+
+		if (DisconnectedCells.Num() > 0)
+		{
+			FDestructionResult DetachResult;
+			DetachResult.NewlyDestroyedCells = DisconnectedCells.Array();
 
 		ProcessDecalRemoval(DetachResult);
 	}
@@ -3377,6 +3442,20 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	if (PendingDestructionResults.Num() > 0)
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			const ENetMode NetMode = World->GetNetMode();
+			// Dedicated Server가 아닐 때만 여기서 Phase 2 실행
+			if (NetMode != NM_DedicatedServer)
+			{
+				DisconnectedCellStateLogic(PendingDestructionResults);
+			}
+		}
+		PendingDestructionResults.Empty();
+	}
 #if !UE_BUILD_SHIPPING
 	if (bShowDebugText)
 	{
@@ -3552,12 +3631,24 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 		UWorld* World = GetWorld();
 		if (World && World->GetNetMode() == NM_DedicatedServer)
 		{
+			// ===== 로그 추가 ===== 
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH START] Ops=%d ##########"), PendingServerBatchOpsCompact.Num());
+
 			UE_LOG(LogTemp, Warning, TEXT("[ServerBatching] DedicatedServer: GridCell processing %d ops"), PendingServerBatchOpsCompact.Num());
+
+			TArray<FDestructionResult> AllResults;
+			AllResults.Reserve(PendingServerBatchOpsCompact.Num()); 
 			for (const FCompactDestructionOp& CompactOp : PendingServerBatchOpsCompact)
 			{
 				FRealtimeDestructionRequest Request = CompactOp.Decompress();
-				UpdateCellStateFromDestruction(Request);
-			}
+				FDestructionResult Result = DestructionLogic(Request);
+				AllResults.Add(Result);
+			} 
+
+			DisconnectedCellStateLogic(AllResults);
+
+			// ===== 로그 추가 =====
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########")); 
 		}
 
 		// 압축된 데이터로 전파
@@ -3600,12 +3691,24 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 		// 데디서버: Multicast는 자기 자신에게 실행 안 됨, GridCell 판정만 직접 처리
 		UWorld* WorldNonCompact = GetWorld();
 		if (WorldNonCompact && WorldNonCompact->GetNetMode() == NM_DedicatedServer)
-		{
+		{ 
+			UE_LOG(LogTemp, Warning, TEXT(""));
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH START] Ops=%d (non-compact) ##########"), PendingServerBatchOpsCompact.Num());
+
 			UE_LOG(LogTemp, Warning, TEXT("[ServerBatching] DedicatedServer: GridCell processing %d ops (non-compact)"), PendingServerBatchOps.Num());
+
+			TArray<FDestructionResult> AllResults;
+			AllResults.Reserve(PendingServerBatchOps.Num());
 			for (const FRealtimeDestructionOp& Op : PendingServerBatchOps)
 			{
-				UpdateCellStateFromDestruction(Op.Request);
+				FDestructionResult Result = DestructionLogic(Op.Request);
+				AllResults.Add(Result);	UpdateCellStateFromDestruction(Op.Request);
 			}
+
+			DisconnectedCellStateLogic(AllResults);
+
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########"));
+			UE_LOG(LogTemp, Warning, TEXT("")); 
 		}
 
 		// 비압축 데이터로 전파
