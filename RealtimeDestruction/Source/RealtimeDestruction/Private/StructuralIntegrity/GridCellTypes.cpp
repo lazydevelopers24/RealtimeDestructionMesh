@@ -715,3 +715,441 @@ TArray<int32> FGridCellCache::GetCellsInAABB(const FBox& WorldAABB, const FTrans
 
 	return Result;
 }
+
+//=============================================================================
+// FSupercellCache
+//=============================================================================
+
+bool FSupercellCache::IsCellOnSupercellBoundary(const FIntVector& CellCoord, const FIntVector& SupercellCoord) const
+{
+	// SuperCell 내에서의 Cell 로컬 좌표
+	const int32 LocalX = CellCoord.X - SupercellCoord.X * SupercellSize.X;
+	const int32 LocalY = CellCoord.Y - SupercellCoord.Y * SupercellSize.Y;
+	const int32 LocalZ = CellCoord.Z - SupercellCoord.Z * SupercellSize.Z;
+
+	// 경계 검사: 로컬 좌표가 0이거나 (Size - 1)이면 경계
+	return LocalX == 0 || LocalX == SupercellSize.X - 1 ||
+	       LocalY == 0 || LocalY == SupercellSize.Y - 1 ||
+	       LocalZ == 0 || LocalZ == SupercellSize.Z - 1;
+}
+
+void FSupercellCache::GetCellsInSupercell(int32 SupercellId, const FGridCellCache& GridCache, TArray<int32>& OutCellIds) const
+{
+	OutCellIds.Reset();
+
+	if (!IsValidSupercellId(SupercellId))
+	{
+		return;
+	}
+
+	const FIntVector SupercellCoord = SupercellIdToCoord(SupercellId);
+
+	// SuperCell의 Cell 좌표 범위 계산
+	const int32 StartX = SupercellCoord.X * SupercellSize.X;
+	const int32 StartY = SupercellCoord.Y * SupercellSize.Y;
+	const int32 StartZ = SupercellCoord.Z * SupercellSize.Z;
+
+	const int32 EndX = FMath::Min(StartX + SupercellSize.X, GridCache.GridSize.X);
+	const int32 EndY = FMath::Min(StartY + SupercellSize.Y, GridCache.GridSize.Y);
+	const int32 EndZ = FMath::Min(StartZ + SupercellSize.Z, GridCache.GridSize.Z);
+
+	OutCellIds.Reserve((EndX - StartX) * (EndY - StartY) * (EndZ - StartZ));
+
+	for (int32 Z = StartZ; Z < EndZ; ++Z)
+	{
+		for (int32 Y = StartY; Y < EndY; ++Y)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				const int32 CellId = GridCache.CoordToId(X, Y, Z);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+	}
+}
+
+void FSupercellCache::GetBoundaryCellsOfSupercell(int32 SupercellId, const FGridCellCache& GridCache, TArray<int32>& OutCellIds) const
+{
+	OutCellIds.Reset();
+
+	if (!IsValidSupercellId(SupercellId))
+	{
+		return;
+	}
+
+	const FIntVector SupercellCoord = SupercellIdToCoord(SupercellId);
+
+	// SuperCell의 Cell 좌표 범위 계산
+	const int32 StartX = SupercellCoord.X * SupercellSize.X;
+	const int32 StartY = SupercellCoord.Y * SupercellSize.Y;
+	const int32 StartZ = SupercellCoord.Z * SupercellSize.Z;
+
+	const int32 EndX = FMath::Min(StartX + SupercellSize.X, GridCache.GridSize.X);
+	const int32 EndY = FMath::Min(StartY + SupercellSize.Y, GridCache.GridSize.Y);
+	const int32 EndZ = FMath::Min(StartZ + SupercellSize.Z, GridCache.GridSize.Z);
+
+	// 경계 Cell만 수집 (6면)
+	TSet<int32> BoundaryCellSet;
+
+	for (int32 Z = StartZ; Z < EndZ; ++Z)
+	{
+		for (int32 Y = StartY; Y < EndY; ++Y)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				// 경계 검사
+				const bool bOnBoundary = (X == StartX || X == EndX - 1 ||
+				                          Y == StartY || Y == EndY - 1 ||
+				                          Z == StartZ || Z == EndZ - 1);
+
+				if (bOnBoundary)
+				{
+					const int32 CellId = GridCache.CoordToId(X, Y, Z);
+					if (GridCache.GetCellExists(CellId))
+					{
+						BoundaryCellSet.Add(CellId);
+					}
+				}
+			}
+		}
+	}
+
+	OutCellIds = BoundaryCellSet.Array();
+}
+
+void FSupercellCache::BuildFromGridCache(const FGridCellCache& GridCache)
+{
+	Reset();
+
+	if (!GridCache.IsValid())
+	{
+		return;
+	}
+
+	// SuperCellSize 계산: min(GridSize, 8)
+	SupercellSize = FIntVector(
+		FMath::Min(GridCache.GridSize.X, 8),
+		FMath::Min(GridCache.GridSize.Y, 8),
+		FMath::Min(GridCache.GridSize.Z, 8)
+	);
+
+	// SuperCell이 만들어지려면 각 축 방향으로 SupercellSize만큼 채워져야 함
+	// 예: GridSize.X = 5, SupercellSize.X = 4 → SupercellCount.X = 1 (나머지 1개는 orphan)
+	SupercellCount = FIntVector(
+		GridCache.GridSize.X / SupercellSize.X,
+		GridCache.GridSize.Y / SupercellSize.Y,
+		GridCache.GridSize.Z / SupercellSize.Z
+	);
+
+	// Cell → SuperCell 매핑 초기화
+	const int32 TotalCells = GridCache.GetTotalCellCount();
+	CellToSupercell.SetNum(TotalCells);
+
+	// 모든 Cell을 INDEX_NONE(orphan)으로 초기화
+	for (int32 i = 0; i < TotalCells; ++i)
+	{
+		CellToSupercell[i] = INDEX_NONE;
+	}
+
+	// SuperCell에 속하는 Cell들 매핑
+	for (int32 SCZ = 0; SCZ < SupercellCount.Z; ++SCZ)
+	{
+		for (int32 SCY = 0; SCY < SupercellCount.Y; ++SCY)
+		{
+			for (int32 SCX = 0; SCX < SupercellCount.X; ++SCX)
+			{
+				const int32 SupercellId = SupercellCoordToId(SCX, SCY, SCZ);
+
+				// 이 SuperCell에 속하는 Cell 범위
+				const int32 StartX = SCX * SupercellSize.X;
+				const int32 StartY = SCY * SupercellSize.Y;
+				const int32 StartZ = SCZ * SupercellSize.Z;
+
+				for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
+				{
+					for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
+					{
+						for (int32 LX = 0; LX < SupercellSize.X; ++LX)
+						{
+							const int32 CellId = GridCache.CoordToId(
+								StartX + LX,
+								StartY + LY,
+								StartZ + LZ
+							);
+							CellToSupercell[CellId] = SupercellId;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Orphan Cell 목록 생성 (유효한 Cell 중 SuperCell에 속하지 않는 것)
+	OrphanCellIds.Reset();
+	for (int32 CellId : GridCache.GetValidCellIds())
+	{
+		if (CellToSupercell[CellId] == INDEX_NONE)
+		{
+			OrphanCellIds.Add(CellId);
+		}
+	}
+
+	// Intact 비트필드 초기화 (모든 SuperCell을 Intact로)
+	InitializeIntactBits();
+
+	UE_LOG(LogTemp, Log, TEXT("FSupercellCache::BuildFromGridCache - GridSize: (%d, %d, %d), SupercellSize: (%d, %d, %d), SupercellCount: (%d, %d, %d), TotalSupercells: %d, OrphanCells: %d"),
+		GridCache.GridSize.X, GridCache.GridSize.Y, GridCache.GridSize.Z,
+		SupercellSize.X, SupercellSize.Y, SupercellSize.Z,
+		SupercellCount.X, SupercellCount.Y, SupercellCount.Z,
+		GetTotalSupercellCount(),
+		OrphanCellIds.Num());
+}
+
+void FSupercellCache::InitializeIntactBits()
+{
+	const int32 TotalSupercells = GetTotalSupercellCount();
+	const int32 RequiredWords = (TotalSupercells + 63) >> 6;  // ceil(TotalSupercells / 64)
+
+	// 모든 비트를 1로 설정 (Intact)
+	IntactBits.SetNum(RequiredWords);
+	for (int32 i = 0; i < RequiredWords; ++i)
+	{
+		IntactBits[i] = ~0ull;  // 모든 비트 1
+	}
+}
+
+void FSupercellCache::Reset()
+{
+	SupercellSize = FIntVector(4, 4, 4);
+	SupercellCount = FIntVector::ZeroValue;
+	IntactBits.Empty();
+	CellToSupercell.Empty();
+	OrphanCellIds.Empty();
+}
+
+bool FSupercellCache::IsValid() const
+{
+	if (SupercellCount.X <= 0 || SupercellCount.Y <= 0 || SupercellCount.Z <= 0)
+	{
+		return false;
+	}
+
+	const int32 TotalSupercells = GetTotalSupercellCount();
+	const int32 RequiredWords = (TotalSupercells + 63) >> 6;
+
+	return IntactBits.Num() == RequiredWords && CellToSupercell.Num() > 0;
+}
+
+bool FSupercellCache::IsSupercellTrulyIntact(
+	int32 SupercellId,
+	const FGridCellCache& GridCache,
+	const FCellState& CellState,
+	bool bEnableSubcell) const
+{
+	if (!IsValidSupercellId(SupercellId))
+	{
+		return false;
+	}
+
+	// 이미 Broken으로 마킹된 경우 빠른 반환
+	if (!IsSupercellIntact(SupercellId))
+	{
+		return false;
+	}
+
+	// SuperCell에 속한 모든 Cell 검사
+	const FIntVector SupercellCoord = SupercellIdToCoord(SupercellId);
+
+	const int32 StartX = SupercellCoord.X * SupercellSize.X;
+	const int32 StartY = SupercellCoord.Y * SupercellSize.Y;
+	const int32 StartZ = SupercellCoord.Z * SupercellSize.Z;
+
+	const int32 EndX = FMath::Min(StartX + SupercellSize.X, GridCache.GridSize.X);
+	const int32 EndY = FMath::Min(StartY + SupercellSize.Y, GridCache.GridSize.Y);
+	const int32 EndZ = FMath::Min(StartZ + SupercellSize.Z, GridCache.GridSize.Z);
+
+	for (int32 Z = StartZ; Z < EndZ; ++Z)
+	{
+		for (int32 Y = StartY; Y < EndY; ++Y)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				const int32 CellId = GridCache.CoordToId(X, Y, Z);
+
+				// Cell이 존재하지 않으면 스킵
+				if (!GridCache.GetCellExists(CellId))
+				{
+					continue;
+				}
+
+				// Cell이 Destroyed면 Broken
+				if (CellState.DestroyedCells.Contains(CellId))
+				{
+					return false;
+				}
+
+				// SubCell 모드일 때만 SubCell 상태 체크
+				if (bEnableSubcell)
+				{
+					const FSubCell* SubCellState = CellState.SubCellStates.Find(CellId);
+					if (SubCellState)
+					{
+						// 0xFF = 모든 SubCell 살아있음 (8비트 전부 1)
+						if (SubCellState->Bits != 0xFF)
+						{
+							return false;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
+void FSupercellCache::UpdateSupercellStates(const TArray<int32>& AffectedCellIds)
+{
+	for (int32 CellId : AffectedCellIds)
+	{
+		const int32 SupercellId = GetSupercellForCell(CellId);
+		if (SupercellId != INDEX_NONE)
+		{
+			MarkSupercellBroken(SupercellId);
+		}
+	}
+}
+
+void FSupercellCache::OnCellDestroyed(int32 CellId)
+{
+	const int32 SupercellId = GetSupercellForCell(CellId);
+	if (SupercellId != INDEX_NONE)
+	{
+		MarkSupercellBroken(SupercellId);
+	}
+}
+
+void FSupercellCache::OnSubCellDestroyed(int32 CellId, int32 SubCellId)
+{
+	const int32 SupercellId = GetSupercellForCell(CellId);
+	if (SupercellId != INDEX_NONE)
+	{
+		MarkSupercellBroken(SupercellId);
+	}
+}
+
+void FSupercellCache::GetBoundaryCellsInDirection(
+	int32 SupercellId,
+	int32 Direction,
+	const FGridCellCache& GridCache,
+	TArray<int32>& OutCellIds) const
+{
+	OutCellIds.Reset();
+
+	if (!IsValidSupercellId(SupercellId) || Direction < 0 || Direction >= 6)
+	{
+		return;
+	}
+
+	const FIntVector SupercellCoord = SupercellIdToCoord(SupercellId);
+
+	// SuperCell의 Cell 좌표 범위 계산
+	const int32 StartX = SupercellCoord.X * SupercellSize.X;
+	const int32 StartY = SupercellCoord.Y * SupercellSize.Y;
+	const int32 StartZ = SupercellCoord.Z * SupercellSize.Z;
+
+	const int32 EndX = FMath::Min(StartX + SupercellSize.X, GridCache.GridSize.X);
+	const int32 EndY = FMath::Min(StartY + SupercellSize.Y, GridCache.GridSize.Y);
+	const int32 EndZ = FMath::Min(StartZ + SupercellSize.Z, GridCache.GridSize.Z);
+
+	// 방향별 경계면 Cell 추출
+	switch (Direction)
+	{
+	case 0: // -X
+		for (int32 Z = StartZ; Z < EndZ; ++Z)
+		{
+			for (int32 Y = StartY; Y < EndY; ++Y)
+			{
+				const int32 CellId = GridCache.CoordToId(StartX, Y, Z);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+		break;
+
+	case 1: // +X
+		for (int32 Z = StartZ; Z < EndZ; ++Z)
+		{
+			for (int32 Y = StartY; Y < EndY; ++Y)
+			{
+				const int32 CellId = GridCache.CoordToId(EndX - 1, Y, Z);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+		break;
+
+	case 2: // -Y
+		for (int32 Z = StartZ; Z < EndZ; ++Z)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				const int32 CellId = GridCache.CoordToId(X, StartY, Z);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+		break;
+
+	case 3: // +Y
+		for (int32 Z = StartZ; Z < EndZ; ++Z)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				const int32 CellId = GridCache.CoordToId(X, EndY - 1, Z);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+		break;
+
+	case 4: // -Z
+		for (int32 Y = StartY; Y < EndY; ++Y)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				const int32 CellId = GridCache.CoordToId(X, Y, StartZ);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+		break;
+
+	case 5: // +Z
+		for (int32 Y = StartY; Y < EndY; ++Y)
+		{
+			for (int32 X = StartX; X < EndX; ++X)
+			{
+				const int32 CellId = GridCache.CoordToId(X, Y, EndZ - 1);
+				if (GridCache.GetCellExists(CellId))
+				{
+					OutCellIds.Add(CellId);
+				}
+			}
+		}
+		break;
+	}
+}

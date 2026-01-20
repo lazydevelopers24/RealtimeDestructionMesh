@@ -506,11 +506,19 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 	}
 
 	/** 좌표가 유효한지 확인 */
-	bool IsValidCoord(const FIntVector& Coord) const
+	FORCEINLINE bool IsValidCoord(const FIntVector& Coord) const
 	{
 		return Coord.X >= 0 && Coord.X < GridSize.X &&
 		       Coord.Y >= 0 && Coord.Y < GridSize.Y &&
 		       Coord.Z >= 0 && Coord.Z < GridSize.Z;
+	}
+
+	/** 좌표가 유효한지 확인 (3개 정수 오버로드) */
+	FORCEINLINE bool IsValidCoord(int32 X, int32 Y, int32 Z) const
+	{
+		return X >= 0 && X < GridSize.X &&
+		       Y >= 0 && Y < GridSize.Y &&
+		       Z >= 0 && Z < GridSize.Z;
 	}
 
 	/** 셀 ID가 유효한지 확인 */
@@ -908,4 +916,298 @@ struct REALTIMEDESTRUCTION_API FBatchedDestructionEvent
 	/** 분리된 파편들 */
 	UPROPERTY()
 	TArray<FDetachedDebrisInfo> DetachedDebris;
+};
+
+//=========================================================================
+// SuperCell 시스템
+//=========================================================================
+
+/**
+ * 2-Level Hierarchical BFS 노드
+ * SuperCell 또는 개별 Cell을 표현하는 Union 타입
+ *
+ * - bIsSupercell = true: Id는 SuperCell ID
+ * - bIsSupercell = false: Id는 Cell ID
+ */
+struct REALTIMEDESTRUCTION_API FBFSNode
+{
+	/** 노드 ID (SuperCell ID 또는 Cell ID) */
+	int32 Id = INDEX_NONE;
+
+	/** SuperCell 노드 여부 */
+	bool bIsSupercell = false;
+
+	FBFSNode() = default;
+
+	FBFSNode(int32 InId, bool bInIsSupercell)
+		: Id(InId), bIsSupercell(bInIsSupercell)
+	{}
+
+	/** SuperCell 노드 생성 */
+	static FBFSNode MakeSupercell(int32 SupercellId)
+	{
+		return FBFSNode(SupercellId, true);
+	}
+
+	/** Cell 노드 생성 */
+	static FBFSNode MakeCell(int32 CellId)
+	{
+		return FBFSNode(CellId, false);
+	}
+
+	bool IsValid() const { return Id != INDEX_NONE; }
+
+	bool operator==(const FBFSNode& Other) const
+	{
+		return Id == Other.Id && bIsSupercell == Other.bIsSupercell;
+	}
+};
+
+/**
+ * SuperCell 캐시 (BFS 최적화용)
+ * 여러 Cell을 그룹화하여 BFS 노드 수를 줄임
+ * - Intact SuperCell: 내부 Cell이 모두 살아있으면 단일 BFS 노드로 취급
+ * - Broken SuperCell: 일부 Cell이 파괴/손상되면 개별 Cell 단위 BFS로 전환
+ * - Orphan Cell: SuperCell에 포함되지 않는 Cell (격자 끝단)
+ */
+USTRUCT(BlueprintType)
+struct REALTIMEDESTRUCTION_API FSupercellCache
+{
+	GENERATED_BODY()
+
+	//=========================================================================
+	// SuperCell 격자 정보
+	//=========================================================================
+
+	/** SuperCell당 Cell 개수 (각 축, 최대 4x4x4) */
+	UPROPERTY()
+	FIntVector SupercellSize = FIntVector(4, 4, 4);
+
+	/** SuperCell 격자 크기 (X, Y, Z 방향 SuperCell 개수) */
+	UPROPERTY()
+	FIntVector SupercellCount = FIntVector::ZeroValue;
+
+	//=========================================================================
+	// SuperCell 상태 비트필드
+	//=========================================================================
+
+	/**
+	 * Intact 상태 비트필드 (64개 SuperCell당 1 uint64)
+	 * 1 = Intact (모든 SubCell 살아있음), 0 = Broken
+	 */
+	UPROPERTY()
+	TArray<uint64> IntactBits;
+
+	//=========================================================================
+	// Cell ↔ SuperCell 매핑
+	//=========================================================================
+
+	/**
+	 * Cell ID → SuperCell ID 매핑
+	 * INDEX_NONE(-1)이면 Orphan Cell (SuperCell에 포함되지 않음)
+	 */
+	UPROPERTY()
+	TArray<int32> CellToSupercell;
+
+	/**
+	 * Orphan Cell ID 목록
+	 * SuperCell에 포함되지 않는 Cell (격자 끝단의 잔여 Cell)
+	 */
+	UPROPERTY()
+	TArray<int32> OrphanCellIds;
+
+	//=========================================================================
+	// SuperCell 좌표 ↔ ID 변환
+	//=========================================================================
+
+	/** 3D 좌표 → SuperCell ID */
+	FORCEINLINE int32 SupercellCoordToId(int32 X, int32 Y, int32 Z) const
+	{
+		return Z * (SupercellCount.X * SupercellCount.Y) + Y * SupercellCount.X + X;
+	}
+
+	FORCEINLINE int32 SupercellCoordToId(const FIntVector& Coord) const
+	{
+		return SupercellCoordToId(Coord.X, Coord.Y, Coord.Z);
+	}
+
+	/** SuperCell ID → 3D 좌표 */
+	FORCEINLINE FIntVector SupercellIdToCoord(int32 SupercellId) const
+	{
+		const int32 XY = SupercellCount.X * SupercellCount.Y;
+		const int32 Z = SupercellId / XY;
+		const int32 Remainder = SupercellId % XY;
+		const int32 Y = Remainder / SupercellCount.X;
+		const int32 X = Remainder % SupercellCount.X;
+		return FIntVector(X, Y, Z);
+	}
+
+	/** 총 SuperCell 개수 */
+	FORCEINLINE int32 GetTotalSupercellCount() const
+	{
+		return SupercellCount.X * SupercellCount.Y * SupercellCount.Z;
+	}
+
+	/** SuperCell 좌표가 유효한지 확인 */
+	FORCEINLINE bool IsValidSupercellCoord(const FIntVector& Coord) const
+	{
+		return Coord.X >= 0 && Coord.X < SupercellCount.X &&
+		       Coord.Y >= 0 && Coord.Y < SupercellCount.Y &&
+		       Coord.Z >= 0 && Coord.Z < SupercellCount.Z;
+	}
+
+	/** SuperCell ID가 유효한지 확인 */
+	FORCEINLINE bool IsValidSupercellId(int32 SupercellId) const
+	{
+		return SupercellId >= 0 && SupercellId < GetTotalSupercellCount();
+	}
+
+	//=========================================================================
+	// Intact 상태 비트필드 접근자
+	//=========================================================================
+
+	/** SuperCell이 Intact 상태인지 확인 */
+	FORCEINLINE bool IsSupercellIntact(int32 SupercellId) const
+	{
+		const int32 WordIndex = SupercellId >> 6;  // SupercellId / 64
+		const uint64 BitMask = 1ull << (SupercellId & 63);  // SupercellId % 64
+		return IntactBits.IsValidIndex(WordIndex) && (IntactBits[WordIndex] & BitMask) != 0;
+	}
+
+	/** SuperCell Intact 상태 설정 */
+	FORCEINLINE void SetSupercellIntact(int32 SupercellId, bool bIntact)
+	{
+		const int32 WordIndex = SupercellId >> 6;
+		const uint64 BitMask = 1ull << (SupercellId & 63);
+		if (IntactBits.IsValidIndex(WordIndex))
+		{
+			if (bIntact)
+				IntactBits[WordIndex] |= BitMask;
+			else
+				IntactBits[WordIndex] &= ~BitMask;
+		}
+	}
+
+	/** SuperCell을 Broken 상태로 마킹 */
+	FORCEINLINE void MarkSupercellBroken(int32 SupercellId)
+	{
+		SetSupercellIntact(SupercellId, false);
+	}
+
+	//=========================================================================
+	// Cell ↔ SuperCell 관계
+	//=========================================================================
+
+	/** Cell이 속한 SuperCell ID 반환 (Orphan이면 INDEX_NONE) */
+	FORCEINLINE int32 GetSupercellForCell(int32 CellId) const
+	{
+		return CellToSupercell.IsValidIndex(CellId) ? CellToSupercell[CellId] : INDEX_NONE;
+	}
+
+	/** Cell이 Orphan인지 확인 */
+	FORCEINLINE bool IsCellOrphan(int32 CellId) const
+	{
+		return GetSupercellForCell(CellId) == INDEX_NONE;
+	}
+
+	/** Cell 좌표 → SuperCell 좌표 변환 */
+	FORCEINLINE FIntVector CellCoordToSupercellCoord(const FIntVector& CellCoord) const
+	{
+		return FIntVector(
+			CellCoord.X / SupercellSize.X,
+			CellCoord.Y / SupercellSize.Y,
+			CellCoord.Z / SupercellSize.Z
+		);
+	}
+
+	/** Cell이 특정 SuperCell의 경계에 있는지 확인 (6방향 검사) */
+	bool IsCellOnSupercellBoundary(const FIntVector& CellCoord, const FIntVector& SupercellCoord) const;
+
+	//=========================================================================
+	// SuperCell 내부 Cell 순회
+	//=========================================================================
+
+	/** SuperCell에 속한 Cell ID 목록 생성 */
+	void GetCellsInSupercell(int32 SupercellId, const FGridCellCache& GridCache, TArray<int32>& OutCellIds) const;
+
+	/** SuperCell 경계에 있는 Cell ID 목록 생성 (6면의 Cell들) */
+	void GetBoundaryCellsOfSupercell(int32 SupercellId, const FGridCellCache& GridCache, TArray<int32>& OutCellIds) const;
+
+	//=========================================================================
+	// 빌드 및 초기화
+	//=========================================================================
+
+	/** SuperCell 캐시 빌드 (GridCellCache 빌드 후 호출) */
+	void BuildFromGridCache(const FGridCellCache& GridCache);
+
+	/** Intact 비트필드 초기화 (모든 SuperCell을 Intact로 설정) */
+	void InitializeIntactBits();
+
+	/** 캐시 초기화 */
+	void Reset();
+
+	/** 유효성 검사 */
+	bool IsValid() const;
+
+	//=========================================================================
+	// Hierarchical BFS 지원 함수
+	//=========================================================================
+
+	/**
+	 * SuperCell이 진정한 Intact 상태인지 확인 (SubCell 상태 포함)
+	 *
+	 * bEnableSubcell 모드에 따라 다르게 동작:
+	 * - bEnableSubcell = true: 모든 Cell의 모든 SubCell이 살아있어야 Intact
+	 * - bEnableSubcell = false: 모든 Cell이 DestroyedCells에 없어야 Intact
+	 *
+	 * @param SupercellId - 확인할 SuperCell ID
+	 * @param GridCache - 격자 캐시 (Cell 좌표 변환용)
+	 * @param CellState - 셀 상태 (파괴/SubCell 상태)
+	 * @param bEnableSubcell - SubCell 모드 활성화 여부
+	 * @return Intact 여부
+	 */
+	bool IsSupercellTrulyIntact(
+		int32 SupercellId,
+		const FGridCellCache& GridCache,
+		const struct FCellState& CellState,
+		bool bEnableSubcell) const;
+
+	/**
+	 * 파괴된 Cell/SubCell에 의해 영향받은 SuperCell 상태 업데이트
+	 *
+	 * 파괴 발생 시 호출하여 해당 Cell이 속한 SuperCell을 Broken으로 마킹
+	 *
+	 * @param AffectedCellIds - 영향받은 Cell ID 목록
+	 */
+	void UpdateSupercellStates(const TArray<int32>& AffectedCellIds);
+
+	/**
+	 * 단일 Cell 파괴에 의한 SuperCell 상태 업데이트
+	 *
+	 * @param CellId - 파괴된 Cell ID
+	 */
+	void OnCellDestroyed(int32 CellId);
+
+	/**
+	 * SubCell 파괴에 의한 SuperCell 상태 업데이트
+	 * bEnableSubcell = true일 때만 호출
+	 *
+	 * @param CellId - SubCell이 속한 Cell ID
+	 * @param SubCellId - 파괴된 SubCell ID
+	 */
+	void OnSubCellDestroyed(int32 CellId, int32 SubCellId);
+
+	/**
+	 * SuperCell의 특정 방향 경계 Cell ID 목록 반환
+	 *
+	 * @param SupercellId - SuperCell ID
+	 * @param Direction - 방향 (0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z)
+	 * @param GridCache - 격자 캐시
+	 * @param OutCellIds - 경계 Cell ID 목록 (출력)
+	 */
+	void GetBoundaryCellsInDirection(
+		int32 SupercellId,
+		int32 Direction,
+		const FGridCellCache& GridCache,
+		TArray<int32>& OutCellIds) const;
 };

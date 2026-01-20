@@ -502,22 +502,45 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 			DestructionResult.NewlyDestroyedCells.Num());
 			}
 
-			//=====================================================================
-	// Phase 2: BFS로 앵커에서 분리된 셀 찾기
-			//=====================================================================
-	if (bEnableSubcell)
+	//=====================================================================
+	// Phase 1.5: SuperCell 상태 업데이트 (bEnableSuperCell이 true일 때만)
+	//=====================================================================
+	if (bEnableSupercell && SupercellCache.IsValid())
+	{
+		// 영향받은 Cell들이 속한 SuperCell을 Broken으로 마킹
+		SupercellCache.UpdateSupercellStates(DestructionResult.AffectedCells);
+
+		// 파괴된 Cell들이 속한 SuperCell도 Broken으로 마킹
+		for (int32 DestroyedCellId : DestructionResult.NewlyDestroyedCells)
+		{
+			SupercellCache.OnCellDestroyed(DestroyedCellId);
+		}
+
+		// SubCell 모드에서는 SubCell 파괴도 SuperCell 상태에 반영
+		if (bEnableSubcell)
+		{
+			for (const auto& SubCellPair : DestructionResult.NewlyDeadSubCells)
 			{
-		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCellsWithSubCells(
-			GridCellCache,
-			CellState,
-			DestructionResult.AffectedCells);
+				for (int32 SubCellId : SubCellPair.Value.Values)
+				{
+					SupercellCache.OnSubCellDestroyed(SubCellPair.Key, SubCellId);
 				}
-	else
-			{
-		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-		GridCellCache,
-		CellState.DestroyedCells);
+			}
+		}
 	}
+
+	//=====================================================================
+	// Phase 2: BFS로 앵커에서 분리된 셀 찾기
+	// 통합 API 사용: bEnableSupercell, bEnableSubcell 플래그에 따라 자동 선택
+	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
+	//=====================================================================
+	const ENetMode NetMode = GetWorld()->GetNetMode();
+	DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+		GridCellCache,
+		SupercellCache,
+		CellState,
+		bEnableSupercell && SupercellCache.IsValid(),
+		bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
 
 	UE_LOG(LogTemp, Log, TEXT("[Cell] Phase 2: %d Cells disconnected"), DisconnectedCells.Num());
 
@@ -1328,6 +1351,9 @@ void URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 	// 노말 방향 반전 (Subtract용)
 	ToolMesh.ReverseOrientation();
 
+	// Laplacian Smoothing 적용 (계단 현상 완화)
+	ApplyHCLaplacianSmoothing(ToolMesh);
+
 	if (ToolMesh.TriangleCount() == 0)
 	{
 		UE_LOG(LogTemp, Error, TEXT("ToolMesh has 0 triangles!"));
@@ -1473,10 +1499,18 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 	using namespace UE::Geometry;
 
 	// Anchor에서 분리된 셀 집합 미리 계산 (BFS)
+	// 통합 API 사용: bEnableSupercell, bEnableSubcell 플래그에 따라 자동 선택
+	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
 	TSet<int32> DisconnectedCells;
 	if (GridCellCache.IsValid())
 	{
-		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(GridCellCache, CellState.DestroyedCells);
+		const ENetMode NetMode = GetWorld()->GetNetMode();
+		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+			GridCellCache,
+			SupercellCache,
+			CellState,
+			bEnableSupercell && SupercellCache.IsValid(),
+			bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
 	}
 
 	int32 TotalRemoved = 0;
@@ -1601,7 +1635,7 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				if (bShowCellSpawnPosition)
 				{
 					FColor PointColor = bShouldRemove ? FColor::Red : FColor::Green;
-				DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
+					DrawDebugPoint(GetWorld(), WorldPos, 15.0f, PointColor, false, 10.0f);
 					DrawDebugString(GetWorld(), WorldPos, FString::Printf(TEXT("%s (%d/%d destroyed)"),
 						bShouldRemove ? TEXT("Detached") : TEXT("Anchored"), DestroyedCellCount, TotalCellCount), nullptr, PointColor, 10.0f);
 				}
@@ -1782,9 +1816,9 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 								if (bShowCellSpawnPosition)
 								{
 								DrawDebugSphere(World, WorldPos, 20.0f, 8, FColor::Blue, false, 10.0f);
+								}
 							}
 						}
-					}
 					}
 
 					// 원본 메쉬에서 삼각형 삭제
@@ -2048,9 +2082,14 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 	UE_LOG(LogTemp, Warning, TEXT("[Client] MulticastDetachSignal RECEIVED - Running local BFS"));
 
 	// 클라이언트: 자체 BFS 실행하여 분리된 셀 찾기
+	// 통합 API 사용: 서버와 동일한 알고리즘으로 일관성 유지
+	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
 	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
 		GridCellCache,
-		CellState.DestroyedCells);
+		SupercellCache,
+		CellState,
+		bEnableSupercell && SupercellCache.IsValid(),
+		bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용 
 
 	if (DisconnectedCells.Num() == 0)
 	{
@@ -4273,6 +4312,9 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		GridCellCache.GridSize.X, GridCellCache.GridSize.Y, GridCellCache.GridSize.Z,
 		GridCellCache.GetValidCellCount(),
 		GridCellCache.GetAnchorCount());
+	
+	// 5. SuperCell 캐시 빌드 (BFS 최적화용)
+	SupercellCache.BuildFromGridCache(GridCellCache);
 
 	return true;
 }
@@ -4943,4 +4985,108 @@ TStructOnScope<FActorComponentInstanceData> URealtimeDestructibleMeshComponent::
 	UE_LOG(LogTemp, Warning, TEXT("GetComponentInstanceData"));
 
 	return MakeStructOnScope<FActorComponentInstanceData, FRealtimeDestructibleMeshComponentInstanceData>(this);
-}
+}	
+
+
+void URealtimeDestructibleMeshComponent::ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh)
+{
+	if (SmoothingIterations <= 0 || Mesh.TriangleCount() == 0)
+	{
+		return;
+	}
+
+	// 원본 위치 저장 (HC Laplacian 보정용)
+	TMap<int32, FVector3d> OriginalPositions;
+	for (int32 Vid : Mesh.VertexIndicesItr())
+	{
+		OriginalPositions.Add(Vid, Mesh.GetVertex(Vid));
+	}
+
+	for (int32 Iter = 0; Iter < SmoothingIterations; Iter++)
+	{
+		// 1단계: Uniform Laplacian Smoothing
+		// 각 정점을 이웃 정점들의 평균 위치로 이동
+		TMap<int32, FVector3d> SmoothedPositions;
+
+		for (int32 Vid : Mesh.VertexIndicesItr())
+		{
+			FVector3d Sum = FVector3d::Zero();
+			int32 Count = 0;
+
+			// 1-ring 이웃 정점 수집
+			// EnumerateVertexVertices(Vid, Lambda):
+			//   - Vid와 엣지로 직접 연결된 모든 인접 정점(1-ring neighbors)을 순회
+			//   - 내부적으로 Vid에 연결된 모든 엣지를 찾고, 각 엣지의 반대편 정점 ID를 Lambda에 전달
+			//   - 메시 토폴로지 기반 순회이므로 공간 거리와 무관하게 연결된 정점만 반환
+			//   - Laplacian Smoothing에서 이 이웃들의 평균 위치로 현재 정점을 이동시킴
+			Mesh.EnumerateVertexVertices(Vid, [&](int32 Nid)
+			{
+				Sum += Mesh.GetVertex(Nid);
+				Count++;
+			});
+
+			if (Count > 0)
+			{
+				FVector3d Current = Mesh.GetVertex(Vid);
+				FVector3d Average = Sum / static_cast<double>(Count);
+				SmoothedPositions.Add(Vid, FMath::Lerp(Current, Average, static_cast<double>(SmoothingStrength)));
+			}
+		}
+
+		// 스무딩된 위치 적용
+		for (const auto& Pair : SmoothedPositions)
+		{
+			Mesh.SetVertex(Pair.Key, Pair.Value);
+		}
+
+		// 2단계: HC Laplacian 보정 (수축 방지)
+		// b = p' - original (차이 벡터)
+		// 최종 = p' - (β × b + (1-β) × 이웃들의 b 평균)
+		TMap<int32, FVector3d> DifferenceVectors;
+		for (int32 Vid : Mesh.VertexIndicesItr())
+		{
+			FVector3d Smoothed = Mesh.GetVertex(Vid);
+			FVector3d Original = OriginalPositions[Vid];
+			DifferenceVectors.Add(Vid, Smoothed - Original);
+		}
+
+		// 보정 적용
+		TMap<int32, FVector3d> CorrectedPositions;
+		for (int32 Vid : Mesh.VertexIndicesItr())
+		{
+			FVector3d Smoothed = Mesh.GetVertex(Vid);
+			FVector3d B = DifferenceVectors[Vid];
+
+			// 이웃들의 차이 벡터 평균 계산
+			FVector3d NeighborBSum = FVector3d::Zero();
+			int32 NeighborCount = 0;
+			Mesh.EnumerateVertexVertices(Vid, [&](int32 Nid)
+			{
+				NeighborBSum += DifferenceVectors[Nid];
+				NeighborCount++;
+			});
+
+			FVector3d NeighborBAvg = (NeighborCount > 0)
+				? NeighborBSum / static_cast<double>(NeighborCount)
+				: FVector3d::Zero();
+
+			// 보정: p'' = p' - (β × b + (1-β) × 이웃 b 평균)
+			double Beta = static_cast<double>(HCBeta);
+			FVector3d Correction = Beta * B + (1.0 - Beta) * NeighborBAvg;
+			CorrectedPositions.Add(Vid, Smoothed - Correction);
+		}
+
+		// 보정된 위치 적용
+		for (const auto& Pair : CorrectedPositions)
+		{
+			Mesh.SetVertex(Pair.Key, Pair.Value);
+		}
+
+		// 다음 반복을 위해 원본 위치 갱신
+		for (int32 Vid : Mesh.VertexIndicesItr())
+		{
+			OriginalPositions[Vid] = Mesh.GetVertex(Vid);
+		}
+	}
+}	
+

@@ -160,8 +160,34 @@ bool FCellDestructionSystem::IsCellDestroyed(
 
 TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
 	const FGridCellCache& Cache,
+	FSupercellCache& SupercellCache,
+	const FCellState& CellState,
+	bool bEnableSupercell,
+	bool bEnableSubcell)
+{
+	if (bEnableSupercell)
+	{
+		return FindDisconnectedCellsHierarchicalLevel(
+			Cache,
+			SupercellCache,
+			CellState,
+			bEnableSubcell);
+	}
+	if (bEnableSubcell)
+	{
+		return FindDisconnectedCellsSubCellLevel(
+			Cache,
+			CellState);
+	}
+
+	return FindDisconnectedCellsCellLevel(Cache, CellState.DestroyedCells);
+}
+
+TSet<int32> FCellDestructionSystem::FindDisconnectedCellsCellLevel(
+	const FGridCellCache& Cache,
 	const TSet<int32>& DestroyedCells)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsCellLevel)
 	TSet<int32> Connected;
 	TQueue<int32> Queue;
 
@@ -424,7 +450,7 @@ void FDestructionBatchProcessor::ProcessBatch()
 	//=====================================================
 	// Phase 3: BFS 1회만 실행 (배칭의 핵심)
 	//=====================================================
-	TSet<int32> Disconnected = FCellDestructionSystem::FindDisconnectedCells(
+	TSet<int32> Disconnected = FCellDestructionSystem::FindDisconnectedCellsCellLevel(
 		*CachePtr, CellStatePtr->DestroyedCells);
 
 	TArray<TArray<int32>> DetachedGroups = FCellDestructionSystem::GroupDetachedCells(
@@ -902,11 +928,11 @@ namespace SubCellBFSHelper
 	}
 }
 
-TSet<int32> FCellDestructionSystem::FindDisconnectedCellsWithSubCells(
+TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 	const FGridCellCache& Cache,
-	const FCellState& CellState,
-	const TArray<int32>& AffectedCells)
+	const FCellState& CellState)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsSubCellLevel);
 	using namespace SubCellBFSHelper;
 
 	TSet<int32> Connected;
@@ -1050,4 +1076,593 @@ TArray<FDetachedGroupWithSubCell> FCellDestructionSystem::GroupDetachedCellsWith
 	}
 
 	return Results;
+}
+
+//=============================================================================
+// FCellDestructionSystem - Hierarchical BFS (SuperCell 최적화)
+//=============================================================================
+
+namespace HierarchicalBFSHelper
+{
+	/**
+	 * SuperCell의 Cell 좌표 범위 계산
+	 * TArray 할당 없이 직접 좌표 순회용
+	 */
+	struct FSupercellCellRange
+	{
+		int32 StartX, StartY, StartZ;
+		int32 EndX, EndY, EndZ;
+
+		FSupercellCellRange(int32 SupercellId, const FSupercellCache& SupercellCache, const FGridCellCache& GridCache)
+		{
+			const FIntVector SupercellCoord = SupercellCache.SupercellIdToCoord(SupercellId);
+			StartX = SupercellCoord.X * SupercellCache.SupercellSize.X;
+			StartY = SupercellCoord.Y * SupercellCache.SupercellSize.Y;
+			StartZ = SupercellCoord.Z * SupercellCache.SupercellSize.Z;
+
+			EndX = FMath::Min(StartX + SupercellCache.SupercellSize.X, GridCache.GridSize.X);
+			EndY = FMath::Min(StartY + SupercellCache.SupercellSize.Y, GridCache.GridSize.Y);
+			EndZ = FMath::Min(StartZ + SupercellCache.SupercellSize.Z, GridCache.GridSize.Z);
+		}
+	};
+
+	/**
+	 * SuperCell 내 유효한 모든 Cell을 Connected로 마킹
+	 * TArray 할당 없이 직접 좌표 순회
+	 */
+	void MarkAllCellsInSupercell(
+		int32 SupercellId,
+		const FSupercellCache& SupercellCache,
+		const FGridCellCache& GridCache,
+		const FCellState& CellState,
+		TSet<int32>& ConnectedCells)
+	{
+		const FSupercellCellRange Range(SupercellId, SupercellCache, GridCache);
+
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+			{
+				for (int32 X = Range.StartX; X < Range.EndX; ++X)
+				{
+					const int32 CellId = GridCache.CoordToId(X, Y, Z);
+					// 파괴된 Cell은 제외
+					if (GridCache.GetCellExists(CellId) && !CellState.DestroyedCells.Contains(CellId))
+					{
+						ConnectedCells.Add(CellId);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Neighbor Cell 추가 헬퍼 (SubCell 모드 분기 포함)
+	 */
+	FORCEINLINE void TryAddNeighborCell(
+		int32 BoundaryCellId,
+		int32 NeighborCellId,
+		int32 Dir,
+		const FGridCellCache& GridCache,
+		const FCellState& CellState,
+		bool bEnableSubcell,
+		TQueue<FBFSNode>& Queue,
+		TSet<int32>& ConnectedCells)
+	{
+		if (ConnectedCells.Contains(NeighborCellId))
+		{
+			return;
+		}
+
+		if (!GridCache.GetCellExists(NeighborCellId))
+		{
+			return;
+		}
+
+		if (CellState.DestroyedCells.Contains(NeighborCellId))
+		{
+			return;
+		}
+
+		if (bEnableSubcell)
+		{
+			if (SubCellBFSHelper::HasConnectedBoundary(BoundaryCellId, NeighborCellId, Dir, CellState))
+			{
+				ConnectedCells.Add(NeighborCellId);
+				Queue.Enqueue(FBFSNode::MakeCell(NeighborCellId));
+			}
+		}
+		else
+		{
+			ConnectedCells.Add(NeighborCellId);
+			Queue.Enqueue(FBFSNode::MakeCell(NeighborCellId));
+		}
+	}
+
+	/**
+	 * SuperCell 노드 처리 (Intact SuperCell에서 인접 노드 탐색)
+	 *
+	 * 성능 최적화:
+	 * - IsSupercellIntact() (비트필드 O(1))만 사용
+	 * - TArray 할당 없이 직접 좌표 순회
+	 */
+	void ProcessSupercellNode(
+		int32 SupercellId,
+		const FGridCellCache& GridCache,
+		FSupercellCache& SupercellCache,
+		const FCellState& CellState,
+		bool bEnableSubcell,
+		TQueue<FBFSNode>& Queue,
+		TSet<int32>& ConnectedCells,
+		TSet<int32>& VisitedSupercells)
+	{
+		const FSupercellCellRange Range(SupercellId, SupercellCache, GridCache);
+		const FIntVector SupercellCoord = SupercellCache.SupercellIdToCoord(SupercellId);
+
+		// 6방향 인접 SuperCell 탐색
+		for (int32 Dir = 0; Dir < 6; ++Dir)
+		{
+			const FIntVector NeighborSCCoord = SupercellCoord + FIntVector(
+				DIRECTION_OFFSETS[Dir][0],
+				DIRECTION_OFFSETS[Dir][1],
+				DIRECTION_OFFSETS[Dir][2]
+			);
+
+			if (!SupercellCache.IsValidSupercellCoord(NeighborSCCoord))
+			{
+				continue;
+			}
+
+			const int32 NeighborSupercellId = SupercellCache.SupercellCoordToId(NeighborSCCoord);
+
+			// 이미 방문한 SuperCell은 스킵
+			if (VisitedSupercells.Contains(NeighborSupercellId))
+			{
+				continue;
+			}
+
+			// 인접 SuperCell이 Intact인지 확인 (비트필드 체크만 - O(1))
+			if (SupercellCache.IsSupercellIntact(NeighborSupercellId))
+			{
+				// Intact SuperCell → SuperCell 노드로 추가
+				VisitedSupercells.Add(NeighborSupercellId);
+				Queue.Enqueue(FBFSNode::MakeSupercell(NeighborSupercellId));
+				MarkAllCellsInSupercell(NeighborSupercellId, SupercellCache, GridCache, CellState, ConnectedCells);
+			}
+			else
+			{
+				// Broken SuperCell → 경계 Cell에서 인접 Cell로 직접 연결
+				// TArray 할당 없이 직접 좌표 순회
+
+				// 방향별 경계면 Cell 순회 및 인접 Cell 처리
+				switch (Dir)
+				{
+				case 0: // -X: 우리의 X=StartX 면 → 인접 Cell은 X=StartX-1
+					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+					{
+						for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+						{
+							const int32 BoundaryCellId = GridCache.CoordToId(Range.StartX, Y, Z);
+							const int32 NeighborCellId = GridCache.CoordToId(Range.StartX - 1, Y, Z);
+							if (GridCache.IsValidCoord(Range.StartX - 1, Y, Z))
+							{
+								TryAddNeighborCell(BoundaryCellId, NeighborCellId, Dir, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+							}
+						}
+					}
+					break;
+
+				case 1: // +X: 우리의 X=EndX-1 면 → 인접 Cell은 X=EndX
+					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+					{
+						for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+						{
+							const int32 BoundaryCellId = GridCache.CoordToId(Range.EndX - 1, Y, Z);
+							const int32 NeighborCellId = GridCache.CoordToId(Range.EndX, Y, Z);
+							if (GridCache.IsValidCoord(Range.EndX, Y, Z))
+							{
+								TryAddNeighborCell(BoundaryCellId, NeighborCellId, Dir, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+							}
+						}
+					}
+					break;
+
+				case 2: // -Y: 우리의 Y=StartY 면 → 인접 Cell은 Y=StartY-1
+					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+					{
+						for (int32 X = Range.StartX; X < Range.EndX; ++X)
+						{
+							const int32 BoundaryCellId = GridCache.CoordToId(X, Range.StartY, Z);
+							const int32 NeighborCellId = GridCache.CoordToId(X, Range.StartY - 1, Z);
+							if (GridCache.IsValidCoord(X, Range.StartY - 1, Z))
+							{
+								TryAddNeighborCell(BoundaryCellId, NeighborCellId, Dir, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+							}
+						}
+					}
+					break;
+
+				case 3: // +Y: 우리의 Y=EndY-1 면 → 인접 Cell은 Y=EndY
+					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+					{
+						for (int32 X = Range.StartX; X < Range.EndX; ++X)
+						{
+							const int32 BoundaryCellId = GridCache.CoordToId(X, Range.EndY - 1, Z);
+							const int32 NeighborCellId = GridCache.CoordToId(X, Range.EndY, Z);
+							if (GridCache.IsValidCoord(X, Range.EndY, Z))
+							{
+								TryAddNeighborCell(BoundaryCellId, NeighborCellId, Dir, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+							}
+						}
+					}
+					break;
+
+				case 4: // -Z: 우리의 Z=StartZ 면 → 인접 Cell은 Z=StartZ-1
+					for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+					{
+						for (int32 X = Range.StartX; X < Range.EndX; ++X)
+						{
+							const int32 BoundaryCellId = GridCache.CoordToId(X, Y, Range.StartZ);
+							const int32 NeighborCellId = GridCache.CoordToId(X, Y, Range.StartZ - 1);
+							if (GridCache.IsValidCoord(X, Y, Range.StartZ - 1))
+							{
+								TryAddNeighborCell(BoundaryCellId, NeighborCellId, Dir, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+							}
+						}
+					}
+					break;
+
+				case 5: // +Z: 우리의 Z=EndZ-1 면 → 인접 Cell은 Z=EndZ
+					for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+					{
+						for (int32 X = Range.StartX; X < Range.EndX; ++X)
+						{
+							const int32 BoundaryCellId = GridCache.CoordToId(X, Y, Range.EndZ - 1);
+							const int32 NeighborCellId = GridCache.CoordToId(X, Y, Range.EndZ);
+							if (GridCache.IsValidCoord(X, Y, Range.EndZ))
+							{
+								TryAddNeighborCell(BoundaryCellId, NeighborCellId, Dir, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+							}
+						}
+					}
+					break;
+				}
+			}
+		}
+
+		// Orphan Cell과의 연결 (SuperCell 경계의 Cell들에서 외부 Orphan Cell로)
+		// TArray 할당 없이 6면의 경계 Cell을 직접 순회
+
+		// -X 경계면
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+			{
+				const int32 BoundaryCellId = GridCache.CoordToId(Range.StartX, Y, Z);
+				const int32 NeighborX = Range.StartX - 1;
+				if (GridCache.IsValidCoord(NeighborX, Y, Z))
+				{
+					const int32 NeighborCellId = GridCache.CoordToId(NeighborX, Y, Z);
+					if (SupercellCache.IsCellOrphan(NeighborCellId))
+					{
+						TryAddNeighborCell(BoundaryCellId, NeighborCellId, 0, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+					}
+				}
+			}
+		}
+
+		// +X 경계면
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+			{
+				const int32 BoundaryCellId = GridCache.CoordToId(Range.EndX - 1, Y, Z);
+				const int32 NeighborX = Range.EndX;
+				if (GridCache.IsValidCoord(NeighborX, Y, Z))
+				{
+					const int32 NeighborCellId = GridCache.CoordToId(NeighborX, Y, Z);
+					if (SupercellCache.IsCellOrphan(NeighborCellId))
+					{
+						TryAddNeighborCell(BoundaryCellId, NeighborCellId, 1, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+					}
+				}
+			}
+		}
+
+		// -Y 경계면
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridCache.CoordToId(X, Range.StartY, Z);
+				const int32 NeighborY = Range.StartY - 1;
+				if (GridCache.IsValidCoord(X, NeighborY, Z))
+				{
+					const int32 NeighborCellId = GridCache.CoordToId(X, NeighborY, Z);
+					if (SupercellCache.IsCellOrphan(NeighborCellId))
+					{
+						TryAddNeighborCell(BoundaryCellId, NeighborCellId, 2, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+					}
+				}
+			}
+		}
+
+		// +Y 경계면
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridCache.CoordToId(X, Range.EndY - 1, Z);
+				const int32 NeighborY = Range.EndY;
+				if (GridCache.IsValidCoord(X, NeighborY, Z))
+				{
+					const int32 NeighborCellId = GridCache.CoordToId(X, NeighborY, Z);
+					if (SupercellCache.IsCellOrphan(NeighborCellId))
+					{
+						TryAddNeighborCell(BoundaryCellId, NeighborCellId, 3, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+					}
+				}
+			}
+		}
+
+		// -Z 경계면
+		for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridCache.CoordToId(X, Y, Range.StartZ);
+				const int32 NeighborZ = Range.StartZ - 1;
+				if (GridCache.IsValidCoord(X, Y, NeighborZ))
+				{
+					const int32 NeighborCellId = GridCache.CoordToId(X, Y, NeighborZ);
+					if (SupercellCache.IsCellOrphan(NeighborCellId))
+					{
+						TryAddNeighborCell(BoundaryCellId, NeighborCellId, 4, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+					}
+				}
+			}
+		}
+
+		// +Z 경계면
+		for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridCache.CoordToId(X, Y, Range.EndZ - 1);
+				const int32 NeighborZ = Range.EndZ;
+				if (GridCache.IsValidCoord(X, Y, NeighborZ))
+				{
+					const int32 NeighborCellId = GridCache.CoordToId(X, Y, NeighborZ);
+					if (SupercellCache.IsCellOrphan(NeighborCellId))
+					{
+						TryAddNeighborCell(BoundaryCellId, NeighborCellId, 5, GridCache, CellState, bEnableSubcell, Queue, ConnectedCells);
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Cell 노드 처리 (개별 Cell에서 인접 노드 탐색)
+	 *
+	 * 성능 최적화: IsSupercellIntact() (비트필드 O(1))만 사용
+	 */
+	void ProcessCellNode(
+		int32 CellId,
+		const FGridCellCache& GridCache,
+		FSupercellCache& SupercellCache,
+		const FCellState& CellState,
+		bool bEnableSubcell,
+		TQueue<FBFSNode>& Queue,
+		TSet<int32>& ConnectedCells,
+		TSet<int32>& VisitedSupercells)
+	{
+		const FIntVector CellCoord = GridCache.IdToCoord(CellId);
+
+		for (int32 Dir = 0; Dir < 6; ++Dir)
+		{
+			const FIntVector NeighborCoord = CellCoord + FIntVector(
+				DIRECTION_OFFSETS[Dir][0],
+				DIRECTION_OFFSETS[Dir][1],
+				DIRECTION_OFFSETS[Dir][2]
+			);
+
+			if (!GridCache.IsValidCoord(NeighborCoord))
+			{
+				continue;
+			}
+
+			const int32 NeighborCellId = GridCache.CoordToId(NeighborCoord);
+
+			if (!GridCache.GetCellExists(NeighborCellId))
+			{
+				continue;
+			}
+
+			if (CellState.DestroyedCells.Contains(NeighborCellId))
+			{
+				continue;
+			}
+
+			if (ConnectedCells.Contains(NeighborCellId))
+			{
+				continue;
+			}
+
+			// SubCell 모드에서는 경계 연결성 확인
+			bool bIsConnected = true;
+			if (bEnableSubcell)
+			{
+				bIsConnected = SubCellBFSHelper::HasConnectedBoundary(CellId, NeighborCellId, Dir, CellState);
+			}
+
+			if (!bIsConnected)
+			{
+				continue;
+			}
+
+			const int32 NeighborSupercellId = SupercellCache.GetSupercellForCell(NeighborCellId);
+
+			// Neighbor가 Intact SuperCell에 속하는지 확인 (비트필드 체크만 - O(1))
+			if (NeighborSupercellId != INDEX_NONE &&
+			    !VisitedSupercells.Contains(NeighborSupercellId) &&
+			    SupercellCache.IsSupercellIntact(NeighborSupercellId))
+			{
+				// Intact SuperCell → SuperCell 노드로 확장
+				VisitedSupercells.Add(NeighborSupercellId);
+				Queue.Enqueue(FBFSNode::MakeSupercell(NeighborSupercellId));
+				MarkAllCellsInSupercell(NeighborSupercellId, SupercellCache, GridCache, CellState, ConnectedCells);
+			}
+			else
+			{
+				// Broken SuperCell 또는 Orphan → Cell 단위 추가
+				ConnectedCells.Add(NeighborCellId);
+				Queue.Enqueue(FBFSNode::MakeCell(NeighborCellId));
+			}
+		}
+	}
+}
+
+TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
+	const FGridCellCache& Cache,
+	FSupercellCache& SupercellCache,
+	const FCellState& CellState,
+	bool bEnableSubcell)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(FindConnectedCellsHierarchical);
+	using namespace HierarchicalBFSHelper;
+
+	TSet<int32> ConnectedCells;
+	TSet<int32> VisitedSupercells;
+	TQueue<FBFSNode> Queue;
+
+	//=========================================================================
+	// Step 1: Anchor 초기화
+	// 성능 최적화: IsSupercellIntact() (비트필드 O(1))만 사용
+	//=========================================================================
+	for (int32 CellId = 0; CellId < Cache.GetTotalCellCount(); ++CellId)
+	{
+		if (!Cache.GetCellExists(CellId))
+		{
+			continue;
+		}
+
+		if (!Cache.GetCellIsAnchor(CellId))
+		{
+			continue;
+		}
+
+		if (CellState.DestroyedCells.Contains(CellId))
+		{
+			continue;
+		}
+
+		// SubCell 모드에서는 살아있는 SubCell이 있어야 함
+		if (bEnableSubcell && !SubCellBFSHelper::HasAliveSubCell(CellId, CellState))
+		{
+			continue;
+		}
+
+		const int32 SupercellId = SupercellCache.GetSupercellForCell(CellId);
+
+		// Intact 여부는 비트필드로만 확인 (O(1))
+		if (SupercellId != INDEX_NONE &&
+		    !VisitedSupercells.Contains(SupercellId) &&
+		    SupercellCache.IsSupercellIntact(SupercellId))
+		{
+			// Intact SuperCell → 단일 노드로 추가
+			VisitedSupercells.Add(SupercellId);
+			Queue.Enqueue(FBFSNode::MakeSupercell(SupercellId));
+			MarkAllCellsInSupercell(SupercellId, SupercellCache, Cache, CellState, ConnectedCells);
+		}
+		else
+		{
+			// Broken SuperCell 또는 Orphan → Cell 단위 추가
+			if (!ConnectedCells.Contains(CellId))
+			{
+				ConnectedCells.Add(CellId);
+				Queue.Enqueue(FBFSNode::MakeCell(CellId));
+			}
+		}
+	}
+
+	//=========================================================================
+	// Step 2: BFS 탐색
+	//=========================================================================
+	while (!Queue.IsEmpty())
+	{
+		FBFSNode Current;
+		Queue.Dequeue(Current);
+
+		if (Current.bIsSupercell)
+		{
+			// Case A: Intact SuperCell 노드
+			ProcessSupercellNode(
+				Current.Id,
+				Cache,
+				SupercellCache,
+				CellState,
+				bEnableSubcell,
+				Queue,
+				ConnectedCells,
+				VisitedSupercells);
+		}
+		else
+		{
+			// Case B: 개별 Cell 노드
+			ProcessCellNode(
+				Current.Id,
+				Cache,
+				SupercellCache,
+				CellState,
+				bEnableSubcell,
+				Queue,
+				ConnectedCells,
+				VisitedSupercells);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[HierarchicalBFS] Connected: %d cells, Visited SuperCells: %d"),
+		ConnectedCells.Num(), VisitedSupercells.Num());
+
+	return ConnectedCells;
+}
+
+TSet<int32> FCellDestructionSystem::FindDisconnectedCellsHierarchicalLevel(
+	const FGridCellCache& Cache,
+	FSupercellCache& SupercellCache,
+	const FCellState& CellState,
+	bool bEnableSubcell)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsHierarchicalLevel);
+
+	// 1. 앵커에 연결된 Cell 찾기
+	TSet<int32> ConnectedCells = FindConnectedCellsHierarchical(
+		Cache, SupercellCache, CellState, bEnableSubcell);
+
+	// 2. 전체 Grid에서 Connected가 아닌 Cell = Disconnected
+	TSet<int32> Disconnected;
+
+	for (int32 CellId = 0; CellId < Cache.GetTotalCellCount(); ++CellId)
+	{
+		if (!Cache.GetCellExists(CellId))
+		{
+			continue;
+		}
+
+		if (CellState.DestroyedCells.Contains(CellId))
+		{
+			continue;
+		}
+
+		if (!ConnectedCells.Contains(CellId))
+		{
+			Disconnected.Add(CellId);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[HierarchicalBFS] Disconnected: %d cells"),
+		Disconnected.Num());
+
+	return Disconnected;
 }

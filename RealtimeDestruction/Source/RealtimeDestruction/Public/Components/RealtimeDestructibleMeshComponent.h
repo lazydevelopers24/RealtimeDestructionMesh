@@ -503,6 +503,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced")
 	bool bEnableSubcell = true;
+
+	/**
+	 * SuperCell 기반 Hierarchical BFS 최적화 사용 여부
+	 * true: 2-Level Hierarchical BFS 사용 (대규모 Grid에서 성능 향상)
+	 * false: 기존 Cell 단위 BFS 사용
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced")
+	bool bEnableSupercell = true;
 	
 	/** 데이터 유지를 위한 함수 */
 	virtual TStructOnScope<FActorComponentInstanceData> GetComponentInstanceData() const override;
@@ -700,6 +708,10 @@ protected:
 	UPROPERTY()
 	FCellState CellState;
 
+	/** SuperCell 캐시 (BFS 최적화용, GridCellCache 빌드 후 생성) */
+	UPROPERTY()
+	FSupercellCache SupercellCache;
+
 	//=========================================================================
 	// Cell 기반 구조적 무결성 시스템
 	//=========================================================================
@@ -846,10 +858,26 @@ public:
 	/** 격자 셀 크기 (cm). 값이 작을수록 해상도가 높아지지만 성능 비용 증가 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "1.0"))
 	FVector GridCellSize = FVector(5.0f);
-
+	
 	/** 바닥 Anchor 감지 Z 높이 임계값 (cm, MeshBounds.Min.Z 기준 상대값) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "0.0"))
 	float FloorHeightThreshold = 10.0f;
+
+	//////////////////////////////////////////////////////////////////////////
+	// Detached Cell Smoothing (계단 현상 완화)
+	//////////////////////////////////////////////////////////////////////////
+
+	/** Detached Cell 제거 시 Laplacian Smoothing 반복 횟수 (0이면 비활성화) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0", ClampMax = "10"))
+	int32 SmoothingIterations = 4;
+
+	/** Laplacian Smoothing 강도 (0~1) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SmoothingStrength = 0.2f;
+
+	/** HC Laplacian 보정 강도 (0~1, 수축 방지) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float HCBeta = 0.5f;
 
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
@@ -963,6 +991,9 @@ private:
 	void CopyMaterialsFromStaticMesh(UStaticMesh* InMesh);
 	void CopyMaterialsFromStaticMeshComponent(UStaticMeshComponent* InComp);
 	void CopyCollisionFromStaticMeshComponent(UStaticMeshComponent* InComp);
+
+	/** Detached Cell 제거 시 HC Laplacian Smoothing (vollmer et al. (1999) 적용 (계단 현상 완화) */
+	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh);
 
 	// UActorComponent overrides
 	virtual void OnRegister() override;
