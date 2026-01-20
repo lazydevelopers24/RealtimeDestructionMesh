@@ -5,6 +5,7 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "HAL/PlatformMisc.h"
+#include "Data/DecalMaterialDataAsset.h"
 
 #define LOCTEXT_NAMESPACE "RDMSettingsCustomization"
 
@@ -78,6 +79,42 @@ void FRdmSettingsCustomization::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 	  .Font(IDetailLayoutBuilder::GetDetailFontBold())
 	  .ColorAndOpacity(FSlateColor(FLinearColor::Green)) 
 	];
+
+	// Decal Setting Category
+	IDetailCategoryBuilder& DecalCategory = DetailBuilder.EditCategory("Decal Settings");
+
+	// DecalDataAssets 프로퍼티 핸들 가져오기
+	TSharedRef<IPropertyHandle> ArrayHandle =
+		DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(URDMSetting, DecalDataAssets));
+
+	// 배열 변경 시 ConfigID 자동 갱신
+	ArrayHandle->SetOnChildPropertyValueChanged(
+		FSimpleDelegate::CreateLambda([this, &DetailBuilder]()
+		{
+			UpdateConfigIDs();
+			DetailBuilder.ForceRefreshDetails();
+		})
+	);
  }
+
+void FRdmSettingsCustomization::UpdateConfigIDs()
+{
+	if (!SettingsPtr.IsValid())
+	{
+		return;
+	}
+
+	for (FDecalDataAssetEntry& Entry : SettingsPtr->DecalDataAssets)
+	{
+		if (UDecalMaterialDataAsset* Asset = Entry.DataAsset.LoadSynchronous())
+		{
+			Entry.ConfigID = Asset->ConfigID;
+		}
+		else
+		{
+			Entry.ConfigID = NAME_None;
+		} 
+	}
+}
 
 #undef LOCTEXT_NAMESPACE

@@ -55,8 +55,7 @@ private:
 	void OnConfigIDSelected(FName SelectedConfigID);
 	void OnSurfaceTypeSelected(FName SelectedSurfaceType);
 	void OnVariantIndexSelected(int32 SelectedIndex);
-	
-	void AddNewConfigID();
+	 
 	void AddNewSurfaceType();
 	void AddNewVariant();
 
@@ -91,9 +90,7 @@ private:
 
 	enum class EEditMode { Component, DataAsset };
 	EEditMode CurrentEditMode = EEditMode::Component;
-   
-	/** 현재 선택된 ConfigID (총알 종류) */
-	FName CurrentConfigID = NAME_None;
+    
 	
 	/** 현재 선택된 SurfaceType (표면 재질) */
 	FName CurrentSurfaceType = NAME_None;

@@ -99,6 +99,15 @@ void UDestructionProjectileComponent::BeginPlay()
 			UE_LOG(LogTemp, Warning, TEXT("DestructionProjectileComponent: Tool mesh is invalid."));
 		}		
 	}
+
+	 
+	if (UGameInstance* GI = GetWorld()->GetGameInstance())
+	{
+		if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+		{
+			CachedDecalDataAsset = Subsystem->FindDataAssetByConfigID(DecalConfigID);
+		}
+	}
 }
 
 void UDestructionProjectileComponent::ProcessProjectileHit(
@@ -183,10 +192,10 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 	FName SurfaceTypeForShape = DestructComp->SurfaceType;
 	bool bHasDecalConfig = false;
 	FDecalSizeConfig OverrideDecalConfig;
-	
-	if (DecalDataAsset)
+ 
+	if (CachedDecalDataAsset)
 	{ 
-		bHasDecalConfig = DecalDataAsset->GetConfigRandom(DecalConfigID, SurfaceTypeForShape, OverrideDecalConfig);
+		bHasDecalConfig = CachedDecalDataAsset->GetConfigRandom(SurfaceTypeForShape, OverrideDecalConfig);
 		if (bHasDecalConfig)
 		{
 			bool bShapeChanged = (CylinderRadius != OverrideDecalConfig.CylinderRadius ||
@@ -314,22 +323,7 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 		FName SurfaceType = DestructComp->SurfaceType;
 		Request.SurfaceType = SurfaceType;
 		Request.DecalConfigID = DecalConfigID;  // 네트워크 전송용
-
-		// GameInstanceSubsystem에 DecalDataAsset 설정 (서버/클라 모두)
-		if (DecalDataAsset)
-		{
-			if (UGameInstance* GI = GetWorld()->GetGameInstance())
-			{
-				if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
-				{
-					if (!Subsystem->GetDecalDataAsset())
-					{
-						Subsystem->SetDecalDataAsset(DecalDataAsset);
-					}
-				}
-			}
-		}
-
+ 
 		if (bHasDecalConfig)
 		{
 			Request.DecalSize = OverrideDecalConfig.DecalSize;
@@ -392,9 +386,10 @@ void UDestructionProjectileComponent::ProcessSphereDestructionRequestForChunk(UR
 	bool bHasDecalConfig = false;
 	FDecalSizeConfig OverrideDecalConfig;
 
-	if (DecalDataAsset)
+	 
+	if (CachedDecalDataAsset)
 	{
-		bHasDecalConfig = DecalDataAsset->GetConfigRandom(DecalConfigID, SurfaceTypeForShape, OverrideDecalConfig);
+		bHasDecalConfig = CachedDecalDataAsset->GetConfigRandom(SurfaceTypeForShape, OverrideDecalConfig);
 		if (bHasDecalConfig)
 		{
 			bool bShapeChanged = (SphereRadius != OverrideDecalConfig.SphereRadius);
@@ -433,21 +428,7 @@ void UDestructionProjectileComponent::ProcessSphereDestructionRequestForChunk(UR
 	APawn* InstigatorPawn = Owner->GetInstigator();
 	APlayerController* PC = InstigatorPawn ? Cast<APlayerController>(InstigatorPawn->GetController()) : nullptr;
 	UDestructionNetworkComponent* NetworkComp = PC ? PC->FindComponentByClass<UDestructionNetworkComponent>() : nullptr;
-
-	// GameInstance Subsystem에 Decal Data Assset 설정
-	if (DecalDataAsset)
-	{
-		if (UGameInstance* GI = GetWorld()->GetGameInstance())
-		{
-			if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
-			{
-				if (!Subsystem->GetDecalDataAsset())
-				{
-					Subsystem->SetDecalDataAsset(DecalDataAsset); 
-				}
-			}
-		}
-	}
+ 
 	//  구  
 	TArray<FHitResult> HitResults;
 
@@ -863,12 +844,12 @@ void UDestructionProjectileComponent::RequestDestructionAtLocation(const FVector
 			return;
 		}
 	}
-
-	if (DecalDataAsset)
+	 
+	if (CachedDecalDataAsset)
 	{
 		FDecalSizeConfig OverrideConfig;
 		// SurfaceType 없으므로 Default 사용
-		if (DecalDataAsset->GetConfigRandom(DecalConfigID, FName("Default"), OverrideConfig))
+		if (CachedDecalDataAsset->GetConfigRandom(FName("Default"), OverrideConfig))
 		{
 			bool bRadiusChanged = (SphereRadius != OverrideConfig.SphereRadius);
 
@@ -935,13 +916,13 @@ void UDestructionProjectileComponent::RequestDestructionAtLocation(const FVector
 void UDestructionProjectileComponent::GetCalculateDecalSize(FName SurfaceType, FVector& LocationOffset, FRotator& RotatorOffset,
 	FVector& SizeOffset) const
 {
-	if (DecalDataAsset)
+	if (CachedDecalDataAsset)
 	{
 		// SurfaceType이 없으면 Default 사용
 		FName ActualSurfaceType = SurfaceType.IsNone() ? FName("Default") : SurfaceType;
 
 		FDecalSizeConfig Config;
-		if (DecalDataAsset->GetConfig(DecalConfigID, ActualSurfaceType, 0,Config))
+		if (CachedDecalDataAsset->GetConfig(ActualSurfaceType, 0,Config))
 		{
 			LocationOffset = Config.LocationOffset;
 			RotatorOffset = Config.RotationOffset;

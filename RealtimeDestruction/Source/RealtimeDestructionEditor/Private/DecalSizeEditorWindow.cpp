@@ -19,6 +19,9 @@
 #include "Widgets/Input/SRotatorInputBox.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Data/DecalMaterialDataAsset.h"
+#include "Subsystems/DestructionGameInstanceSubsystem.h"
+#include "Settings/RDMSetting.h"
+#include "Editor.h"
 
 #define LOCTEXT_NAMESPACE "DecalSizeEditorWindow"
 
@@ -32,12 +35,25 @@ void SDecalSizeEditorWindow::Construct(const FArguments& InArgs)
 	// 편집 모드 결정
 	if (TargetDataAsset.IsValid())
 	{
-		CurrentEditMode = EEditMode::DataAsset;  
-		RefreshConfigIDList();
-		if (ConfigIDList.Num() == 0)
+		CurrentEditMode = EEditMode::DataAsset;
+
+		// ConfigID가 없으면 기본값 설정
+		if (TargetDataAsset->ConfigID.IsNone())
 		{
-			AddNewConfigID();
+			TargetDataAsset->ConfigID = FName("Default");
+			TargetDataAsset->MarkPackageDirty();
 		}
+
+		// SurfaceConfigs가 비어있으면 기본 Surface 추가
+		if (TargetDataAsset->SurfaceConfigs.Num() == 0)
+		{
+			FDecalSizeConfigArray DefaultSurfaceArray;
+			DefaultSurfaceArray.Configs.Add(FDecalSizeConfig());
+			TargetDataAsset->SurfaceConfigs.Add(FName("Default"), DefaultSurfaceArray);
+			TargetDataAsset->MarkPackageDirty();
+		}
+
+		RefreshConfigIDList();
 		if (ConfigIDList.Num() > 0)
 		{
 			OnConfigIDSelected(*ConfigIDList[0]);
@@ -48,7 +64,7 @@ void SDecalSizeEditorWindow::Construct(const FArguments& InArgs)
 			{
 				SelectedDecalMaterial = Config->DecalMaterial;
 			}
-		} 
+		}
 	}
 	else if (TargetComponent.IsValid())
 	{
@@ -224,7 +240,7 @@ void SDecalSizeEditorWindow::Construct(const FArguments& InArgs)
 
 	if (CurrentEditMode == EEditMode::DataAsset && TargetDataAsset.IsValid() && Viewport.IsValid())
 	{
-		LoadConfigFromDataAsset(CurrentConfigID, CurrentSurfaceType);
+		LoadConfigFromDataAsset(TargetDataAsset->ConfigID, CurrentSurfaceType);
 	}
 	
   }
@@ -947,26 +963,9 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateConfigSelectionSection()
 						SNew(STextBlock)
 						.Text_Lambda([this]() -> FText
 						{
-							return FText::FromName(CurrentConfigID);
+							return TargetDataAsset.IsValid() ? FText::FromName(TargetDataAsset->ConfigID) : FText::GetEmpty();
 						})
 					]
-				]
-
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.Padding(4.0f, 0.0f)
-				[
-					SNew(SButton)
-					.Text(FText::FromString("+"))
-					.ToolTipText(FText::FromString("Add new Config ID"))
-					.OnClicked_Lambda([this]()
-					{
-						if (TargetDataAsset.IsValid())
-						{
-							AddNewConfigID();
-						}
-						return FReply::Handled();
-					})
 				]
 			]
 
@@ -1025,7 +1024,26 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateConfigSelectionSection()
 						return FReply::Handled();
 					})
 				]
-			]	 
+
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(2.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(FText::FromString("-"))
+					.ToolTipText(FText::FromString("Delete current Surface Type"))
+					.IsEnabled_Lambda([this]()
+					{
+						// 최소 1개의 Surface Type은 유지
+						return TargetDataAsset.IsValid() && TargetDataAsset->SurfaceConfigs.Num() > 1;
+					})
+					.OnClicked_Lambda([this]()
+					{
+						DeleteCurrentSurfaceType();
+						return FReply::Handled();
+					})
+				]
+			]
 
 			// Row3 : Varient Index 설정
 			+ SVerticalBox::Slot()
@@ -1130,7 +1148,7 @@ TSharedRef<SWidget> SDecalSizeEditorWindow::CreateConfigSelectionSection()
 					SNew(SEditableTextBox)
 					.Text_Lambda([this]() -> FText
 					{
-						return FText::FromName(CurrentConfigID);
+						return TargetDataAsset.IsValid() ? FText::FromName(TargetDataAsset->ConfigID) : FText::GetEmpty();
 					})
 					.OnTextCommitted_Lambda([this](const FText& NewText, ETextCommit::Type CommitType)
 					{
@@ -1436,7 +1454,7 @@ void SDecalSizeEditorWindow::LoadConfigFromDataAsset(FName ConfigID, FName Surfa
 	}
 
 	FDecalSizeConfig Config;
-	if (TargetDataAsset->GetConfig(ConfigID, SurfaceType, CurVariantIndex, Config))
+	if (TargetDataAsset->GetConfig(SurfaceType, CurVariantIndex, Config))
 	{
 		SelectedDecalMaterial = Config.DecalMaterial;
 
@@ -1480,39 +1498,33 @@ void SDecalSizeEditorWindow::RefreshConfigIDList()
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
 
-	for (const FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
-	{
-		ConfigIDList.Add(MakeShared<FName>(Config.ConfigID));
-	}
+	 
+	ConfigIDList.Add(MakeShared<FName>(DataAsset->ConfigID));
+	 
 }
 
 void SDecalSizeEditorWindow::RefreshSurfaceTypeList()
 {
 	SurfaceTypeList.Empty();
 
-	if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone())
+	if (!TargetDataAsset.IsValid())
 	{
 		return;
 	}
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
+	 
+	 
+	// SurfaceConfigs의 모든 Key(SurfaceType) 추가
+	TArray<FName> SurfaceKeys;
+	DataAsset->SurfaceConfigs.GetKeys(SurfaceKeys);
 
-	// 현재 ConfigID에 해당하는 ProjectileConfig 찾기
-	for (const FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
+	for (const FName& Key : SurfaceKeys)
 	{
-		if (Config.ConfigID == CurrentConfigID)
-		{
-			// SurfaceConfigs의 모든 Key(SurfaceType) 추가
-			TArray<FName> SurfaceKeys;
-			Config.SurfaceConfigs.GetKeys(SurfaceKeys);
-
-			for (const FName& Key : SurfaceKeys)
-			{
-				SurfaceTypeList.Add(MakeShared<FName>(Key));
-			}
-			break;
-		}
-	}
+		SurfaceTypeList.Add(MakeShared<FName>(Key));
+	} 
+	 
+	 
  
 	CurVariantIndex = 0;
 	RefreshVariantIndexList();
@@ -1567,27 +1579,19 @@ FDecalSizeConfig* SDecalSizeEditorWindow::GetCurrentDecalConfig()
 
 FDecalSizeConfigArray* SDecalSizeEditorWindow::GetCurrentDecalConfigArray()
 {
-	if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone() || CurrentSurfaceType.IsNone())
+    
+	if (!TargetDataAsset.IsValid() || CurrentSurfaceType.IsNone())
 	{
 		return nullptr;
 	}
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
-
-	for (FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
-	{
-		if (Config.ConfigID == CurrentConfigID)
-		{
-			return Config.SurfaceConfigs.Find(CurrentSurfaceType);
-		}
-	}
-
-	return nullptr;
+	return DataAsset->SurfaceConfigs.Find(CurrentSurfaceType);
 }
 
 void SDecalSizeEditorWindow::OnConfigIDSelected(FName SelectedConfigID)
 {
-	CurrentConfigID = SelectedConfigID;
+
 	CurrentSurfaceType = NAME_None;
 
 	RefreshSurfaceTypeList();
@@ -1664,8 +1668,8 @@ void SDecalSizeEditorWindow::OnVariantIndexSelected(int32 SelectedIndex)
 		Viewport->RefreshPreview(); 
 	}
 }
-
-void SDecalSizeEditorWindow::AddNewConfigID()
+ 
+void SDecalSizeEditorWindow::AddNewSurfaceType()
 {
 	if (!TargetDataAsset.IsValid())
 	{
@@ -1673,58 +1677,21 @@ void SDecalSizeEditorWindow::AddNewConfigID()
 	}
 	
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
+	  
+	// 고유한 SurfaceType 이름 생성
+	FName NewSurfaceType = EnsureUniqueSurfaceType(FName("NewSurface"));
 
-	// 고유한 이름 생성
-	FName NewConfigID = EnsureUniqueConfigID(FName("NewProjectile"));
+	// 새 DecalConfig 추가
+	FDecalSizeConfigArray NewDecalConfig;
+	NewDecalConfig.Configs.Add(FDecalSizeConfig());
+	DataAsset->SurfaceConfigs.Add(NewSurfaceType, NewDecalConfig);
 
-	// 새 ProjectileConfig 추가
-	FProjectileDecalConfig NewConfig;
-	NewConfig.ConfigID = NewConfigID;
-
-	// 기본 SurfaceType Default 추가
-	FDecalSizeConfigArray DefaultSurfaceArray;
-	DefaultSurfaceArray.Configs.Add(FDecalSizeConfig());
-	NewConfig.SurfaceConfigs.Add(FName("Default"), DefaultSurfaceArray);
-
-	DataAsset->ProjectileConfigs.Add(NewConfig);
 	DataAsset->MarkPackageDirty();
 
 	// 목록 갱신 및 새 항목 선택
-	RefreshConfigIDList();
-	OnConfigIDSelected(NewConfigID);
-     
-}
-
-void SDecalSizeEditorWindow::AddNewSurfaceType()
-{
-	if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone())
-	{
-		return;
-	}
-	
-	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
-
-	// 현재 ConfigID의 ProjectileConfig 찾기
-	for (FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
-	{
-		if (Config.ConfigID == CurrentConfigID)
-		{
-			// 고유한 SurfaceType 이름 생성
-			FName NewSurfaceType = EnsureUniqueSurfaceType(FName("NewSurface"));
-
-			// 새 DecalConfig 추가
-			FDecalSizeConfigArray NewDecalConfig;
-			NewDecalConfig.Configs.Add(FDecalSizeConfig());
-			Config.SurfaceConfigs.Add(NewSurfaceType, NewDecalConfig);
-
-			DataAsset->MarkPackageDirty();
-
-			// 목록 갱신 및 새 항목 선택
-			RefreshSurfaceTypeList();
-			OnSurfaceTypeSelected(NewSurfaceType);
-			break;
-		}
-	}
+	RefreshSurfaceTypeList();
+	OnSurfaceTypeSelected(NewSurfaceType); 
+	 
 }
 
 void SDecalSizeEditorWindow::AddNewVariant()
@@ -1767,13 +1734,12 @@ FName SDecalSizeEditorWindow::EnsureUniqueConfigID(FName NewName)
 	// 중복 체크
 	auto IsConfigIDExists = [&]( FName Name )->bool
 	{ 
-		for (const FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
+		 
+		if (DataAsset->ConfigID == Name)
 		{
-			if (Config.ConfigID == Name)
-			{
-				return true;
-			}
+			return true;
 		}
+ 
 
 		return false;
 	};
@@ -1799,60 +1765,53 @@ FName SDecalSizeEditorWindow::EnsureUniqueConfigID(FName NewName)
 }
 
 FName SDecalSizeEditorWindow::EnsureUniqueSurfaceType(FName NewName)
-{  if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone())
-{
-	return FName();
-}
+{  
+	if (!TargetDataAsset.IsValid())
+	{
+		return FName();
+	}
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
-
-	// 현재 ConfigID의 SurfaceConfigs 찾기
-	for (const FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
+	  
+	if (!DataAsset->SurfaceConfigs.Contains(NewName))
 	{
-		if (Config.ConfigID == CurrentConfigID)
-		{
-			if (!Config.SurfaceConfigs.Contains(NewName))
-			{
-				return NewName;
-			}
-
-			// 중복이면 숫자 붙이기
-			FString BaseString = NewName.ToString();
-			int32 Counter = 1;
-
-			while (true)
-			{
-				FName TempName = FName(*FString::Printf(TEXT("%s_%d"), *BaseString, Counter));
-				if (!Config.SurfaceConfigs.Contains(TempName))
-				{
-					return TempName;
-				}
-				Counter++;
-			}
-		}
+		return NewName;
 	}
+
+	// 중복이면 숫자 붙이기
+	FString BaseString = NewName.ToString();
+	int32 Counter = 1;
+
+	while (true)
+	{
+		FName TempName = FName(*FString::Printf(TEXT("%s_%d"), *BaseString, Counter));
+		if (!DataAsset->SurfaceConfigs.Contains(TempName))
+		{
+			return TempName;
+		}
+		Counter++;
+	}
+ 
+ 
 
 	return FName();
 }
 
 void SDecalSizeEditorWindow::DeleteCurrentConfigID()
 {
-	if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone())
+	if (!TargetDataAsset.IsValid())
 	{
 		return;
 	}
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
-
-	DataAsset->ProjectileConfigs.RemoveAll([this](const FProjectileDecalConfig& Config)
-	{
-		return Config.ConfigID == CurrentConfigID;
-	});
-
+	
+	DataAsset->ConfigID = NAME_None;
+	DataAsset->SurfaceConfigs.Empty();
+ 
 	DataAsset->MarkPackageDirty();
 
-	// 목록 갱신
-	CurrentConfigID = NAME_None;
+	// 목록 갱신 
 	CurrentSurfaceType = NAME_None;
 	RefreshConfigIDList();
 
@@ -1865,32 +1824,27 @@ void SDecalSizeEditorWindow::DeleteCurrentConfigID()
 
 void SDecalSizeEditorWindow::DeleteCurrentSurfaceType()
 {
-	if (!TargetDataAsset.IsValid() || CurrentConfigID.IsNone() || CurrentSurfaceType.IsNone())
+	if (!TargetDataAsset.IsValid() || CurrentSurfaceType.IsNone())
 	{
 		return;
 	}
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
 
-	for (FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
+  
+	DataAsset->SurfaceConfigs.Remove(CurrentSurfaceType);
+	DataAsset->MarkPackageDirty();
+
+	// 목록 갱신
+	CurrentSurfaceType = NAME_None;
+	RefreshSurfaceTypeList();
+
+	// 첫 번째 항목 선택 (있다면)
+	if (SurfaceTypeList.Num() > 0)
 	{
-		if (Config.ConfigID == CurrentConfigID)
-		{
-			Config.SurfaceConfigs.Remove(CurrentSurfaceType);
-			DataAsset->MarkPackageDirty();
-
-			// 목록 갱신
-			CurrentSurfaceType = NAME_None;
-			RefreshSurfaceTypeList();
-
-			// 첫 번째 항목 선택 (있다면)
-			if (SurfaceTypeList.Num() > 0)
-			{
-				OnSurfaceTypeSelected(*SurfaceTypeList[0]);
-			}
-			break;
-		}
+		OnSurfaceTypeSelected(*SurfaceTypeList[0]);
 	}
+  
 	
 }
 
@@ -1918,64 +1872,83 @@ void SDecalSizeEditorWindow::DeleteCurrentVariant()
 
 void SDecalSizeEditorWindow::RenameCurrentConfigID(FName NewName)
 {
-	if (NewName.IsNone() || NewName == CurrentConfigID || !TargetDataAsset.IsValid())
+	if (NewName.IsNone() || !TargetDataAsset.IsValid())
 	{
 		return;
 	}
-	
-	NewName = EnsureUniqueConfigID(NewName);
 
 	UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
 
-	for (FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
+	// 변경 전 ConfigID 저장
+	FName OldConfigID = DataAsset->ConfigID;
+
+	// 같은 이름이면 무시
+	if (OldConfigID == NewName)
 	{
-		if (Config.ConfigID == CurrentConfigID)
+		return;
+	}
+
+	NewName = EnsureUniqueConfigID(NewName);
+
+	// Data Asset의 ConfigID 변경
+	DataAsset->ConfigID = NewName;
+	DataAsset->MarkPackageDirty();
+
+	// Subsystem의 Map Key도 업데이트
+	if (GEditor)
+	{
+		if (UWorld* World = GEditor->GetEditorWorldContext().World())
 		{
-			Config.ConfigID = NewName;
-			CurrentConfigID = NewName;
-			DataAsset->MarkPackageDirty();
-			RefreshConfigIDList();
-			break;
+			if (UGameInstance* GI = World->GetGameInstance())
+			{
+				if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+				{
+					Subsystem->RenameConfigID(OldConfigID, NewName);
+				}
+			}
 		}
 	}
+
+	// Project Settings (RDMSetting)의 Entry ConfigID도 업데이트
+	if (URDMSetting* Settings = URDMSetting::Get())
+	{
+		Settings->UpdateEntryConfigID(OldConfigID, NewName);
+	}
+
+	RefreshConfigIDList();
 }
 
 void SDecalSizeEditorWindow::RenameCurrentSurfaceType(FName NewName)
 {
-    if (NewName.IsNone() || NewName == CurrentSurfaceType || !TargetDataAsset.IsValid() || CurrentConfigID.IsNone())
+    if (NewName.IsNone() || NewName == CurrentSurfaceType || !TargetDataAsset.IsValid()  )
     {
         return;
     }
 
     UDecalMaterialDataAsset* DataAsset = TargetDataAsset.Get();
 
-    for (FProjectileDecalConfig& Config : DataAsset->ProjectileConfigs)
-    {
-        if (Config.ConfigID == CurrentConfigID)
-        {
-            FDecalSizeConfigArray* ExistingConfig = Config.SurfaceConfigs.Find(CurrentSurfaceType);
+ 
+            FDecalSizeConfigArray* ExistingConfig = DataAsset->SurfaceConfigs.Find(CurrentSurfaceType);
 
             if (!ExistingConfig)
             {
                 return; 
             }
 
-            if (Config.SurfaceConfigs.Contains(NewName))
+            if (DataAsset->SurfaceConfigs.Contains(NewName))
             {
                 NewName = EnsureUniqueSurfaceType(NewName);
             }
 
             FDecalSizeConfigArray ConfigCopy = *ExistingConfig;
-            Config.SurfaceConfigs.Remove(CurrentSurfaceType);
-            Config.SurfaceConfigs.Add(NewName, ConfigCopy);
+            DataAsset->SurfaceConfigs.Remove(CurrentSurfaceType);
+            DataAsset->SurfaceConfigs.Add(NewName, ConfigCopy);
 
             CurrentSurfaceType = NewName;
             DataAsset->MarkPackageDirty();
-            RefreshSurfaceTypeList();
-            break;
-
-        }
-    }
+            RefreshSurfaceTypeList(); 
+        
+    
 }
 
 #undef LOCTEXT_NAMESPACE

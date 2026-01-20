@@ -201,11 +201,11 @@ public:
 	TObjectPtr<UMaterialInterface> DecalMaterialInEditor = nullptr;
 
 	UPROPERTY()
+	TObjectPtr<UDecalMaterialDataAsset> CachedDecalDataAsset; 
+
+	UPROPERTY()
 	FName DecalConfig = FName("Default");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
-	TObjectPtr<UDecalMaterialDataAsset> DecalDataAsset;
-
+ 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
 	FName DecalConfigID = FName("Default");
 	

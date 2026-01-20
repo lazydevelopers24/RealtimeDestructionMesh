@@ -99,23 +99,34 @@ class REALTIMEDESTRUCTION_API UDecalMaterialDataAsset : public UPrimaryDataAsset
 	GENERATED_BODY()
 
 public:
-	/** 총알 종류별 Decal 설정 목록 */ 
+#if WITH_EDITOR
+	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	
+private:
+	// 변경 전 ConfigID를 임시 저장
+	FName CachedConfigIDBeforeEdit;
+#endif
+
+public:  
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
-	TArray<FProjectileDecalConfig> ProjectileConfigs;
+	FName ConfigID = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal") 
+	TMap<FName,	FDecalSizeConfigArray> SurfaceConfigs;
+	
 public:
 	UFUNCTION(BlueprintCallable, Category = "Decal")
-	bool GetConfig(FName ConfigID, FName SurfaceType, int32 VariantIndex, FDecalSizeConfig& OutConfig ) const;
+	bool GetConfig( FName SurfaceType, int32 VariantIndex, FDecalSizeConfig& OutConfig ) const;
  
 	UFUNCTION(BlueprintCallable, Category = "Decal")
-	bool GetConfigRandom(FName ConfigID, FName SurfaceType, FDecalSizeConfig& OutConfig ) const;
- 
-	const FProjectileDecalConfig* FindProjectileConfig(FName ConfigID) const; 
-	TArray<FName> GetAllConfigIDs() const;
-	
+	bool GetConfigRandom( FName SurfaceType, FDecalSizeConfig& OutConfig ) const;
+  
 	/** 보뮤하고 있는 Key의 수 */
 	UFUNCTION(BlueprintCallable, Category = "Decal")
-	int32 GetConfigCount() { return ProjectileConfigs.Num(); };
+	int32 GetSurfaceConfigCount() { return SurfaceConfigs.Num(); };
 	
+
 #if WITH_EDITORONLY_DATA
 	UPROPERTY()
 	FName CurrentEditingKey = NAME_None;

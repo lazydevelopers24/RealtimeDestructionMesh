@@ -11,7 +11,8 @@ public:
 
 private:
 	void OnPercentageChanged();
-
+	void UpdateConfigIDs();
+	
 	TWeakObjectPtr<class URDMSetting> SettingsPtr;
 	TSharedPtr<class STextBlock> ResultTextBlock;
 };

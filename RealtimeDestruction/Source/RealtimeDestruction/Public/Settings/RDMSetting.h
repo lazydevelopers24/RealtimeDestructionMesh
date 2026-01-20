@@ -1,13 +1,27 @@
 ﻿#pragma once
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
-#include "RDMSetting.generated.h" 
+#include "RDMSetting.generated.h"
+
+class UDecalMaterialDataAsset;
 
 UENUM(BlueprintType)
 enum class ERDMThreadMode : uint8
 {
 	Absolute	UMETA(DisplayName = "Absoluite"),
 	Percentage	UMETA(DisplayName = "Percentage (%)")
+};
+
+USTRUCT()
+struct FDecalDataAssetEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere)
+	TSoftObjectPtr<UDecalMaterialDataAsset> DataAsset;
+	
+	UPROPERTY(VisibleAnywhere)
+	FName ConfigID;
 };
 
 UCLASS(config = Game, defaultconfig, meta = (DisplayName = "Realtime Destructible Mesh"))
@@ -17,9 +31,16 @@ class REALTIMEDESTRUCTION_API URDMSetting : public UDeveloperSettings
 
 public:
 	URDMSetting();
-	
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+
 	//Setting 접근자
 	static URDMSetting* Get();
+
+	///** ConfigID 변경 시 Entry의 ConfigID도 업데이트 */
+	void UpdateEntryConfigID(FName OldConfigID, FName NewConfigID);
 
 	// 카테고리 설정
 	virtual FName GetCategoryName() const override {return TEXT("Plugins"); }
@@ -47,4 +68,17 @@ public:
 	
 	// 시스템 thread 수 반환
 	static int32 GetSystemThreadCount();
+
+public:
+	UPROPERTY(config, EditAnywhere, Category = "Decal Settings")
+	TArray<FDecalDataAssetEntry> DecalDataAssets;
+
+	UFUNCTION(BlueprintCallable, Category = "Decal")
+	UDecalMaterialDataAsset* GetDecalDataAsset(FName ConfigID) const;
+
+private:
+	UPROPERTY(Transient)
+	mutable TMap<FName, UDecalMaterialDataAsset*> CachedDataAssetMap;
+
+	void BuildCacheIfNeeded() const;
 };

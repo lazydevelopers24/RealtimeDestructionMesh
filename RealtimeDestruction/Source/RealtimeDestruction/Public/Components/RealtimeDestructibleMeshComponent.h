@@ -301,13 +301,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	void ResetToSourceMesh();
 
-	/** DecalDataAsset 설정 (Projectile에서 호출) */
-	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|HoleDecal")
-	void SetDecalDataAsset(UDecalMaterialDataAsset* InDecalDataAsset) { DecalDataAsset = InDecalDataAsset; }
-
-	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|HoleDecal")
-	UDecalMaterialDataAsset* GetDecalDataAsset() const { return DecalDataAsset; }
-
 	// Destruction queue
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	FDestructionOpId EnqueueRequestLocal(const FRealtimeDestructionRequest& Request, bool bPenetration, UDecalComponent* TemporaryDecal = nullptr);
@@ -602,10 +595,7 @@ protected:
 
 	void RegisterDecalToSubCells(UDecalComponent* Decal, const FRealtimeDestructionRequest& Request);
 
-	void ProcessDecalRemoval(const FDestructionResult& Result);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|HoleDecal")
-	TObjectPtr<UDecalMaterialDataAsset> DecalDataAsset = nullptr;
+	void ProcessDecalRemoval(const FDestructionResult& Result); 
  
 	UPROPERTY()
 	TArray<FManagedDecal> ActiveDecals;

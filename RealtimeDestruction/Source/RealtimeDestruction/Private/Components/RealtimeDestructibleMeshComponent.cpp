@@ -9,6 +9,7 @@
 #include "GeometryCollection/GeometryCollectionObject.h"
 #include "GeometryCollection/GeometryCollectionComponent.h"
 
+#include "Settings/RDMSetting.h"
 #if WITH_EDITOR
 #include "GeometryCollection/GeometryCollectionConversion.h"
 //Fracturing
@@ -2149,23 +2150,21 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 
 		// DecalMaterial 조회 (네트워크로 전송된 ConfigID로 로컬에서 조회)
 		// 1. 컴포넌트에 설정된 DecalDataAsset 사용
-		// 2. 없으면 GameInstanceSubsystem에서 조회
-		UDecalMaterialDataAsset* DataAssetToUse = DecalDataAsset;
-		if (!DataAssetToUse)
+		// 2. 없으면 GameInstanceSubsystem에서 조회 
+		UDecalMaterialDataAsset* DataAssetToUse = nullptr;
+		if (UGameInstance* GI = GetWorld()->GetGameInstance())
 		{
-			if (UGameInstance* GI = GetWorld()->GetGameInstance())
+			if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
 			{
-				if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
-				{
-					DataAssetToUse = Subsystem->GetDecalDataAsset();
-				}
+				DataAssetToUse = Subsystem->FindDataAssetByConfigID(ModifiableRequest.DecalConfigID);
 			}
 		}
+
 
 		if (DataAssetToUse && ModifiableRequest.bSpawnDecal)
 		{
 			FDecalSizeConfig FoundConfig;
-			if (DataAssetToUse->GetConfigRandom(ModifiableRequest.DecalConfigID, ModifiableRequest.SurfaceType, FoundConfig))
+			if (DataAssetToUse->GetConfigRandom(ModifiableRequest.SurfaceType, FoundConfig))
 			{
 				ModifiableRequest.DecalMaterial = FoundConfig.DecalMaterial;
 				ModifiableRequest.DecalSize = FoundConfig.DecalSize;

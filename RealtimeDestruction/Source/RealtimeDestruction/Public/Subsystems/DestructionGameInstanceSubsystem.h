@@ -19,19 +19,20 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	/** DecalDataAsset 설정 */
 	UFUNCTION(BlueprintCallable, Category = "Destruction")
-	void SetDecalDataAsset(UDecalMaterialDataAsset* InAsset) { DecalDataAsset = InAsset; }
+	void RegisterDecalDataAsset(UDecalMaterialDataAsset* InAsset);
+	
+	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	void UnregisterDecalDataAsset(FName ConfigID);
 
-	/** DecalDataAsset 조회 */
-	UFUNCTION(BlueprintPure, Category = "Destruction")
-	UDecalMaterialDataAsset* GetDecalDataAsset() const { return DecalDataAsset; }
+	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	UDecalMaterialDataAsset* FindDataAssetByConfigID(FName ConfigID) const;
 
-	/** 기본 DecalDataAsset 경로 (에디터에서 설정 가능) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Destruction")
-	FSoftObjectPath DefaultDecalDataAssetPath;
-
+	/** ConfigID 변경 시 Map의 Key도 업데이트 */
+	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	void RenameConfigID(FName OldConfigID, FName NewConfigID);
+	
 private:
 	UPROPERTY()
-	TObjectPtr<UDecalMaterialDataAsset> DecalDataAsset = nullptr;
+      TMap<FName, TObjectPtr<UDecalMaterialDataAsset>> DecalDataAssetMap;
 };
