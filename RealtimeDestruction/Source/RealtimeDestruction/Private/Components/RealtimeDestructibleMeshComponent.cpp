@@ -1407,8 +1407,15 @@ void URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 	// 노말 방향 반전 (Subtract용)
 	ToolMesh.ReverseOrientation();
 
+	// 원본 메시의 로컬 바운드 계산 (GridCellCache 기반)
+	const FBox OriginalMeshBounds(
+		GridCellCache.GridOrigin,
+		GridCellCache.GridOrigin + FVector(GridCellCache.GridSize) * GridCellCache.CellSize
+	);
+
 	// Laplacian Smoothing 적용 (계단 현상 완화)
-	ApplyHCLaplacianSmoothing(ToolMesh);
+	// 바운드 밖 정점은 스무딩에서 제외하여 외곽 수축 방지
+	ApplyHCLaplacianSmoothing(ToolMesh, OriginalMeshBounds);
 
 	if (ToolMesh.TriangleCount() == 0)
 	{
@@ -5259,11 +5266,24 @@ TStructOnScope<FActorComponentInstanceData> URealtimeDestructibleMeshComponent::
 	return MakeStructOnScope<FActorComponentInstanceData, FRealtimeDestructibleMeshComponentInstanceData>(this);
 }	
 
-void URealtimeDestructibleMeshComponent::ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh)
+void URealtimeDestructibleMeshComponent::ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh, const FBox& MeshBounds)
 {
 	if (SmoothingIterations <= 0 || Mesh.TriangleCount() == 0)
 	{
 		return;
+	}
+
+	// 바운드 밖 정점 식별 (스무딩에서 제외 - 외곽 수축 방지)
+	// 외곽 절단 시 ToolMesh가 원본 메시 바운드 밖으로 확장되는데,
+	// 이 정점들이 스무딩으로 수축하면 잔여물이 발생할 수 있음
+	TSet<int32> FixedVertices;
+	for (int32 Vid : Mesh.VertexIndicesItr())
+	{
+		FVector3d Pos = Mesh.GetVertex(Vid);
+		if (!MeshBounds.IsInside(FVector(Pos)))
+		{
+			FixedVertices.Add(Vid);
+		}
 	}
 
 	// 원본 위치 저장 (HC Laplacian 보정용)
@@ -5281,6 +5301,12 @@ void URealtimeDestructibleMeshComponent::ApplyHCLaplacianSmoothing(FDynamicMesh3
 
 		for (int32 Vid : Mesh.VertexIndicesItr())
 		{
+			// 바운드 밖 정점은 스무딩 제외 (고정)
+			if (FixedVertices.Contains(Vid))
+			{
+				continue;
+			}
+
 			FVector3d Sum = FVector3d::Zero();
 			int32 Count = 0;
 
@@ -5325,6 +5351,12 @@ void URealtimeDestructibleMeshComponent::ApplyHCLaplacianSmoothing(FDynamicMesh3
 		TMap<int32, FVector3d> CorrectedPositions;
 		for (int32 Vid : Mesh.VertexIndicesItr())
 		{
+			// 바운드 밖 정점은 보정도 제외 (고정)
+			if (FixedVertices.Contains(Vid))
+			{
+				continue;
+			}
+
 			FVector3d Smoothed = Mesh.GetVertex(Vid);
 			FVector3d B = DifferenceVectors[Vid];
 
