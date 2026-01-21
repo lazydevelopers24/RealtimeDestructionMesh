@@ -829,6 +829,8 @@ public:
 	/** GridCellCache 조회 (읽기 전용) */
 	const FGridCellCache& GetGridCellCache() const { return GridCellCache; }
 
+	FGridCellCache& GetGridCellCache() { return GridCellCache; }
+
 	/** CellState 조회 (읽기 전용) */
 	const FCellState& GetCellState() const { return CellState; }
 
@@ -857,7 +859,7 @@ public:
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, FDynamicMesh3& OutRemovedMeshIsland);
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
-	
+
 	/** 작은 파편(고립된 Connected Component) 정리 */
 	void CleanupSmallFragments();
 

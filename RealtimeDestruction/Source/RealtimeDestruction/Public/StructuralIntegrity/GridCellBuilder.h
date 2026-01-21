@@ -59,6 +59,20 @@ public:
 		FGridCellCache& OutCache,
 		bool bIsEraser);
 
+	static void SetAnchorsByFiniteBox(
+		const FTransform& BoxTransform,
+		const FVector& BoxExtent,
+		const FTransform& MeshTransform,
+		FGridCellCache& OutCache,
+		bool bIsEraser);
+
+	static void SetAnchorsByFiniteSphere(
+		const FTransform& SphereTransform,
+		float SphereRadius,
+		const FTransform& MeshTransform,
+		FGridCellCache& OutCache,
+		bool bIsEraser);
+
 	static void ClearAllAnchors(FGridCellCache& OutCache);
 
 private:

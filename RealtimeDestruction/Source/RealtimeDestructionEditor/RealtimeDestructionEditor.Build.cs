@@ -26,7 +26,6 @@ public class RealtimeDestructionEditor : ModuleRules
 				"Core",
 				"CoreUObject",
 				"Engine",
-				"UnrealEd",
 				"ComponentVisualizers",
 				"RenderCore",
 				"RHI",
@@ -60,7 +59,9 @@ public class RealtimeDestructionEditor : ModuleRules
 				"ToolMenus",
 				"WorkspaceMenuStructure",
 				
-				"PropertyEditor",
+				"UnrealEd",
+				"LevelEditor",
+				"InteractiveToolsFramework"
 			}
 		);
 	}

@@ -96,7 +96,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	 		OutCache.RegisterValidCell(i);
 	 	}
 	 }
-	VoxelizeWithTriangles(SourceMesh, OutCache);
+	 VoxelizeWithTriangles(SourceMesh, OutCache);
 
 	// 6. 인접 관계 계산
 	CalculateNeighbors(OutCache);
@@ -213,6 +213,117 @@ void FGridCellBuilder::SetAnchorsByFinitePlane(
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("SetAnchorsByFinitePlane: %d cells marked as Anchor."), AddedAnchors);
+}
+
+void FGridCellBuilder::SetAnchorsByFiniteBox(
+	const FTransform& BoxTransform,
+	const FVector& BoxExtent,
+	const FTransform& MeshTransform,
+	FGridCellCache& OutCache,
+	bool bIsEraser)
+{
+	const int32 TotalCells = OutCache.GetTotalCellCount();
+	int32 AddedAnchors = 0;
+	int32 RemovedAnchors = 0;
+
+	for (int32 CellId = 0; CellId < TotalCells; ++CellId)
+	{
+		if (!OutCache.GetCellExists(CellId))
+		{
+			continue;
+		}
+
+		const FVector LocalPos = OutCache.IdToLocalCenter(CellId);
+		const FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
+
+		// World -> Box Local (회전/스케일 포함)
+		const FVector BoxSpacePos = BoxTransform.InverseTransformPosition(WorldPos);
+
+		const bool bInside =
+				FMath::Abs(BoxSpacePos.X) <= BoxExtent.X &&
+				FMath::Abs(BoxSpacePos.Y) <= BoxExtent.Y &&
+				FMath::Abs(BoxSpacePos.Z) <= BoxExtent.Z;
+
+		if (!bInside)
+		{
+			continue;
+		}
+
+		if (bIsEraser)
+		{
+			if (OutCache.GetCellIsAnchor(CellId))
+			{
+				OutCache.SetCellIsAnchor(CellId, false);
+				RemovedAnchors++;
+			}
+		}
+		else
+		{
+			if (!OutCache.GetCellIsAnchor(CellId))
+			{
+				OutCache.SetCellIsAnchor(CellId, true);
+				AddedAnchors++;
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("SetAnchorsByFiniteBox: Added=%d, Removed=%d"), AddedAnchors, RemovedAnchors);
+}
+
+void FGridCellBuilder::SetAnchorsByFiniteSphere(
+	const FTransform& SphereTransform,
+	float SphereRadius,
+	const FTransform& MeshTransform,
+	FGridCellCache& OutCache,
+	bool bIsEraser)
+{
+	const int32 TotalCells = OutCache.GetTotalCellCount();
+	int32 AddedAnchors = 0;
+	int32 RemovedAnchors = 0;
+
+	const float Radius = FMath::Max(0.0f, SphereRadius);
+	const float RadiusSq = Radius * Radius;
+
+	for (int32 CellId = 0; CellId < TotalCells; ++CellId)
+	{
+		if (!OutCache.GetCellExists(CellId))
+		{
+			continue;
+		}
+
+		const FVector LocalPos = OutCache.IdToLocalCenter(CellId);
+		const FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
+
+		// World -> Sphere Local (스케일까지 포함해 역변환)
+		// 이 방식은 SphereTransform에 비균일 스케일이 들어오면 월드에서는 Ellipsoid 판정이 됩니다.
+		const FVector SphereSpacePos = SphereTransform.InverseTransformPosition(WorldPos);
+
+		const bool bInside = SphereSpacePos.SizeSquared() <= RadiusSq;
+		if (!bInside)
+		{
+			continue;
+		}
+
+		if (bIsEraser)
+		{
+			if (OutCache.GetCellIsAnchor(CellId))
+			{
+				OutCache.SetCellIsAnchor(CellId, false);
+				RemovedAnchors++;
+			}
+		}
+		else
+		{
+			if (!OutCache.GetCellIsAnchor(CellId))
+			{
+				OutCache.SetCellIsAnchor(CellId, true);
+				AddedAnchors++;
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("SetAnchorsByFiniteSphere: Added=%d, Removed=%d, Radius=%.2f"), AddedAnchors,
+	       RemovedAnchors, Radius);
 }
 
 void FGridCellBuilder::ClearAllAnchors(FGridCellCache& OutCache)
