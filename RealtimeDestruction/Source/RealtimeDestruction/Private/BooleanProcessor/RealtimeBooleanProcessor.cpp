@@ -2079,6 +2079,12 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 	case EGeometryScriptBooleanOperation::Subtract:
 		Op = FMeshBoolean::EBooleanOp::Difference;
 		break;
+	case EGeometryScriptBooleanOperation::Intersection:
+		Op = FMeshBoolean::EBooleanOp::Intersect;
+		break;
+	case EGeometryScriptBooleanOperation::Union:
+		Op = FMeshBoolean::EBooleanOp::Union;
+		break;
 	default:
 		Op = FMeshBoolean::EBooleanOp::Difference;
 		break;

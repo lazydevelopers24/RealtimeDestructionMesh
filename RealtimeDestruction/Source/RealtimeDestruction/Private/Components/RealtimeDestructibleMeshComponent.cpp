@@ -4,6 +4,8 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "DynamicMeshEditor.h"
+#include "MeshBoundaryLoops.h"
+#include "Operations/SimpleHoleFiller.h"
 #include "Materials/MaterialInstanceDynamic.h"
 
 // GeometryCollection
@@ -636,7 +638,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 				}
 
 				// 삭제된 메시 형태의 파편 액터 생성
-				// SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
+				SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
 			}
 		}
 
@@ -1417,11 +1419,86 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 
 	UE_LOG(LogTemp, Warning, TEXT("ToolMesh: Tris=%d, Verts=%d"), ToolMesh.TriangleCount(), ToolMesh.VertexCount());
 
-	// 노말 방향 반전 (Subtract용)
-	ToolMesh.ReverseOrientation();
+	// Non-manifold인 경우 FillHoles로 닫힌 메시로 만들기 (Intersection 연산에 필요)
+	{
+		FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
+		for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
+		{
+			FSimpleHoleFiller Filler(&ToolMesh, Loop);
+			if (Filler.Fill())
+			{
+				// 생성된 삼각형들의 winding 방향 확인 및 보정
+				// Edge winding order로 판단: manifold mesh에서 공유 edge는 반대 방향이어야 함
+				if (Filler.NewTriangles.Num() > 0)
+				{
+					int32 NewTriId = Filler.NewTriangles[0];
+					FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
+
+					bool bNeedFlip = false;
+
+					// 새 삼각형의 각 edge에 대해 기존 삼각형과 공유하는지 확인
+					for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
+					{
+						int32 Va = NewTri[i];
+						int32 Vb = NewTri[(i + 1) % 3];
+
+						// 이 edge를 공유하는 다른 삼각형 찾기
+						int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
+						if (EdgeId != FDynamicMesh3::InvalidID)
+						{
+							FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
+							int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
+
+							// 다른 삼각형이 새로 생성된 삼각형이 아닌지 확인 (기존 삼각형이어야 함)
+							if (OtherTriId != FDynamicMesh3::InvalidID &&
+								!Filler.NewTriangles.Contains(OtherTriId))
+							{
+								FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
+
+								// 기존 삼각형에서 Va, Vb의 순서 확인
+								for (int32 j = 0; j < 3; ++j)
+								{
+									if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
+									{
+										// 같은 순서 (Va -> Vb) = winding이 잘못됨
+										bNeedFlip = true;
+										break;
+									}
+									else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
+									{
+										// 반대 순서 (Vb -> Va) = 정상
+										break;
+									}
+								}
+								break; // 기존 삼각형 하나만 확인하면 됨
+							}
+						}
+					}
+
+					// winding이 잘못되었으면 새 삼각형들 뒤집기
+					if (bNeedFlip)
+					{
+						for (int32 TriId : Filler.NewTriangles)
+						{
+							ToolMesh.ReverseTriOrientation(TriId);
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// Laplacian Smoothing 적용 (계단 현상 완화)
 	ApplyHCLaplacianSmoothing(ToolMesh);
+
+	// Intersection용 ToolMesh 복사 및 노말 반전
+	// Greedy meshing으로 생성된 ToolMesh의 노말이 셀 볼륨 안쪽을 향할 수 있으므로
+	// Intersection에서도 반전된 노말이 필요할 수 있음
+	FDynamicMesh3 ToolMeshForIntersection = ToolMesh;
+	ToolMeshForIntersection.ReverseOrientation();
+
+	// 노말 방향 반전 (Subtract용)
+	ToolMesh.ReverseOrientation();
 
 	// 디버그: ToolMesh 와이어프레임 그리기 (월드 좌표)
 	if (bDebugMeshIslandRemoval)
@@ -1430,22 +1507,20 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 		{
 			FTransform ComponentTransform = GetComponentTransform();
 
-			for (int32 TriId : ToolMesh.TriangleIndicesItr())
+			for (int32 TriId : ToolMeshForIntersection.TriangleIndicesItr())
 			{
-				FIndex3i Tri = ToolMesh.GetTriangle(TriId);
+				FIndex3i Tri = ToolMeshForIntersection.GetTriangle(TriId);
 
 				// 로컬 좌표 → 월드 좌표 변환
-				FVector V0 = ComponentTransform.TransformPosition(FVector(ToolMesh.GetVertex(Tri.A)));
-				FVector V1 = ComponentTransform.TransformPosition(FVector(ToolMesh.GetVertex(Tri.B)));
-				FVector V2 = ComponentTransform.TransformPosition(FVector(ToolMesh.GetVertex(Tri.C)));
+				FVector V0 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.A)));
+				FVector V1 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.B)));
+				FVector V2 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.C)));
 
 				// 삼각형 엣지 그리기 (노란색, 4.5초)
 				DrawDebugLine(DebugWorld, V0, V1, FColor::Yellow, false, 4.5f, 0, 1.0f);
 				DrawDebugLine(DebugWorld, V1, V2, FColor::Yellow, false, 4.5f, 0, 1.0f);
 				DrawDebugLine(DebugWorld, V2, V0, FColor::Yellow, false, 4.5f, 0, 1.0f);
 			}
-
-			UE_LOG(LogTemp, Warning, TEXT("[DEBUG] ToolMesh wireframe drawn: %d triangles (Yellow, 4.5sec)"), ToolMesh.TriangleCount());
 		}
 	}
 
@@ -1537,10 +1612,11 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 		}
 
 		// Intersection 먼저 계산 (제거될 부분 = OriginalMesh ∩ ToolMesh)
+		// 원본 방향의 ToolMeshForIntersection 사용 (ReverseOrientation 전 복사본)
 		FDynamicMesh3 IntersectionMesh;
 		bool bIntersectSuccess = FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(
 			TargetMesh,
-			&ToolMesh,
+			&ToolMeshForIntersection,
 			&IntersectionMesh,
 			EGeometryScriptBooleanOperation::Intersection,
 			BoolOptions
@@ -2788,7 +2864,7 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 			}
 
 			// 삭제된 메시 형태의 파편 액터 생성
-			// SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
+			SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
 		}
 	}
 
