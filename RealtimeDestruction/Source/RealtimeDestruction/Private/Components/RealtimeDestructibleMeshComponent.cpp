@@ -38,7 +38,9 @@
 #include "StructuralIntegrity/CellDestructionSystem.h"
 #include "Data/DecalMaterialDataAsset.h"
 #include "ProceduralMeshComponent.h"
+#if WITH_EDITOR
 #include "Selection.h"
+#endif
 #include "Net/UnrealNetwork.h"
 #include "Subsystems/DestructionGameInstanceSubsystem.h"
 
