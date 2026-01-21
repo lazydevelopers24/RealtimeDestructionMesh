@@ -851,9 +851,13 @@ public:
 	/**
 	 * 분리된 셀들의 메시를 Boolean Subtract로 제거
 	 * @param DetachedCellIds - 분리된 셀 ID 배열
+	 * @param OutRemovedMeshIsland - 제거 성공시 원본 메시에서 잘려나간 부분 (OriginalMesh ∩ ToolMesh)
+	 * @return 제거 성공 여부
 	 */
-	void RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
+	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, FDynamicMesh3& OutRemovedMeshIsland);
 
+	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
+	
 	/** 작은 파편(고립된 Connected Component) 정리 */
 	void CleanupSmallFragments();
 
@@ -1002,6 +1006,35 @@ private:
 
 	/** Op 히스토리 최대 크기 (메모리 제한) */
 	static constexpr int32 MaxOpHistorySize = 10000;
+
+	//////////////////////////////////////////////////////////////////////////
+	// Debris 물리 동기화
+	//////////////////////////////////////////////////////////////////////////
+	// TODO [리팩토링 예정]: 현재 Component가 모든 Debris의 동기화를 중앙 관리하는 방식
+	//   → 각 Debris Actor가 자신의 동기화를 직접 책임지는 방식으로 변경 예정
+	//   - ADebrisActor 커스텀 클래스 생성
+	//   - bReplicates, bReplicateMovement 등 Unreal 기본 Replication 활용
+	//   - 관심사 분리 및 Component 책임 경감
+	//////////////////////////////////////////////////////////////////////////
+
+	/** Debris ID 카운터 (서버/클라이언트 동일하게 증가) */
+	int32 NextDebrisId = 0;
+
+	/** 활성 Debris Actor 추적 (DebrisID → Actor) */
+	TMap<int32, TWeakObjectPtr<AActor>> ActiveDebrisActors;
+
+	/** Debris 물리 동기화 타이머 */
+	FTimerHandle DebrisPhysicsSyncTimerHandle;
+
+	/** Debris 물리 동기화 간격 (초) */
+	static constexpr float DebrisPhysicsSyncInterval = 0.1f;
+
+	/** 서버: 모든 Debris의 물리 상태를 클라이언트에 브로드캐스트 */
+	void BroadcastDebrisPhysicsState();
+
+	/** Multicast RPC: Debris 물리 상태 동기화 */
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastSyncDebrisPhysics(int32 DebrisId, FVector Location, FRotator Rotation, FVector LinearVelocity, FVector AngularVelocity);
 
 	TUniquePtr<FRealtimeBooleanProcessor> BooleanProcessor;
 
