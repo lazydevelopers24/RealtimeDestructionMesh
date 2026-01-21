@@ -105,7 +105,6 @@ TArray<FBulletCluster> UBulletClusterComponent::ProcessClustering()
 
 	const float CosThreshold = FMath::Cos(FMath::DegreesToRadians(15.0f));
 
-	// 거리기반 Union
 	for (int32 i = 0; i < N; ++i)
 	{
 		for (int32 j = i + 1; j < N; ++j)
@@ -121,10 +120,12 @@ TArray<FBulletCluster> UBulletClusterComponent::ProcessClustering()
 			}
 		}
 	}
+	
+	
 
 	// 클러스터 그룹핑
 	TMap<int32, FBulletCluster> RootToCluster;
-
+	 
 	for (int32 i = 0; i < N; ++i)
 	{
 		int32 Root = ClusterUF.Find(i);
@@ -136,7 +137,7 @@ TArray<FBulletCluster> UBulletClusterComponent::ProcessClustering()
 		if (!FoundCluster)
 		{
 			FBulletCluster NewCluster;
-			NewCluster.Init(Req.ImpactPoint, Req.ImpactNormal, Req.ToolForwardVector, Req.ToolCenterWorld, Req.Radius, Req.ChunkIndex, Req.Depth); 
+			NewCluster.Init(Req.ImpactPoint, Req.ImpactNormal, Req.ToolForwardVector, Req.ToolCenterWorld, Req.Radius, Req.ChunkIndex, Req.Depth);
 			RootToCluster.Add(Root, NewCluster);
 		}
 		else
@@ -152,6 +153,7 @@ TArray<FBulletCluster> UBulletClusterComponent::ProcessClustering()
 
 		}
 	}
+	 
 
 	for (auto& Pair : RootToCluster)
 	{
@@ -167,7 +169,7 @@ TArray<FBulletCluster> UBulletClusterComponent::ProcessClustering()
 }
 
 void UBulletClusterComponent::ExecuteDestruction(const TArray<FBulletCluster>& Clusters)
-{
+{  
 	URealtimeDestructibleMeshComponent* Mesh = OwnerMesh.Get();
 	if (!Mesh || !IsValid(Mesh)) return;
 
@@ -192,9 +194,10 @@ void UBulletClusterComponent::ExecuteDestruction(const TArray<FBulletCluster>& C
 	for (const FBulletCluster& Cluster : Clusters)
 	{
 		float FinalRadius = Cluster.Radius * ClusterRadiusOffset;
-		
-		Mesh->FindChunksInRadius(Cluster.Center, FinalRadius, AffectedChunks);
-
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Clustering_FindChunks);
+			Mesh->FindChunksInRadius(Cluster.Center, FinalRadius, AffectedChunks);
+		}
 		if (AffectedChunks.Num() == 0) continue;
 
 		// 모든 청크가 동일한 Center를 사용하여 높이가 일관되게 유지됨
@@ -210,11 +213,14 @@ void UBulletClusterComponent::ExecuteDestruction(const TArray<FBulletCluster>& C
 			Request.ToolCenterWorld = Cluster.ToolCenterWorld;
 			Request.ShapeParams.Height = Cluster.Depth;
 
+			 
 			Request.ToolMeshPtr = Mesh->CreateToolMeshPtrFromShapeParams(
 				Request.ToolShape, Request.ShapeParams);
-
-			// 서버에서 직접 실행
+			  
 			Mesh->ExecuteDestructionInternal(Request); 
+		 
+
+			// 서버에서 직접 실행 
 			if (NetMode == NM_DedicatedServer || NetMode == NM_ListenServer)
 			{
 				//Multicast로 클라에 전파
@@ -232,7 +238,7 @@ void UBulletClusterComponent::ExecuteDestruction(const TArray<FBulletCluster>& C
 					Mesh->MulticastApplyOpsCompact(CompactOps);
 				}
 			}
-			
+			 
 		}
 	}
 }

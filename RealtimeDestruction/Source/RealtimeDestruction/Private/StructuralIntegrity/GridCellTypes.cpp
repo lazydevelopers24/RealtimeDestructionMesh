@@ -74,6 +74,8 @@ bool FCellDestructionShape::ContainsPoint(const FVector& Point) const
 	return false;
 }
 
+
+// [deprecated]: 사용하는 곳이 없음
 FCellDestructionShape FCellDestructionShape::CreateFromRequest(const FRealtimeDestructionRequest& Request)
 {
 	FCellDestructionShape Shape;
@@ -431,86 +433,75 @@ bool FQuantizedDestructionInput::IntersectsOBB(const FCellOBB& OBB) const
 		}
 
 	case EDestructionShapeType::Line:
+		{ 
+
+		// m -> cm로 변환  
+		const FVector EndPt = FVector(EndPointMM.X, EndPointMM.Y, EndPointMM.Z) * 0.1f;
+		const float ThicknessCm = LineThicknessMM * 0.1f;
+
+		// 1차 필터링
+		FCellOBB TestOBB = OBB;
+		TestOBB.HalfExtents = OBB.HalfExtents + FVector(ThicknessCm);
+
+		// 월드 좌표를 로컬로 변환 
+		const FVector LocalStart = TestOBB.WorldToLocal(Center);
+		const FVector LocalEnd = TestOBB.WorldToLocal(EndPt);
+		const FVector LocalDir = LocalEnd - LocalStart; 
+
+		// Slab 검사 전에, 중심선과의 거리를 먼저 체크해서 원 밖이면 탈락시킨다
+		 
+		// subcell 크기 만큼 더 넉넉 잡아주는게 좋음 
+		const float SubCellRadius = OBB.HalfExtents.Size();
+		const float HitRadius = ThicknessCm + SubCellRadius;
+
+		const float DistToCenterSq = FMath::PointDistToSegmentSquared(FVector::ZeroVector, LocalStart, LocalEnd);
+		if (DistToCenterSq > HitRadius * HitRadius)
 		{
-			// Line-OBB intersection using Slab method
-			const FVector EndPt = FVector(EndPointMM.X, EndPointMM.Y, EndPointMM.Z) * 0.1f;
-			const float ThicknessCm = LineThicknessMM * 0.1f;
+			return false; // 원형 범위 밖임
+		}
+		 
+		// 기존로직 
+		float tMin = 0.0f;
+		float tMax = 1.0f;
 
-			const FVector LineDir = EndPt - Center;
-			const float LineLength = LineDir.Size();
-
-			if (LineLength < KINDA_SMALL_NUMBER)
+		// 각 축에 대해 slab 교차 계산
+		for (int32 Axis = 0; Axis < 3; ++Axis)
+		{
+			float Start, Dir, Extent;
+			switch (Axis)
 			{
-				// 점으로 간주 - 점이 OBB 내부에 있는지
-				const FVector LocalPoint = OBB.WorldToLocal(Center);
-				return FMath::Abs(LocalPoint.X) <= OBB.HalfExtents.X + ThicknessCm &&
-				       FMath::Abs(LocalPoint.Y) <= OBB.HalfExtents.Y + ThicknessCm &&
-				       FMath::Abs(LocalPoint.Z) <= OBB.HalfExtents.Z + ThicknessCm;
+			case 0: Start = LocalStart.X; Dir = LocalDir.X; Extent = TestOBB.HalfExtents.X; break;
+			case 1: Start = LocalStart.Y; Dir = LocalDir.Y; Extent = TestOBB.HalfExtents.Y; break;
+			case 2: Start = LocalStart.Z; Dir = LocalDir.Z; Extent = TestOBB.HalfExtents.Z; break;
+			default: continue;
 			}
 
-			// 두께를 고려하여 OBB 확장
-			const FCellOBB ExpandedOBB(
-				OBB.Center,
-				OBB.HalfExtents + FVector(ThicknessCm),
-				FQuat::FindBetweenNormals(FVector::ForwardVector, OBB.AxisX)
-			);
-			// 더 정확하게는 OBB 축을 직접 사용
-			FCellOBB TestOBB;
-			TestOBB.Center = OBB.Center;
-			TestOBB.HalfExtents = OBB.HalfExtents + FVector(ThicknessCm);
-			TestOBB.AxisX = OBB.AxisX;
-			TestOBB.AxisY = OBB.AxisY;
-			TestOBB.AxisZ = OBB.AxisZ;
-
-			// Slab method: 선분을 OBB의 로컬 공간으로 변환
-			const FVector LocalStart = TestOBB.WorldToLocal(Center);
-			const FVector LocalEnd = TestOBB.WorldToLocal(EndPt);
-			const FVector LocalDir = LocalEnd - LocalStart;
-
-			float tMin = 0.0f;
-			float tMax = 1.0f;
-
-			// 각 축에 대해 slab 교차 계산
-			for (int32 Axis = 0; Axis < 3; ++Axis)
+			if (FMath::Abs(Dir) < KINDA_SMALL_NUMBER)
 			{
-				float Start, Dir, Extent;
-				switch (Axis)
+				// 레이가 slab과 평행
+				if (Start < -Extent || Start > Extent)
 				{
-				case 0: Start = LocalStart.X; Dir = LocalDir.X; Extent = TestOBB.HalfExtents.X; break;
-				case 1: Start = LocalStart.Y; Dir = LocalDir.Y; Extent = TestOBB.HalfExtents.Y; break;
-				case 2: Start = LocalStart.Z; Dir = LocalDir.Z; Extent = TestOBB.HalfExtents.Z; break;
-				default: continue;
-				}
-
-				if (FMath::Abs(Dir) < KINDA_SMALL_NUMBER)
-				{
-					// 레이가 slab과 평행
-					if (Start < -Extent || Start > Extent)
-					{
-						return false; // slab 밖에서 평행 = 교차 없음
-					}
-				}
-				else
-				{
-					float t1 = (-Extent - Start) / Dir;
-					float t2 = (Extent - Start) / Dir;
-
-					if (t1 > t2)
-					{
-						Swap(t1, t2);
-					}
-
-					tMin = FMath::Max(tMin, t1);
-					tMax = FMath::Min(tMax, t2);
-
-					if (tMin > tMax)
-					{
-						return false; // 교차 구간 없음
-					}
+					return false; // slab 밖에서 평행 = 교차 없음
 				}
 			}
+			else
+			{
+				float t1 = (-Extent - Start) / Dir;
+				float t2 = (Extent - Start) / Dir;
 
-			return true; // 모든 slab과 교차
+				if (t1 > t2) Swap(t1, t2);
+
+				tMin = FMath::Max(tMin, t1);
+				tMax = FMath::Min(tMax, t2);
+
+				if (tMin > tMax)
+				{
+					return false; // 교차 구간 없음
+				}
+			}
+		}
+
+		return true; // Slab(길이)도 통과하고, Distance(두께)도 통과함!
 		}
 	}
 
@@ -830,11 +821,12 @@ void FSupercellCache::BuildFromGridCache(const FGridCellCache& GridCache)
 	}
 
 	// SuperCellSize 계산: min(GridSize, 8)
-	SupercellSize = FIntVector(
-		FMath::Min(GridCache.GridSize.X, 8),
-		FMath::Min(GridCache.GridSize.Y, 8),
-		FMath::Min(GridCache.GridSize.Z, 8)
-	);
+	//SupercellSize = FIntVector(
+	//	FMath::Min(GridCache.GridSize.X, 8),
+	//	FMath::Min(GridCache.GridSize.Y, 8),
+	//	FMath::Min(GridCache.GridSize.Z, 8)
+	//);
+	SupercellSize = FIntVector(8 ,8 , 8);
 
 	// SuperCell이 만들어지려면 각 축 방향으로 SupercellSize만큼 채워져야 함
 	// 예: GridSize.X = 5, SupercellSize.X = 4 → SupercellCount.X = 1 (나머지 1개는 orphan)
@@ -854,6 +846,11 @@ void FSupercellCache::BuildFromGridCache(const FGridCellCache& GridCache)
 		CellToSupercell[i] = INDEX_NONE;
 	}
 
+
+	// Intact 비트필드 초기화 (모든 SuperCell을 Intact로)
+	InitializeIntactBits();
+
+	const int32 RequiredCellCount = SupercellSize.X * SupercellSize.Y * SupercellSize.Z;
 	// SuperCell에 속하는 Cell들 매핑
 	for (int32 SCZ = 0; SCZ < SupercellCount.Z; ++SCZ)
 	{
@@ -861,28 +858,72 @@ void FSupercellCache::BuildFromGridCache(const FGridCellCache& GridCache)
 		{
 			for (int32 SCX = 0; SCX < SupercellCount.X; ++SCX)
 			{
+
 				const int32 SupercellId = SupercellCoordToId(SCX, SCY, SCZ);
 
-				// 이 SuperCell에 속하는 Cell 범위
 				const int32 StartX = SCX * SupercellSize.X;
 				const int32 StartY = SCY * SupercellSize.Y;
 				const int32 StartZ = SCZ * SupercellSize.Z;
 
+				// 1단계: 유효 셀 개수 카운트
+				int32 ValidCount = 0;
 				for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
 				{
 					for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
 					{
 						for (int32 LX = 0; LX < SupercellSize.X; ++LX)
 						{
-							const int32 CellId = GridCache.CoordToId(
-								StartX + LX,
-								StartY + LY,
-								StartZ + LZ
-							);
-							CellToSupercell[CellId] = SupercellId;
+							const int32 CellId = GridCache.CoordToId(StartX + LX, StartY + LY, StartZ + LZ);
+							if (GridCache.GetCellExists(CellId))
+							{
+								ValidCount++;
+							}
 						}
 					}
 				}
+
+				// 2단계: 512개 다 있을 때만 SuperCell 생성
+				if (ValidCount == RequiredCellCount)
+				{
+					for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
+					{
+						for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
+						{
+							for (int32 LX = 0; LX < SupercellSize.X; ++LX)
+							{
+								const int32 CellId = GridCache.CoordToId(StartX + LX, StartY + LY, StartZ + LZ);
+								CellToSupercell[CellId] = SupercellId;
+							}
+						}
+					}
+
+				}
+				else
+				{ 
+					MarkSupercellBroken(SupercellId);
+				}
+				//const int32 SupercellId = SupercellCoordToId(SCX, SCY, SCZ);
+
+				//// 이 SuperCell에 속하는 Cell 범위
+				//const int32 StartX = SCX * SupercellSize.X;
+				//const int32 StartY = SCY * SupercellSize.Y;
+				//const int32 StartZ = SCZ * SupercellSize.Z;
+
+				//for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
+				//{
+				//	for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
+				//	{
+				//		for (int32 LX = 0; LX < SupercellSize.X; ++LX)
+				//		{
+				//			const int32 CellId = GridCache.CoordToId(
+				//				StartX + LX,
+				//				StartY + LY,
+				//				StartZ + LZ
+				//			);
+				//			CellToSupercell[CellId] = SupercellId;
+				//		}
+				//	}
+				//}
 			}
 		}
 	}
@@ -897,8 +938,6 @@ void FSupercellCache::BuildFromGridCache(const FGridCellCache& GridCache)
 		}
 	}
 
-	// Intact 비트필드 초기화 (모든 SuperCell을 Intact로)
-	InitializeIntactBits();
 
 	UE_LOG(LogTemp, Log, TEXT("FSupercellCache::BuildFromGridCache - GridSize: (%d, %d, %d), SupercellSize: (%d, %d, %d), SupercellCount: (%d, %d, %d), TotalSupercells: %d, OrphanCells: %d"),
 		GridCache.GridSize.X, GridCache.GridSize.Y, GridCache.GridSize.Z,
@@ -1152,4 +1191,4 @@ void FSupercellCache::GetBoundaryCellsInDirection(
 		}
 		break;
 	}
-}
+} 

@@ -963,6 +963,13 @@ protected:
 	/** 격자 셀 디버그 시각화 */
 	void DrawGridCellDebug();
 
+	/** SuperCell 디버그 표시 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
+	bool bShowSupercellDebug = false;
+
+	/** SuperCell 디버그 시각화 */
+	void DrawSupercellDebug();
+
 	/** 서버 콜리전 박스 디버그 시각화 */
 	void DrawServerCollisionDebug();
 

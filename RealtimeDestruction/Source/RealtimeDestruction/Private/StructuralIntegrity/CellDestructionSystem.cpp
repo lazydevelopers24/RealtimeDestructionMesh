@@ -1243,7 +1243,7 @@ namespace HierarchicalBFSHelper
 				// Intact SuperCell → SuperCell 노드로 추가
 				VisitedSupercells.Add(NeighborSupercellId);
 				Queue.Enqueue(FBFSNode::MakeSupercell(NeighborSupercellId));
-				MarkAllCellsInSupercell(NeighborSupercellId, SupercellCache, GridCache, CellState, ConnectedCells);
+				MarkAllCellsInSupercell(NeighborSupercellId, SupercellCache, GridCache, CellState, ConnectedCells); 
 			}
 			else
 			{

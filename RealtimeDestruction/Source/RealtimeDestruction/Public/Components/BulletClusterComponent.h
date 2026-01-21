@@ -48,7 +48,7 @@ public:
 
 	// 군집화 시간 
 	UPROPERTY()
-	float ClusterWindowTime = 1.3f;
+	float ClusterWindowTime = 0.3f;
 
 	UPROPERTY()
 	float MergeDistanceThreshold = 10.0f;

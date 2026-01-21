@@ -322,6 +322,8 @@ bool URealtimeDestructibleMeshComponent::RequestDestruction(const FRealtimeDestr
 
 bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealtimeDestructionRequest& Request)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE("ExecuteDestructionInternal")
+
 	if (MaxHoleCount > 0 && CurrentHoleCount >= MaxHoleCount)
 	{
 		return false;
@@ -415,7 +417,8 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	case EDestructionToolShape::Cylinder:
 		Shape.Type = EDestructionShapeType::Line;  // Cylinder는 회전 미지원, Line으로 처리
 		// 방향 계산 (ImpactNormal 반대 방향으로 깊이만큼)
-		Shape.EndPoint = Request.ImpactPoint - Request.ImpactNormal * Request.ShapeParams.Height;
+		//Shape.EndPoint = Request.ImpactPoint - Request.ImpactNormal * Request.ShapeParams.Height;
+		Shape.EndPoint = Request.ImpactPoint + Request.ToolForwardVector * Request.ShapeParams.Height;
 		Shape.LineThickness = Request.ShapeParams.Radius;
 		break;
 	default:
@@ -3740,6 +3743,64 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 	}
 }
 
+void URealtimeDestructibleMeshComponent::DrawSupercellDebug()
+{
+	if (!SupercellCache.IsValid())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const FTransform& ComponentTransform = GetComponentTransform();
+	const FVector& CellSize = GridCellCache.CellSize;
+	const FVector SupercellWorldSize = FVector(
+		CellSize.X * SupercellCache.SupercellSize.X,
+		CellSize.Y * SupercellCache.SupercellSize.Y,
+		CellSize.Z * SupercellCache.SupercellSize.Z
+	);
+
+	// 모든 SuperCell 순회
+	for (int32 SCZ = 0; SCZ < SupercellCache.SupercellCount.Z; ++SCZ)
+	{
+		for (int32 SCY = 0; SCY < SupercellCache.SupercellCount.Y; ++SCY)
+		{
+			for (int32 SCX = 0; SCX < SupercellCache.SupercellCount.X; ++SCX)
+			{
+				const int32 SupercellId = SupercellCache.SupercellCoordToId(SCX, SCY, SCZ);
+				const bool bIsIntact = SupercellCache.IsSupercellIntact(SupercellId);
+
+				if (!bIsIntact)
+				{
+					continue;
+				}
+				//색상: Intact=녹색, Broken=빨강
+				//FColor BoxColor = bIsIntact ? FColor::Green : FColor::Red;
+				FColor BoxColor = FColor::Green;
+				// SuperCell 로컬 Min 좌표
+				FVector LocalMin = GridCellCache.GridOrigin + FVector(
+					SCX * SupercellWorldSize.X,
+					SCY * SupercellWorldSize.Y,
+					SCZ * SupercellWorldSize.Z
+				);
+				FVector LocalMax = LocalMin + SupercellWorldSize;
+				FVector LocalCenter = (LocalMin + LocalMax) * 0.5f;
+
+				// 월드 좌표로 변환
+				FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
+				FVector WorldExtent = SupercellWorldSize * 0.5f * ComponentTransform.GetScale3D();
+
+				// 박스 그리기
+				DrawDebugBox(World, WorldCenter, WorldExtent, ComponentTransform.GetRotation(), BoxColor, false, -1.0f, 0, 2.0f); 
+			}
+		}
+	}
+}
+
 void URealtimeDestructibleMeshComponent::DrawServerCollisionDebug()
 {
 	if (!bServerCellCollisionInitialized)
@@ -4188,6 +4249,12 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 	if (bShowServerCollisionDebug)
 	{
 		DrawServerCollisionDebug();
+	}
+	
+	// Subcell Debug 표시 
+	if (bShowSupercellDebug)
+	{
+		DrawSupercellDebug();
 	}
 
 	// 실제 활성화된 물리 박스 디버그 표시 (BodySetup 기반)
@@ -5257,7 +5324,7 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 
 	// bShowGridCellDebug가 변경되면 처리
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, bShowGridCellDebug))
-	{
+	{  
 		if (bShowGridCellDebug)
 		{
 			// 디버그 켜기: 그리드 셀 그리기

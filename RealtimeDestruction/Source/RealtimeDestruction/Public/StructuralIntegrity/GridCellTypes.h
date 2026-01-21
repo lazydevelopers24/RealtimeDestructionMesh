@@ -156,6 +156,7 @@ struct FCellOBB
 		);
 		return LocalToWorld(ClampedLocal);
 	}
+	 
 };
 
 /**
@@ -200,6 +201,7 @@ struct REALTIMEDESTRUCTION_API FCellDestructionShape
 	/** 점이 파괴 영역 안에 있는지 확인 */
 	bool ContainsPoint(const FVector& Point) const;
 
+	// [deprecated]: 사용하는 곳이 없음
 	/** FRealtimeDestructionRequest로부터 FCellDestructionShape 생성 */
 	static FCellDestructionShape CreateFromRequest(const FRealtimeDestructionRequest& Request);
 };

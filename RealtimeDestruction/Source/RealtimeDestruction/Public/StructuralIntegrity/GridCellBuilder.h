@@ -134,6 +134,13 @@ private:
 		const UStaticMesh* SourceMesh,
 		FGridCellCache& OutCache);
 	
+	static bool TriangleIntersectsAABB(
+		const FVector& V0, const FVector& V1, const FVector& V2,
+		const FVector& BoxMin, const FVector& BoxMax
+	);
+
+	static void FillInsideVoxels(FGridCellCache& OutCache);
+
 	/**
 	 * 점이 Convex Hull 내부에 있는지 판단
 	 */
