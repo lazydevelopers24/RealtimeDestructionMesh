@@ -1009,11 +1009,10 @@ private:
 	void CopyMaterialsFromStaticMeshComponent(UStaticMeshComponent* InComp);
 	void CopyCollisionFromStaticMeshComponent(UStaticMeshComponent* InComp);
 
-	/** Detached Cell 제거 시 HC Laplacian Smoothing (vollmer et al. (1999) 적용 (계단 현상 완화)
+	/** Detached Cell 제거 시 HC Laplacian Smoothing (Vollmer et al., 1999) 적용 (계단 현상 완화)
 	 * @param Mesh - 스무딩할 ToolMesh
-	 * @param MeshBounds - 원본 메시의 로컬 바운딩 박스. 이 바운드 밖의 정점은 스무딩에서 제외 (외곽 수축 방지)
 	 */
-	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh, const FBox& MeshBounds);
+	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh);
 
 	// UActorComponent overrides
 	virtual void OnRegister() override;
