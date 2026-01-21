@@ -1429,48 +1429,48 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 		return false;
 	}
 
-	// 디버그: 원본 메시 옆에 ToolMesh 스폰 (로컬→월드 변환 적용)
-	if (UWorld* World = GetWorld())
-	{
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	//// 디버그: 원본 메시 옆에 ToolMesh 스폰 (로컬→월드 변환 적용)
+	//if (UWorld* World = GetWorld())
+	//{
+	//	FActorSpawnParameters SpawnParams;
+	//	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-		// 원본 메시 Transform 가져오기
-		FTransform MeshTransform = GetComponentTransform();
+	//	// 원본 메시 Transform 가져오기
+	//	FTransform MeshTransform = GetComponentTransform();
 
-		// ToolMesh 바운드 중심을 월드 좌표로 변환
-		FAxisAlignedBox3d ToolBounds = ToolMesh.GetBounds();
-		FVector ToolCenterLocal = FVector(ToolBounds.Center());
-		FVector ToolCenterWorld = MeshTransform.TransformPosition(ToolCenterLocal);
+	//	// ToolMesh 바운드 중심을 월드 좌표로 변환
+	//	FAxisAlignedBox3d ToolBounds = ToolMesh.GetBounds();
+	//	FVector ToolCenterLocal = FVector(ToolBounds.Center());
+	//	FVector ToolCenterWorld = MeshTransform.TransformPosition(ToolCenterLocal);
 
-		// 오른쪽으로 오프셋 (바운드 크기 기준)
-		FVector BoundsSize = FVector(ToolBounds.Extents()) * 2.0f * MeshTransform.GetScale3D();
-		FVector RightOffset = MeshTransform.GetRotation().GetRightVector() * (BoundsSize.Y + 100.0f);
-		FVector DebugLocation = ToolCenterWorld + RightOffset;
+	//	// 오른쪽으로 오프셋 (바운드 크기 기준)
+	//	FVector BoundsSize = FVector(ToolBounds.Extents()) * 2.0f * MeshTransform.GetScale3D();
+	//	FVector RightOffset = MeshTransform.GetRotation().GetRightVector() * (BoundsSize.Y + 100.0f);
+	//	FVector DebugLocation = ToolCenterWorld + RightOffset;
 
-		AActor* DebugActor = World->SpawnActor<AActor>(AActor::StaticClass(), DebugLocation, MeshTransform.Rotator(), SpawnParams);
-		if (DebugActor)
-		{
-			DebugActor->SetActorScale3D(MeshTransform.GetScale3D());
+	//	AActor* DebugActor = World->SpawnActor<AActor>(AActor::StaticClass(), DebugLocation, MeshTransform.Rotator(), SpawnParams);
+	//	if (DebugActor)
+	//	{
+	//		DebugActor->SetActorScale3D(MeshTransform.GetScale3D());
 
-			UDynamicMeshComponent* DebugComp = NewObject<UDynamicMeshComponent>(DebugActor);
-			DebugComp->RegisterComponent();
-			DebugActor->AddInstanceComponent(DebugComp);
-			DebugActor->SetRootComponent(DebugComp);
+	//		UDynamicMeshComponent* DebugComp = NewObject<UDynamicMeshComponent>(DebugActor);
+	//		DebugComp->RegisterComponent();
+	//		DebugActor->AddInstanceComponent(DebugComp);
+	//		DebugActor->SetRootComponent(DebugComp);
 
-			// ToolMesh 복사 후 중심을 원점으로 이동
-			FDynamicMesh3 CenteredToolMesh = ToolMesh;
-			MeshTransforms::Translate(CenteredToolMesh, -ToolBounds.Center());
-			*DebugComp->GetMesh() = CenteredToolMesh;
-			DebugComp->NotifyMeshUpdated();
+	//		// ToolMesh 복사 후 중심을 원점으로 이동
+	//		FDynamicMesh3 CenteredToolMesh = ToolMesh;
+	//		MeshTransforms::Translate(CenteredToolMesh, -ToolBounds.Center());
+	//		*DebugComp->GetMesh() = CenteredToolMesh;
+	//		DebugComp->NotifyMeshUpdated();
 
-			// 10초 후 삭제
-			DebugActor->SetLifeSpan(10.0f);
+	//		// 10초 후 삭제
+	//		DebugActor->SetLifeSpan(10.0f);
 
-			UE_LOG(LogTemp, Warning, TEXT("DEBUG: ToolMesh Center Local=%s, World=%s, BoundsSize=%s"),
-				*ToolCenterLocal.ToString(), *ToolCenterWorld.ToString(), *BoundsSize.ToString());
-		}
-	}
+	//		UE_LOG(LogTemp, Warning, TEXT("DEBUG: ToolMesh Center Local=%s, World=%s, BoundsSize=%s"),
+	//			*ToolCenterLocal.ToString(), *ToolCenterWorld.ToString(), *BoundsSize.ToString());
+	//	}
+	//}
 
 	// 3. 모든 ChunkMeshComponents에 Boolean Subtract 적용
 	FGeometryScriptMeshBooleanOptions BoolOptions;
