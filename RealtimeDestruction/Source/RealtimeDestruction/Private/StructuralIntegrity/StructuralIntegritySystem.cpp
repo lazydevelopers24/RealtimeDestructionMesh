@@ -127,6 +127,7 @@ int32 FStructuralIntegritySystem::GetAnchorCount() const
 
 FStructuralIntegrityResult FStructuralIntegritySystem::DestroyCells(const TArray<int32>& CellIds)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(TEXT("CellStructure_DestroyCells"));
 	FStructuralIntegrityResult Result;
 
 	FWriteScopeLock WriteLock(DataLock);
@@ -287,6 +288,7 @@ bool FStructuralIntegritySystem::DestroyCellInternal(int32 CellId)
 
 TArray<FDetachedCellGroup> FStructuralIntegritySystem::UpdateConnectivityAndFindDetached()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(TEXT("CellStructure_UpdateConnectivityAndFindDetached"));
 	// Lock은 호출자가 이미 잡았다고 가정
 
 	if (CellNeighbors.Num() == 0)
@@ -325,7 +327,8 @@ TArray<FDetachedCellGroup> FStructuralIntegritySystem::UpdateConnectivityAndFind
 }
 
 TSet<int32> FStructuralIntegritySystem::FindAllConnectedToAnchors_Internal() const
-{
+{ 
+	TRACE_CPUPROFILER_EVENT_SCOPE(TEXT("CellStructure_FindAllConnectedToAnchors_Internal"));
 	TSet<int32> ConnectedCells;
 
 	if (CellNeighbors.Num() == 0 || Data.AnchorCellIds.Num() == 0)

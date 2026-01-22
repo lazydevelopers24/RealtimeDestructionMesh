@@ -401,6 +401,8 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 
 FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FRealtimeDestructionRequest& Request)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_DestructionLogic);
+
 	FDestructionResult DestructionResult;
 
 	// Request를 FDestructionShape로 변환
@@ -434,6 +436,8 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	//=====================================================================
 	if (bEnableSubcell)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_ProcessCellDestructionWithSubCells);
+
 		DestructionResult = FCellDestructionSystem::ProcessCellDestructionWithSubCells(
 			GridCellCache,
 			QuantizedInput,
@@ -522,6 +526,8 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	//=====================================================================
 	if (bEnableSupercell && SupercellCache.IsValid())
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_UpdateSupercellStates);
+
 		// 영향받은 Cell들이 속한 SuperCell을 Broken으로 마킹
 		SupercellCache.UpdateSupercellStates(DestructionResult.AffectedCells);
 
@@ -554,6 +560,8 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 
 void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_DisconnectedCellStateLogic);
+
 	//파괴된게 없으면 패스
 	bool bHasAnyDestruction = false;
 	for (const FDestructionResult& Result : AllResults)
@@ -586,36 +594,37 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 
 	// ===== 여기에 로그 추가 =====
 	UE_LOG(LogTemp, Warning, TEXT("    [Batch BFS] FindDisconnectedCells called"));
-
-	const ENetMode NetMode = GetWorld()->GetNetMode();
-	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-		GridCellCache,
-		SupercellCache,
-		CellState,
-		bEnableSupercell && SupercellCache.IsValid(),
-		bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
-
+	TSet<int32> DisconnectedCells;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCells);
+		const ENetMode NetMode = GetWorld()->GetNetMode();
+		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+			GridCellCache,
+			SupercellCache,
+			CellState,
+			bEnableSupercell && SupercellCache.IsValid(),
+			bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
+	}
 	// Standalon용 BFS 성능 LOG
 	//double BFSEndTime = FPlatformTime::Seconds();
 	//UE_LOG(LogTemp, Warning, TEXT("[BFS #%d] FindDisconnectedCells END - took %.3f ms, found %d disconnected"),
 	//	BFSCallCount, (BFSEndTime - BFSStartTime) * 1000.0, DisconnectedCells.Num());
-
-
-
-	UE_LOG(LogTemp, Log, TEXT("[Cell] Phase 2: %d Cells disconnected"), DisconnectedCells.Num());
-
-
+	 
+	UE_LOG(LogTemp, Log, TEXT("[Cell] Phase 2: %d Cells disconnected"), DisconnectedCells.Num()); 
 
 	if (DisconnectedCells.Num() > 0)
 	{
 		//=====================================================================
 		// Phase 3: 분리된 셀 그룹화
 		//=====================================================================
-		TArray<TArray<int32>> NewDetachedGroups = FCellDestructionSystem::GroupDetachedCells(
-			GridCellCache,
-			DisconnectedCells,
-			CellState.DestroyedCells);
-
+		TArray<TArray<int32>> NewDetachedGroups;
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_Phase3); 
+			NewDetachedGroups = FCellDestructionSystem::GroupDetachedCells(
+				GridCellCache,
+				DisconnectedCells,
+				CellState.DestroyedCells);
+		}
 		for (const TArray<int32>& Group : NewDetachedGroups)
 		{
 			CellState.AddDetachedGroup(Group);
@@ -627,31 +636,36 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
 
 		// 분리된 셀의 삼각형 삭제
-		for (const TArray<int32>& Group : NewDetachedGroups)
 		{
-			FDynamicMesh3 DetachedToolMesh;
-			if (RemoveTrianglesForDetachedCells(Group, DetachedToolMesh))
-			{
-				// 머티리얼 수집 (모든 청크에서 사용되는 머티리얼)
-				TArray<UMaterialInterface*> Materials;
-				if (ChunkMeshComponents.Num() > 0 && ChunkMeshComponents[0])
-				{
-					for (int32 i = 0; i < ChunkMeshComponents[0]->GetNumMaterials(); ++i)
-					{
-						Materials.Add(ChunkMeshComponents[0]->GetMaterial(i));
-					}
-				}
+			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_Phase4);
 
-				// 삭제된 메시 형태의 파편 액터 생성
-				SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
+			for (const TArray<int32>& Group : NewDetachedGroups)
+			{
+				FDynamicMesh3 DetachedToolMesh;
+				if (RemoveTrianglesForDetachedCells(Group, DetachedToolMesh))
+				{
+					// 머티리얼 수집 (모든 청크에서 사용되는 머티리얼)
+					TArray<UMaterialInterface*> Materials;
+					if (ChunkMeshComponents.Num() > 0 && ChunkMeshComponents[0])
+					{
+						for (int32 i = 0; i < ChunkMeshComponents[0]->GetNumMaterials(); ++i)
+						{
+							Materials.Add(ChunkMeshComponents[0]->GetMaterial(i));
+						}
+					}
+
+					// 삭제된 메시 형태의 파편 액터 생성
+					SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
+				}
 			}
 		}
-
 		CellState.MoveAllDetachedToDestroyed();
 
 		// 서버 Cell Collision: 분리된 셀들의 청크도 dirty 마킹
 		if (bServerCellCollisionInitialized)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_MarkCollisionChunkDirty);
+
 			TSet<int32> DetachedDirtyChunks;
 			for (int32 CellId : DisconnectedCells)
 			{

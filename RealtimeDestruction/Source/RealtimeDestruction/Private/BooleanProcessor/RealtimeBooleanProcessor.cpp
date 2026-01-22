@@ -1237,13 +1237,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		}
 	}
 
-	// ===== 5. 카운터 감소 (Shutdown 체크) =====
-	if (LifeTime.IsValid() && LifeTime->bAlive.load() && SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
-	{
-		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-	}
-
-	// ===== 6. 결과 반영 (GameThread) =====
+	// ===== 5. 결과 반영 (GameThread) =====
 	if (bSuccess)
 	{
 		AsyncTask(ENamedThreads::GameThread,
@@ -1274,6 +1268,12 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 				// 메시 적용
 				WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
+
+				// ===== 카운터 감소 (Shutdown 체크) =====
+				if (LifeTime.IsValid() && LifeTime->bAlive.load() && SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
+				{
+					SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+				}
 
 				// 카운터 업데이트
 				Proc->ChunkGenerations[ChunkIndex]++;

@@ -1,8 +1,7 @@
 // Copyright 2025. All Rights Reserved.
 
 #include "StructuralIntegrity/CellDestructionSystem.h"
-#include "StructuralIntegrity/SubCellProcessor.h"
-
+#include "StructuralIntegrity/SubCellProcessor.h" 
 //=============================================================================
 // FCellDestructionSystem - SubCell Level API
 //=============================================================================
@@ -165,6 +164,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
 	bool bEnableSupercell,
 	bool bEnableSubcell)
 {
+	 
 	UE_LOG(LogTemp, Warning, TEXT("FindDisconnectedCells: bEnableSupercell=%d, bEnableSubcell=%d"),
 		bEnableSupercell ? 1 : 0, bEnableSubcell ? 1 : 0);
 
@@ -1537,7 +1537,7 @@ namespace HierarchicalBFSHelper
 			}
 		}
 	}
-}
+}  
 
 TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 	const FGridCellCache& Cache,
