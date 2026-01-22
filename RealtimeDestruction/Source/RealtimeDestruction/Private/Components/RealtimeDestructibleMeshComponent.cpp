@@ -683,6 +683,11 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 
 	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction Complete: Destroyed=%d, DetachedGroups=%d"),
 		CellState.DestroyedCells.Num(), CellState.DetachedGroups.Num());
+
+#if !UE_BUILD_SHIPPING
+	// 디버그 텍스트 업데이트
+	bShouldDebugUpdate = true;
+#endif
 }
 
 int32 URealtimeDestructibleMeshComponent::GridCellIdToChunkId(int32 GridCellId) const
@@ -3270,12 +3275,10 @@ void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMes
 
 	// 수정된 청크 추적
 	ModifiedChunkIds.Add(ChunkIndex);
+#if !UE_BUILD_SHIPPING
 	// 디버그 텍스트 갱신 플래그는 기본적으로 구조적 무결성 갱신 후 업데이트되지만, 청크 없는 경우 여기에서 대신 갱신 
-	if (ChunkMeshComponents.Num() == 0)
-	{
-		bShouldDebugUpdate = true;
-	}
-
+	bShouldDebugUpdate = true;
+#endif
 	if (bDelayedCollisionUpdate)
 	{
 		RequestDelayedCollisionUpdate(TargetComp);
@@ -3323,57 +3326,46 @@ void URealtimeDestructibleMeshComponent::UpdateDebugText()
 	// 메시 정보 가져오기
 	int32 VertexCount = 0;
 	int32 TriangleCount = 0;
+	const int32 ChunkCount = ChunkMeshComponents.Num();
 
-	if (UDynamicMesh* DynMesh = GetDynamicMesh())
+	if (ChunkCount > 0)
 	{
-		DynMesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& Mesh)
-			{
-				VertexCount = Mesh.VertexCount();
-				TriangleCount = Mesh.TriangleCount();
-			});
-	}
-
-	// BooleanProcessor의 hole count 가져오기 (비동기 처리 시 여기서 관리됨)
-	int32 HoleCount = BooleanProcessor.IsValid() ? BooleanProcessor->GetCurrentHoleCount() : CurrentHoleCount;
-
-	// 네트워크 모드 가져오기
-	FString NetModeStr = TEXT("Unknown");
-	if (UWorld* World = GetWorld())
-	{
-		switch (World->GetNetMode())
+		for (UDynamicMeshComponent* ChunkMesh : ChunkMeshComponents)
 		{
-		case NM_Standalone:
-			NetModeStr = TEXT("Standalone");
-			break;
-		case NM_DedicatedServer:
-			NetModeStr = TEXT("Dedicated Server");
-			break;
-		case NM_ListenServer:
-			NetModeStr = TEXT("Listen Server");
-			break;
-		case NM_Client:
-			NetModeStr = TEXT("Client");
-			break;
-		default:
-			NetModeStr = TEXT("Unknown");
-			break;
+			if (!ChunkMesh)
+			{
+				continue;
+			}
+
+			if (UDynamicMesh* ChunkDynMesh = ChunkMesh->GetDynamicMesh())
+			{
+				ChunkDynMesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& Mesh)
+					{
+						VertexCount += Mesh.VertexCount();
+						TriangleCount += Mesh.TriangleCount();
+					});
+			}
 		}
 	}
+	else if (UDynamicMesh* DynMesh = GetDynamicMesh())
+	{
+		DynMesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& Mesh)
+		{
+			VertexCount = Mesh.VertexCount();
+			TriangleCount = Mesh.TriangleCount();
+		});
+	}
 
-	const int32 ChunkCount = ChunkMeshComponents.Num();
 	const int32 CellCount = GridCellCache.GetValidCellCount();
 	const int32 AnchorCount = GridCellCache.GetAnchorCount();
 	const int32 DestroyedCount = CellState.DestroyedCells.Num();
 
 	// 디버그 텍스트 생성
 	DebugText = FString::Printf(
-		TEXT("Vertices: %d\nTriangles: %d\nHoles: %d / %d\nInitialized: %s\nNetwork Mode: %s\n<Grid Cells>\nChunks: %d | Cells: %d | Anchors: %d | Destroyed: %d"),
+		TEXT("[Basic Info]\nVertices: %d\nTriangles: %d\nInitialized: %s\n[Grid Cells]\nChunks: %d | Cells: %d | Anchors: %d | Destroyed: %d"),
 		VertexCount,
 		TriangleCount,
-		HoleCount,
-		MaxHoleCount,
 		bIsInitialized ? TEXT("Yes") : TEXT("No"),
-		*NetModeStr,
 		ChunkCount,
 		CellCount,
 		AnchorCount,

@@ -645,34 +645,26 @@ void UDestructionProjectileComponent::SetShapeParameters(FRealtimeDestructionReq
 			/*
 			 * Cylinder 생성 시 Base로 생성 - 원기둥의 바닥을 원점(0, 0, 0)으로 해서 +z축으로 생성 
 			 */
-		OutRequest.Depth = CylinderHeight;
+			OutRequest.Depth = CylinderHeight;
 			OutRequest.ToolCenterWorld = OutRequest.ImpactPoint - (OutRequest.ToolForwardVector * SurfaceMargin);
-		break;
+			break;
 		}
 	case EDestructionToolShape::Sphere:
 		{
-		OutRequest.Depth = SphereRadius;
-		if (OutRequest.ToolCenterWorld.IsZero())
-		{
-			OutRequest.ToolCenterWorld = OutRequest.ImpactPoint + (OutRequest.ToolForwardVector * PenetrationOffset);
-
-		}
+			OutRequest.Depth = SphereRadius;
+			if (OutRequest.ToolCenterWorld.IsZero())
+			{
+				OutRequest.ToolCenterWorld = OutRequest.ImpactPoint + (OutRequest.ToolForwardVector * PenetrationOffset);
+			}
 		}
 		break;
 	default:
 		{
-		OutRequest.Depth = CylinderHeight;
+			OutRequest.Depth = CylinderHeight;
 			OutRequest.ToolCenterWorld = OutRequest.ImpactPoint - (OutRequest.ToolForwardVector * SurfaceMargin);
 		}
 		break;
 	}
-
-	UE_LOG(LogTemp, Warning, TEXT("[Client] ToolCenterWorld=%s, ImpactPoint=%s, Forward=%s, SurfaceMargin=%.2f, Shape=%d"),
-		*OutRequest.ToolCenterWorld.ToString(),
-		*OutRequest.ImpactPoint.ToString(),
-		*OutRequest.ToolForwardVector.ToString(),
-		SurfaceMargin,
-		(int32)ToolShape);
 
 	// Shape별로 파라미터 채우기 (네트워크 전송용)
 	switch (ToolShape)

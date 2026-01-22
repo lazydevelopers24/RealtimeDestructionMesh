@@ -141,13 +141,8 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
 	bool bEnableSupercell,
 	bool bEnableSubcell)
 {
-	 
-	UE_LOG(LogTemp, Warning, TEXT("FindDisconnectedCells: bEnableSupercell=%d, bEnableSubcell=%d"),
-		bEnableSupercell ? 1 : 0, bEnableSubcell ? 1 : 0);
-
 	if (bEnableSupercell)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("  -> Using HierarchicalLevel"));
 		return FindDisconnectedCellsHierarchicalLevel(
 			Cache,
 			SupercellCache,
@@ -156,13 +151,10 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
 	}
 	if (bEnableSubcell)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("  -> Using SubCellLevel"));
 		return FindDisconnectedCellsSubCellLevel(
 			Cache,
 			CellState);
 	}
-
-	UE_LOG(LogTemp, Warning, TEXT("  -> Using CellLevel"));
 	return FindDisconnectedCellsCellLevel(Cache, CellState.DestroyedCells);
 }
 
@@ -1615,9 +1607,6 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[HierarchicalBFS] Connected: %d cells, Visited SuperCells: %d"),
-		ConnectedCells.Num(), VisitedSupercells.Num());
-
 	return ConnectedCells;
 }
 
@@ -1653,9 +1642,6 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsHierarchicalLevel(
 			Disconnected.Add(CellId);
 		}
 	}
-
-	UE_LOG(LogTemp, Log, TEXT("[HierarchicalBFS] Disconnected: %d cells"),
-		Disconnected.Num());
-
+	
 	return Disconnected;
 }
