@@ -1073,6 +1073,13 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 		if (World->GetNetMode() == NM_DedicatedServer && bHasPhysicsBody)
 		{
 			ChunkComp->RecreatePhysicsState();
+
+			// ★ 데디서버 필수: 물리 필터 데이터 강제 업데이트
+			FBodyInstance* ServerBI = ChunkComp->GetBodyInstance();
+			if (ServerBI)
+			{
+				ServerBI->UpdatePhysicsFilterData();
+			}
 		}
 
 		UE_LOG(LogTemp, Warning, TEXT("[CellBoxDebug] Chunk %d: Boxes=%d, HasPhysicsBody=%d, CollisionEnabled=%d, BodySetupBoxes=%d"),
