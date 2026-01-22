@@ -549,7 +549,8 @@ void FGridCellBuilder::VoxelizeWithConvex(
       FGridCellCache& OutCache)
   {
       // MeshDescription 가져오기 (Mesh에 대한 자세한 정보가 있음)
-      const FMeshDescription* MeshDesc = SourceMesh->GetMeshDescription(0);
+      UStaticMeshDescription* StaticMeshDesc = const_cast<UStaticMesh*>(SourceMesh)->GetStaticMeshDescription(0);
+      const FMeshDescription* MeshDesc = StaticMeshDesc ? &StaticMeshDesc->GetMeshDescription() : nullptr;
 
       if (!MeshDesc)
       {

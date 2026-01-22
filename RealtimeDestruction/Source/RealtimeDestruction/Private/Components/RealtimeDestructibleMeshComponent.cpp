@@ -1069,6 +1069,12 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 			bHasPhysicsBody = ChunkBodyInstance->IsValidBodyInstance();
 		}
 
+		// 데디케이티드 서버: 물리 상태 강제 갱신 (콜리전 변경사항 즉시 반영)
+		if (World->GetNetMode() == NM_DedicatedServer && bHasPhysicsBody)
+		{
+			ChunkComp->RecreatePhysicsState();
+		}
+
 		UE_LOG(LogTemp, Warning, TEXT("[CellBoxDebug] Chunk %d: Boxes=%d, HasPhysicsBody=%d, CollisionEnabled=%d, BodySetupBoxes=%d"),
 			ChunkIndex, ChunkAggGeom.BoxElems.Num(), bHasPhysicsBody ? 1 : 0,
 			(int32)ChunkComp->GetCollisionEnabled(),
@@ -2681,6 +2687,16 @@ void URealtimeDestructibleMeshComponent::ServerEnqueueOps_Implementation(const T
 	// 유효한 Op가 있으면 Multicast
 	if (Ops.Num() > 0)
 	{
+		// 데디케이티드 서버: 서버에서 파괴 로직 실행 (Cell Collision 업데이트용)
+		UWorld* World = GetWorld();
+		if (World && World->GetNetMode() == NM_DedicatedServer)
+		{
+			for (const FRealtimeDestructionOp& Op : Ops)
+			{
+				DestructionLogic(Op.Request);
+			}
+		}
+
 		MulticastApplyOps(Ops);
 	}
 }

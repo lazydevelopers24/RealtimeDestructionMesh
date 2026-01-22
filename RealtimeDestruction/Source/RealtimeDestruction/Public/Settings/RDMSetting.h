@@ -78,7 +78,7 @@ public:
 
 private:
 	UPROPERTY(Transient)
-	mutable TMap<FName, UDecalMaterialDataAsset*> CachedDataAssetMap;
+	mutable TMap<FName, TObjectPtr<UDecalMaterialDataAsset>> CachedDataAssetMap;
 
 	void BuildCacheIfNeeded() const;
 };
