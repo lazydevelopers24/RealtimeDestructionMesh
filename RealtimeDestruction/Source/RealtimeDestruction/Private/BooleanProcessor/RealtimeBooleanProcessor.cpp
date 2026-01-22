@@ -131,7 +131,7 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 {
 	if (!OwnerComponent.IsValid())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Onwercomponent is invalid"));
+		UE_LOG(LogTemp, Warning, TEXT("OwnerComponent is invalid"));
 		return;
 	}
 
@@ -1054,13 +1054,14 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 						FAxisAlignedBox3d ToolBounds = CombinedToolMesh.GetBounds();
 						FAxisAlignedBox3d TargetBounds = WorkMesh.GetBounds();
 
-						UE_LOG(LogTemp, Warning, TEXT("[Boolean Debug] CombinedToolMesh Center: %s, Size: %s"),
-							*FVector(ToolBounds.Center()).ToString(),
-							*FVector(ToolBounds.Extents()).ToString());
-
-						UE_LOG(LogTemp, Warning, TEXT("[Boolean Debug] WorkMesh(Target) Center: %s, Size: %s"),
-							*FVector(TargetBounds.Center()).ToString(),
-							*FVector(TargetBounds.Extents()).ToString());
+						// Target mesh info (commented out to avoid log spam).
+						// UE_LOG(LogTemp, Warning, TEXT("[Boolean Debug] CombinedToolMesh Center: %s, Size: %s"),
+						// 	*FVector(ToolBounds.Center()).ToString(),
+						// 	*FVector(ToolBounds.Extents()).ToString());
+						//
+						// UE_LOG(LogTemp, Warning, TEXT("[Boolean Debug] WorkMesh(Target) Center: %s, Size: %s"),
+						// 	*FVector(TargetBounds.Center()).ToString(),
+						// 	*FVector(TargetBounds.Extents()).ToString());
 					}
 					bSubtractSuccess = ApplyMeshBooleanAsync(&WorkMesh, &CombinedToolMesh, &ResultMesh,
 					                                         EGeometryScriptBooleanOperation::Subtract, Options);
