@@ -1,10 +1,16 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Copyright (c) 2026 Lazy Developers <lazydeveloper24@gmail.com>. All rights reserved.
+// This plugin is distributed under the Fab Standard License.
+//
+// This product was independently developed by us while participating in the Epic Project, a developer-support
+// program of the KRAFTON JUNGLE GameTech Lab. All rights, title, and interest in and to the product are exclusively
+// vested in us. Krafton, Inc. was not involved in its development and distribution and disclaims all representations
+// and warranties, express or implied, and assumes no responsibility or liability for any consequences arising from
+// the use of this product.
 
 #pragma once
 
-#include "CoreMinimal.h"
-#include "Components/DestructionTypes.h"  
 #include <atomic>
+#include "CoreMinimal.h"
 #include "DynamicMesh/MeshTangents.h"
 
 ////////////////////////////////////////
@@ -23,33 +29,30 @@ class UDecalComponent;
 class URDMThreadManagerSubsystem;
 ////////////////////////////////////////
 
-/**
- * Union 결과 저장 구조체 .
- */
-
+/** Union result payload for a chunk, including the combined tool mesh and decals. */
 struct FUnionResult
 {
-	int32 BatchID = 0;				// 순서 추적용
-	UE::Geometry::FDynamicMesh3 PendingCombinedToolMesh; // Union 결과 
+	int32 BatchID = 0;				                     // For ordering
+	UE::Geometry::FDynamicMesh3 PendingCombinedToolMesh; // Union result mesh
 	TArray<TWeakObjectPtr<UDecalComponent>> Decals;
 	int32 UnionCount = 0;
 
-	// Chunk용 변수
+	// Chunk-scoped fields
 	int32 ChunkIndex = INDEX_NONE;
 	TWeakObjectPtr<UDynamicMeshComponent> TargetChunkMesh = nullptr;
 };
 
-
-// SOA로 바꿀 방법 고민해보기
+/** A single tool impact request queued for boolean processing. */
 struct FBulletHole
 {
+	// TODO: Consider switching to a SoA layout.
+	
 	FTransform ToolTransform = {};
 	uint8 Attempts = 0;
 	static constexpr uint8 MaxAttempts = 2;
-
-	// 관통 여부 플래그
-	// true: 관통, false: 비관통 
-	bool bIsPenetration = false;
+	
+	// true: penetration, false: non-penetration
+	bool bIsPenetration = false; 
 
 	TWeakObjectPtr<UDecalComponent> TemporaryDecal = nullptr;
 
@@ -73,6 +76,7 @@ struct FBulletHole
 	}
 };
 
+/** Batched bullet hole data (SoA) to run union/subtract per chunk. */
 struct FBulletHoleBatch
 {
 	TArray<FTransform> ToolTransforms = {};
@@ -143,28 +147,13 @@ struct FBulletHoleBatch
 	}
 
 	/*
-	 * ToolTransforms.Num을 반환하는 걸로 하면 이동연산 고려해야함
-	 * ToolTransform을 이동연산으로 소유권을 넘기면 ToolTransforms.Num는 0이 됨
+	 * Do not rely on ToolTransforms.Num() after moves.
+	 * Move operations transfer ownership, leaving ToolTransforms.Num() as 0.
 	 */
 	int32 Num() const { return Count; }
 };
 
-struct FBooleanThreadTuner
-{
-	// 시작 스레드 수
-	int32 CurrentThreadCount = 2;
-	// 이전 단계 효율
-	double LastThroughput = 0.0;
-	// 탐색 방향 (1 : 증가, -1 : 감소)
-	int32 ExplorationDirection = 1;
-
-	// 60 FPS 목표
-	const double TargetFrameTime = 1.0 / 60.0;
-
-	void Update(int32 BatchSize, double ElapsedTime, float CurrentDeltaTime);
-	int32 GetRecommendedThreadCount() const;
-};
-
+/** Per-chunk counters used for simplify scheduling and cost accumulation. */
 struct FChunkState
 {
 	int32 Interval = 0;
@@ -180,6 +169,7 @@ struct FChunkState
 	}
 };
 
+/** Container for per-chunk processing state with lifecycle helpers. */
 struct FChunkProcessState
 {
 	TArray<FChunkState> States;
@@ -209,9 +199,15 @@ struct FChunkProcessState
 	}
 };
 
+/**
+ * Schedules realtime boolean operations across chunks with batching and async workers.
+ * Tracks per-chunk metrics to adapt union size and simplify intervals,
+ * then applies results on the game thread.
+ */
 class FRealtimeBooleanProcessor
 {
 public:
+	/** Shared lifetime token for async workers to detect shutdown safely. */
 	struct FProcessorLifeTime
 	{
 		std::atomic<bool> bAlive{ true };
@@ -230,20 +226,33 @@ public:
 	bool Initialize(URealtimeDestructibleMeshComponent* Owner);
 	void Shutdown();
 
+	/** Enqueues a boolean operation request. */
 	void EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh = nullptr);
+	/** Re-enqueues remaining requests (including retries). */
 	void EnqueueRemaining(FBulletHole&& Operation);
 
+	/**
+	 * Builds per-chunk batches from queued ops and starts workers when work is available.
+	 * Work is available when at least one batch is formed; in single-worker mode it starts only
+	 * if the chunk is not busy, otherwise the batch is re-queued for a later tick.
+	 */
 	void KickProcessIfNeededPerChunk();
 
+	/** Returns whether the owning URealtimeDestructibleMeshComponent is valid. */
 	bool IsOwnerCompValid() const { return OwnerComponent.IsValid(); }
 
+	/** Returns the current accumulated hole count. */
 	int32 GetCurrentHoleCount() const { return CurrentHoleCount; }
 
+	/** Clears pending work and resets accumulated counters. */
 	void CancelAllOperations();
 	
+	/** Returns the hole count for the specified chunk index. */
 	int32 GetChunkHoleCount(int32 ChunkIndex) const { return ChunkHoleCount[ChunkIndex]; }
+	/** Resolves the chunk index from the component and returns its hole count. */
 	int32 GetChunkHoleCount(const UPrimitiveComponent* ChunkComponent) const;
 
+	/** Runs a mesh boolean and writes the result into OutputMesh. */
 	static bool ApplyMeshBooleanAsync(const UE::Geometry::FDynamicMesh3* TargetMesh,
 		const UE::Geometry::FDynamicMesh3* ToolMesh,
 		UE::Geometry::FDynamicMesh3* OutputMesh,
@@ -253,42 +262,66 @@ public:
 		const FTransform& ToolTransform = FTransform::Identity
 		);
 
+	/**
+	 * Applies planar simplification to clean up the mesh.
+	 * Removes low-importance vertices to prevent triangle count blow-up.
+	 */
 	static void ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options);
 
-private:	
+private:
+	// ===============================================================
+	// Processing Pipeline
+	// ===============================================================
 	void StartBooleanWorkerAsyncForChunk(FBulletHoleBatch&& InBatch, int32 Gen);	
-	
-	void StartUnionWorkerForChunk(FBulletHoleBatch&& InBatch, int32 BatchID, int32 ChunkIndex);
-	void TriggerSubtractWorkerForChunk(int32 ChunkIndex);
-	
-	void AccumulateSubtractDuration(int32 ChunkIndex, double CurrentSubDuration);
-
-	void UpdateSimplifyInterval(double CurrentSetMeshAvgCost);
-	
-	void UpdateUnionSize(int32 ChunkIndex, double DurationMs);
-
-	bool TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount);
-
-	int32& GetChunkInterval(int32 ChunkIndex);	
-	
 	void EnqueueRetryOps(TQueue<FBulletHole, EQueueMode::Mpsc>& Queue, FBulletHoleBatch&& InBatch,
 		UDynamicMeshComponent* TargetMesh, int32 ChunkIndex, int32& DebugCount);
+	int32& GetChunkInterval(int32 ChunkIndex);	
 
-	/** Subtract 연산 비용 측정기 */
+	// ===============================================================
+	// Simplification & Adaptive Tuning
+	// ===============================================================
+	void AccumulateSubtractDuration(int32 ChunkIndex, double CurrentSubDuration);
+	void UpdateSimplifyInterval(double CurrentSetMeshAvgCost);
+	void UpdateUnionSize(int32 ChunkIndex, double DurationMs);
+	bool TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount);
+	/** Subtract cost tracker. */
 	void UpdateSubtractAvgCost(double CostMs);
 
-	void UpdateHoleNormalAndTangents(UE::Geometry::FDynamicMesh3& MeshToSet, int32 HoleMaterialID);
-
-	// ThreadManager 접근 Helper
+	// ===============================================================
+	// Threading & Slot Workers
+	// ===============================================================
+	// ThreadManager access helper
 	URDMThreadManagerSubsystem* GetThreadManager() const;
 
-private:
+	void InitializeSlots();
+	void ShutdownSlots();
 	
+	// Route work to an appropriate slot.
+	int32 RouteToSlot(int32 ChunkIndex);
+	
+	// Find the least busy slot.
+	int32 FindLeastBusySlot() const;
+
+	// Start workers.
+	void KickUnionWorker(int32 SlotIndex);
+	void KickSubtractWorker(int32 SlotIndex);
+
+	// Worker main loop (batch passed as parameter for MPSC queue safety).
+	void ProcessSlotUnionWork(int32 SlotIndex, FBulletHoleBatch&& Batch);
+	void ProcessSlotSubtractWork(int32 SlotIndex, FUnionResult&& UnionResult);
+
+	// Clean up mapping when a slot drains.
+	void CleanupSlotMapping(int32 SlotIndex);
+
+private:
+	// ===============================================================
+	// Processing Pipeline
+	// ===============================================================
 	TWeakObjectPtr<URealtimeDestructibleMeshComponent> OwnerComponent = nullptr;
 
 	TSharedPtr<FProcessorLifeTime, ESPMode::ThreadSafe> LifeTime;
 	
-	// Queue를 관통, 비관통 전용으로 나눠서 관리
+	// Separate queues for penetration and non-penetration operations.
 	TQueue<FBulletHole, EQueueMode::Mpsc> HighPriorityQueue;
 	int DebugHighQueueCount;
 
@@ -297,28 +330,34 @@ private:
 
 	FChunkProcessState ChunkStates;
 	
-	// 청크 변경 이력 관리
-	// 불리연 연산이 완료되고 SetMesh할 때 증가
+	// Chunk generation tracking.
+	// Incremented when a boolean result is applied to the mesh.
 	TArray<std::atomic<int32>> ChunkGenerations;
 
-	/** Chunk별 UnionResults Queue (Chunk마다 독립적인 파이프라인) */
+	/** Per-chunk union result queues (independent pipelines per chunk). */
 	TArray<TUniquePtr<TQueue<FUnionResult, EQueueMode::Mpsc>>> ChunkUnionResultsQueues;
 
-	/** Chunk별 BatchID 카운터 */
+	/** Per-chunk batch ID counters. */
 	TArray<std::atomic<int32>> ChunkNextBatchIDs;
 
-	// 청크별 toolmesh의 최대 Union 개수
+	// Max union count per chunk for tool meshes.
 	TArray<uint8> MaxUnionCount;
-
-	// Destruction Settings
-	// 프로세서를 소유한 컴포넌트로부터 받아옴
-	int32 MaxHoleCount = 0;
-	int32 MaxBatchSize = 0;
 
 	TArray<int32> ChunkHoleCount = {};
 	int32 CurrentHoleCount = 0;
 
-	// defaut 값 부터 테스트
+	bool bEnableMultiWorkers;
+	std::atomic<int32> ActiveChunkCount{ 0 };
+
+	// Destruction settings.
+	// Pulled from the owning component.
+	int32 MaxHoleCount = 0;
+	int32 MaxBatchSize = 0;
+
+	// ===============================================================
+	// Simplification & Adaptive Tuning
+	// ===============================================================
+	// Testing from default values.
 	int32 AngleThreshold = 0.001;
 	
 	int32 MaxInterval = 0;
@@ -328,76 +367,39 @@ private:
 	double SubDurationLowThreshold = 5.0;
 
 	double SetMeshAvgCost = 0.0;
-
-	FBooleanThreadTuner AutoTuner;
-
-	bool bEnableMultiWorkers;
-	std::atomic<int32> ActiveChunkCount{ 0 };
-
-	/** 현재 Union 작업 중인 Worker 수 */
-	std::atomic<int32> ActiveUnionWorkers{ 0 };
 	
-	/** Subtract 작업 중 플래그 (Subtract는 한 곳에서만 실행 ) */
-	std::atomic<bool> bSubtractInProgress{ false };
-
-	/** 배치 ID (순서 추적용) */
-	std::atomic<int32> NextBatchID{ 0 };
-
-	/** Subtract 대기 중 배치 ID (순서 보장용) */
-	std::atomic<int32> NextSubtractBatchID{ 0 };
-
 	double FrameBudgetMs = 8.0f;
 	double SubtractAvgCostMs = 2.0f;
 	double SubtractCostAccum = 0.0f;
 	int32 SubtractCostSampleCount = 0;
- 
-private:
-	
-	// 슬롯 개수 ( thread 관리하는 슬롯 ) 
+
+	// ===============================================================
+	// Threading & Slot Workers
+	// ===============================================================
+	// Slot count (worker management slots).
 	int32 NumSlots = 1;
 	
 	int32 MaxUnionWorkerPerSlot = 2;
 	int32 MaxSubtractWorkerPerSlot = 1;
 
-	// 단수히 디버그 (통계) 용 
+	// Debug/statistics only.
 	TArray<TUniquePtr<std::atomic<int32>>>SlotUnionWorkerCounts; 
 	TArray<TUniquePtr<std::atomic<int32>>> SlotSubtractWorkerCounts;
 	
-	// 슬롯별 Union 큐 
+	// Per-slot union queues.
 	TArray<TUniquePtr<TQueue<FBulletHoleBatch, EQueueMode::Mpsc>>> SlotUnionQueues;
 
-	// 슬롯별 Subtract 큐
+	// Per-slot subtract queues.
 	TArray<TUniquePtr<TQueue<FUnionResult, EQueueMode::Mpsc>>> SlotSubtractQueues;
 	
-	// 청크 <=> 슬롯 매핑 (어떤 청크가 어떤 슬롯에서 처리 중인지)
+	// Chunk-to-slot mapping (which slot is processing which chunk).
 	TMap<int32, int32> ChunkToSlotMap;
 	FCriticalSection MapLock; 
 	
-	// 슬롯별 Worker 활성 상태
+	// Per-slot worker active flags.
 	TArray<TUniquePtr<std::atomic<bool>>> SlotUnionActiveFlags;
 	TArray<TUniquePtr<std::atomic<bool>>> SlotSubtractActiveFlags;
-	 
-private:
-	void InitializeSlots();
-	void ShutdownSlots();
-	
-	// 작업을 적절한 슬롯에 라우팅	
-	int32 RouteToSlot(int32 ChunkIndex);
-	
-	// 가장 한가한 슬롯 찾기
-	int32 FindLeastBusySlot() const;
 
-	// Worker 시작
-	void KickUnionWorker(int32 SlotIndex);
-	void KickSubtractWorker(int32 SlotIndex);
-
-	// Worker 메인 루프 (Batch를 파라미터로 받음 - Mpsc 큐 안전성)
-	void ProcessSlotUnionWork(int32 SlotIndex, FBulletHoleBatch&& Batch);
-	void ProcessSlotSubtractWork(int32 SlotIndex, FUnionResult&& UnionResult);
-
-	// 슬롯 종료 시 매핑 정리
-	void CleanupSlotMapping(int32 SlotIndex);
- 
 };
 
 
