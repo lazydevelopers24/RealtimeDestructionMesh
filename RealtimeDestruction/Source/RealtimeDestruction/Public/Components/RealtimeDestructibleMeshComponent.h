@@ -856,7 +856,7 @@ public:
 	 * @param OutRemovedMeshIsland - 제거 성공시 원본 메시에서 잘려나간 부분 (OriginalMesh ∩ ToolMesh)
 	 * @return 제거 성공 여부
 	 */
-	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, FDynamicMesh3& OutRemovedMeshIsland);
+	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
 

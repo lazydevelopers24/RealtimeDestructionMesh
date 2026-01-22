@@ -147,7 +147,7 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 	FTransform ComponentToWorld = Op.TargetMesh->GetComponentTransform();
 
 	const FVector LocalImpact = ComponentToWorld.InverseTransformPosition(Operation.Request.ToolCenterWorld);
-	
+
 	// Scale correction: compute axis scales in the rotated frame.
 	const FVector ComponentScale = ComponentToWorld.GetScale3D();
 
@@ -162,12 +162,12 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 		FVector ToolAxisX = ToolRotation.RotateVector(FVector::XAxisVector);
 		FVector ToolAxisY = ToolRotation.RotateVector(FVector::YAxisVector);
 		FVector ToolAxisZ = ToolRotation.RotateVector(FVector::ZAxisVector);
-			
+
 		// Compute axis stretching from ComponentScale.
 		FVector ScaledAxisX = ToolAxisX * ComponentScale;
 		FVector ScaledAxisY = ToolAxisY * ComponentScale;
 		FVector ScaledAxisZ = ToolAxisZ * ComponentScale;
-			
+
 		// Adjusted scale: restore to original size.
 		FVector AdjustedScale = FVector(
 			1.0f / FMath::Max(KINDA_SMALL_NUMBER, ScaledAxisX.Size()),
@@ -181,18 +181,18 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 	case EDestructionToolShape::Sphere:
 	{ 
 		  FVector InverseScale = FVector(
-		  1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.X),
-		  1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.Y),
-		  1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.Z)
-		);
+          1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.X),
+          1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.Y),
+          1.0f / FMath::Max(KINDA_SMALL_NUMBER, ComponentScale.Z)
+      );
 
-		Op.ToolTransform = FTransform(FQuat::Identity, LocalImpact, InverseScale);
+      Op.ToolTransform = FTransform(FQuat::Identity, LocalImpact, InverseScale);
 		break;
 	}
 	default:
 		break;
 	}
-	
+	  
 	Op.bIsPenetration = Operation.bIsPenetration;
 	Op.TemporaryDecal = TemporaryDecal;
 	Op.ToolMeshPtr = Operation.Request.ToolMeshPtr;
@@ -225,6 +225,40 @@ void FRealtimeBooleanProcessor::EnqueueRemaining(FBulletHole&& Operation)
 	{
 		NormalPriorityQueue.Enqueue(MoveTemp(Operation));
 		DebugNormalQueueCount++;
+	}
+}
+
+void FRealtimeBooleanProcessor::EnqueueIslandRemoval(
+	int32 ChunkIndex,
+	TSharedPtr<UE::Geometry::FDynamicMesh3> ToolMesh,
+	TSharedPtr<FIslandRemovalContext> Context)
+{
+	if (ChunkIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	if (!ToolMesh.IsValid())
+	{
+		return;
+	}
+
+	FUnionResult WorkItem = {};
+	WorkItem.ChunkIndex = ChunkIndex;
+	WorkItem.SharedToolMesh = ToolMesh;
+	WorkItem.OutDebrisMesh = MakeShared<FDynamicMesh3>();
+	WorkItem.WorkType = EBooleanWorkType::IslandRemoval;
+	WorkItem.IslandContext = Context;
+	
+	WorkItem.Decals = {};
+	WorkItem.PendingCombinedToolMesh = {};
+	WorkItem.UnionCount = 0;
+
+	int32 SlotIndex = RouteToSlot(ChunkIndex);
+	if (SlotSubtractQueues.IsValidIndex(SlotIndex))
+	{
+		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(WorkItem));
+		KickSubtractWorker(SlotIndex);
 	}
 }
 
@@ -508,7 +542,7 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 					), ChunkIndex, i);
 	 		continue;
 	 	}
-		
+
 	 	//FDynamicMesh3 CurrentTool = MoveTemp(*(ToolMeshPtrs[i]));
 	 	MeshTransforms::ApplyTransform(CurrentTool, (FTransformSRT3d)ToolTransform, true);
 
@@ -607,6 +641,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 	// ===== 4. Subtract compute =====
 	FDynamicMesh3 ResultMesh;
 	bool bSuccess = false;
+	bool bHasDebris = false;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE("SlotSubtract_Compute");
 
@@ -619,6 +654,11 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			{
 				KickSubtractWorker(SlotIndex);
 			}
+
+			if (UnionResult.IslandContext.IsValid())
+			{
+				UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
+			}
 			return;
 		}
 
@@ -629,9 +669,16 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			{
 				KickSubtractWorker(SlotIndex);
 			}
+
+			if (UnionResult.IslandContext.IsValid())
+			{
+				UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
+			}
 			return;
 		}
 
+		if (UnionResult.WorkType == EBooleanWorkType::BulletHole)
+		{
 		if (UnionResult.PendingCombinedToolMesh.TriangleCount() == 0)
 		{
 			SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
@@ -657,7 +704,49 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			// Simplify.
 			TrySimplify(ResultMesh, ChunkIndex, UnionResult.UnionCount);
 		}
+			else
+			{
+				if (UnionResult.SharedToolMesh.IsValid())
+				{
+					FGeometryScriptMeshBooleanOptions Ops;
+					Ops.bFillHoles = true;
+					Ops.bSimplifyOutput = false;
+
+					FDynamicMesh3* ToolMesh = UnionResult.SharedToolMesh.Get();
+					FDynamicMesh3 ToolMeshForIntersection = *ToolMesh;
+					ToolMeshForIntersection.ReverseOrientation();
+
+					// intersection
+					FDynamicMesh3 Debris;
+					bool bSuccessIntersection = ApplyMeshBooleanAsync(
+						&WorkMesh,
+						&ToolMeshForIntersection,
+						&Debris,
+						EGeometryScriptBooleanOperation::Intersection,
+						Ops);
+
+					if (bSuccessIntersection && Debris.TriangleCount() > 0)
+					{
+						if (UnionResult.IslandContext.IsValid())
+						{
+							FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
+							FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
+							FMeshIndexMappings Mappings;
+							Editor.AppendMesh(&Debris, Mappings);
+							bHasDebris = true;
+						}
 	}
+
+					// subtract
+					bSuccess = ApplyMeshBooleanAsync(
+						&WorkMesh,
+						ToolMesh,
+						&ResultMesh,
+						EGeometryScriptBooleanOperation::Subtract,
+						Ops);
+				}
+			}
+		}
 
 	// ===== 5. Apply results (GameThread) =====
 	if (bSuccess)
@@ -668,6 +757,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			 ChunkIndex,
 			 SlotIndex,
 			 ResultMesh = MoveTemp(ResultMesh),
+				 Context = UnionResult.IslandContext,
 			 Decals = MoveTemp(UnionResult.Decals),
 			 UnionCount = UnionResult.UnionCount,
 			 this]() mutable
@@ -690,6 +780,28 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 				// Apply mesh.
 				WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
+
+					// Spawn debris
+					if (Context.IsValid())
+					{
+						if (Context->RemainingTaskCount.fetch_sub(1) == 1)
+						{
+							if (Context->Owner.IsValid() && Context->AccumulatedDebrisMesh.TriangleCount() > 0)
+							{
+								UE_LOG(LogTemp, Display, TEXT("DebrisDebug/spawn"));
+								TArray<UMaterialInterface*> Materials;
+								if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(0))
+								{
+									for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
+									{
+										Materials.Add(ChunkMesh->GetMaterial(i));
+									}
+								}
+
+								Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+							}
+						}
+					}
 
 				// ===== Decrement counters (shutdown check) =====
 				if (LifeTime.IsValid() && LifeTime->bAlive.load() && SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
@@ -716,14 +828,19 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		// Even on failure, re-kick if queue has work (GameThread).
 		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex]()
 		{
+				if (SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
+				{
+					SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+				}
+			
 			if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
 			{
 				KickSubtractWorker(SlotIndex);
 			}
 		});
 	}
+	}
 }
-
 
 void FRealtimeBooleanProcessor::CleanupSlotMapping(int32 SlotIndex)
 {
@@ -784,8 +901,6 @@ void FRealtimeBooleanProcessor::UpdateUnionSize(int32 ChunkIndex, double Duratio
 		MaxUnionCount[ChunkIndex] = CurrentUnionCount;
 	}
 }
-
-
 
 void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 {

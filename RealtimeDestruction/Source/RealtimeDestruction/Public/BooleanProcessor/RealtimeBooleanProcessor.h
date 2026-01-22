@@ -9,9 +9,11 @@
 
 #pragma once
 
-#include <atomic>
 #include "CoreMinimal.h"
+#include <atomic>
 #include "DynamicMesh/MeshTangents.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "HAL/CriticalSection.h"
 
 ////////////////////////////////////////
 /******** forward declaration ********/
@@ -28,6 +30,21 @@ class URealtimeDestructibleMeshComponent;
 class UDecalComponent;
 class URDMThreadManagerSubsystem;
 ////////////////////////////////////////
+///
+enum class EBooleanWorkType : uint8
+{
+	BulletHole,
+	IslandRemoval
+};
+
+struct FIslandRemovalContext
+{
+	std::atomic<int32> RemainingTaskCount{0};
+	UE::Geometry::FDynamicMesh3 AccumulatedDebrisMesh;
+
+	FCriticalSection MeshLock;
+	TWeakObjectPtr<URealtimeDestructibleMeshComponent> Owner;
+};
 
 /** Union result payload for a chunk, including the combined tool mesh and decals. */
 struct FUnionResult
@@ -40,6 +57,11 @@ struct FUnionResult
 	// Chunk-scoped fields
 	int32 ChunkIndex = INDEX_NONE;
 	TWeakObjectPtr<UDynamicMeshComponent> TargetChunkMesh = nullptr;
+
+	TSharedPtr<UE::Geometry::FDynamicMesh3> SharedToolMesh = nullptr;
+	TSharedPtr<UE::Geometry::FDynamicMesh3> OutDebrisMesh = nullptr;
+	TSharedPtr<FIslandRemovalContext> IslandContext;
+	EBooleanWorkType WorkType = EBooleanWorkType::BulletHole;
 };
 
 /** A single tool impact request queued for boolean processing. */
@@ -50,9 +72,9 @@ struct FBulletHole
 	FTransform ToolTransform = {};
 	uint8 Attempts = 0;
 	static constexpr uint8 MaxAttempts = 2;
-	
+
 	// true: penetration, false: non-penetration
-	bool bIsPenetration = false; 
+	bool bIsPenetration = false;
 
 	TWeakObjectPtr<UDecalComponent> TemporaryDecal = nullptr;
 
@@ -230,6 +252,7 @@ public:
 	void EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh = nullptr);
 	/** Re-enqueues remaining requests (including retries). */
 	void EnqueueRemaining(FBulletHole&& Operation);
+	void EnqueueIslandRemoval(int32 ChunkIndex, TSharedPtr<UE::Geometry::FDynamicMesh3> ToolMesh, TSharedPtr<FIslandRemovalContext> Context);
 
 	/**
 	 * Builds per-chunk batches from queued ops and starts workers when work is available.
@@ -268,7 +291,7 @@ public:
 	 */
 	static void ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options);
 
-private:
+private:	
 	// ===============================================================
 	// Processing Pipeline
 	// ===============================================================
@@ -276,7 +299,7 @@ private:
 	void EnqueueRetryOps(TQueue<FBulletHole, EQueueMode::Mpsc>& Queue, FBulletHoleBatch&& InBatch,
 		UDynamicMeshComponent* TargetMesh, int32 ChunkIndex, int32& DebugCount);
 	int32& GetChunkInterval(int32 ChunkIndex);	
-
+	
 	// ===============================================================
 	// Simplification & Adaptive Tuning
 	// ===============================================================
@@ -286,7 +309,7 @@ private:
 	bool TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount);
 	/** Subtract cost tracker. */
 	void UpdateSubtractAvgCost(double CostMs);
-
+	
 	// ===============================================================
 	// Threading & Slot Workers
 	// ===============================================================
@@ -295,7 +318,7 @@ private:
 
 	void InitializeSlots();
 	void ShutdownSlots();
-	
+
 	// Route work to an appropriate slot.
 	int32 RouteToSlot(int32 ChunkIndex);
 	
@@ -367,12 +390,12 @@ private:
 	double SubDurationLowThreshold = 5.0;
 
 	double SetMeshAvgCost = 0.0;
-	
+
 	double FrameBudgetMs = 8.0f;
 	double SubtractAvgCostMs = 2.0f;
 	double SubtractCostAccum = 0.0f;
 	int32 SubtractCostSampleCount = 0;
-
+ 
 	// ===============================================================
 	// Threading & Slot Workers
 	// ===============================================================
@@ -399,7 +422,7 @@ private:
 	// Per-slot worker active flags.
 	TArray<TUniquePtr<std::atomic<bool>>> SlotUnionActiveFlags;
 	TArray<TUniquePtr<std::atomic<bool>>> SlotSubtractActiveFlags;
-
+	 
 };
 
 

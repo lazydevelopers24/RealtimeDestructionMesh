@@ -621,24 +621,9 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 
 			for (const TArray<int32>& Group : NewDetachedGroups)
 			{
-				FDynamicMesh3 DetachedToolMesh;
-				if (RemoveTrianglesForDetachedCells(Group, DetachedToolMesh))
-				{
-					// 머티리얼 수집 (모든 청크에서 사용되는 머티리얼)
-					TArray<UMaterialInterface*> Materials;
-					if (ChunkMeshComponents.Num() > 0 && ChunkMeshComponents[0])
-					{
-						for (int32 i = 0; i < ChunkMeshComponents[0]->GetNumMaterials(); ++i)
-						{
-							Materials.Add(ChunkMeshComponents[0]->GetMaterial(i));
-						}
+				RemoveTrianglesForDetachedCells(Group);			
 					}
-
-					// 삭제된 메시 형태의 파편 액터 생성
-					SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
-				}
 			}
-		}
 		CellState.MoveAllDetachedToDestroyed();
 
 		// 서버 Cell Collision: 분리된 셀들의 청크도 dirty 마킹
@@ -1179,8 +1164,7 @@ void URealtimeDestructibleMeshComponent::UpdateDirtyCollisionChunks()
 	}
 }
 
-bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
-	const TArray<int32>& DetachedCellIds, FDynamicMesh3& OutRemovedMeshIsland)
+bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds)
 {
 	using namespace UE::Geometry;
 
@@ -1503,6 +1487,11 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 	// Laplacian Smoothing 적용 (계단 현상 완화)
 	ApplyHCLaplacianSmoothing(ToolMesh);
 
+	/*
+	 * deprecated_realdestruction
+	 * 디버깅용으로 남겨두었음
+	 * 로직 검증 끝나면 제거 필요
+	 */
 	// Intersection용 ToolMesh 복사 및 노말 반전
 	// Greedy meshing으로 생성된 ToolMesh의 노말이 셀 볼륨 안쪽을 향할 수 있으므로
 	// Intersection에서도 반전된 노말이 필요할 수 있음
@@ -1591,135 +1580,68 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(
 	BoolOptions.bSimplifyOutput = false;
 
 	int32 TotalChunksProcessed = 0;
-	FAxisAlignedBox3d ToolBounds = ToolMesh.GetBounds();
-
-	// 제거된 메시 조각 누적용 (OriginalMesh ∩ ToolMesh)
-	FDynamicMesh3 AccumulatedRemovedMesh;
+	TSharedPtr<FDynamicMesh3> SharedToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(ToolMesh));
+	FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
 
 	UE_LOG(LogTemp, Warning, TEXT("ToolMesh Bounds: Min=%s, Max=%s"),
 		*FVector(ToolBounds.Min).ToString(), *FVector(ToolBounds.Max).ToString());
 
-	for (int32 ChunkIdx = 0; ChunkIdx < ChunkMeshComponents.Num(); ++ChunkIdx)
+	TArray<int32> OverlappingChunks;
+	for (int32 i = 0; i < GetChunkNum(); i++)
 	{
-		UDynamicMeshComponent* ChunkMesh = ChunkMeshComponents[ChunkIdx];
-		if (!ChunkMesh || !ChunkMesh->GetMesh()) continue;
-
-		FDynamicMesh3* TargetMesh = ChunkMesh->GetMesh();
-		if (TargetMesh->TriangleCount() == 0) continue;
-
-		// AABB 겹침 체크
-		FAxisAlignedBox3d ChunkBounds = TargetMesh->GetBounds();
-		bool bBoundsOverlap = ChunkBounds.Intersects(ToolBounds);
-
-		UE_LOG(LogTemp, Warning, TEXT("Chunk[%d]: Bounds Min=%s Max=%s, Overlap=%s"),
-			ChunkIdx,
-			*FVector(ChunkBounds.Min).ToString(),
-			*FVector(ChunkBounds.Max).ToString(),
-			bBoundsOverlap ? TEXT("YES") : TEXT("NO"));
-
-		if (!bBoundsOverlap)
+		if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Chunk[%d]: SKIP (no bounds overlap)"), ChunkIdx);
-			continue;
+			if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
+			{
+				OverlappingChunks.Add(i);
+			}
+		}
 		}
 
-		// Intersection 먼저 계산 (제거될 부분 = OriginalMesh ∩ ToolMesh)
-		// 원본 방향의 ToolMeshForIntersection 사용 (ReverseOrientation 전 복사본)
-		FDynamicMesh3 IntersectionMesh;
-		bool bIntersectSuccess = FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(
-			TargetMesh,
-			&ToolMeshForIntersection,
-			&IntersectionMesh,
-			EGeometryScriptBooleanOperation::Intersection,
-			BoolOptions
-		);
+	TSharedPtr<FIslandRemovalContext> Context = MakeShared<FIslandRemovalContext>();
+	Context->Owner = this;
+	Context->RemainingTaskCount = OverlappingChunks.Num();
 
-		if (bIntersectSuccess && IntersectionMesh.TriangleCount() > 0)
+	if (BooleanProcessor.IsValid())
 		{
-			// 누적 메시에 추가
-			FDynamicMeshEditor Editor(&AccumulatedRemovedMesh);
-			FMeshIndexMappings Mappings;
-			Editor.AppendMesh(&IntersectionMesh, Mappings);
-		}
-
-		// Subtract 계산 (원본에서 제거)
-		FDynamicMesh3 ResultMesh;
-		bool bSuccess = FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(
-			TargetMesh,
-			&ToolMesh,
-			&ResultMesh,
-			EGeometryScriptBooleanOperation::Subtract,
-			BoolOptions
-		);
-
-		if (!bSuccess)
+		for (int32 ChunkIndex : OverlappingChunks)
 		{
-			UE_LOG(LogTemp, Error, TEXT("Chunk[%d]: Boolean FAILED"), ChunkIdx);
+			UE_LOG(LogTemp, Display, TEXT("DebrisDebug/enqueue"))
+			BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
 		}
-		else if (ResultMesh.TriangleCount() == 0)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Chunk[%d]: Result 0 tris (fully consumed)"), ChunkIdx);
-			// 완전히 제거된 경우도 적용
-			*TargetMesh = MoveTemp(ResultMesh);
-			ChunkMesh->NotifyMeshUpdated();
-			TotalChunksProcessed++;
 		}
-		else if (ResultMesh.TriangleCount() == TargetMesh->TriangleCount())
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Chunk[%d]: No change (%d tris) - no actual intersection?"), ChunkIdx, TargetMesh->TriangleCount());
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Chunk[%d]: %d -> %d tris (SUCCESS)"), ChunkIdx, TargetMesh->TriangleCount(), ResultMesh.TriangleCount());
-			*TargetMesh = MoveTemp(ResultMesh);
-			ChunkMesh->NotifyMeshUpdated();
-			TotalChunksProcessed++;
-		}
-	}
 
 	UE_LOG(LogTemp, Log, TEXT("RemoveTrianglesForDetachedCells: %d cells, %d chunks affected"),
 		DetachedCellIds.Num(), TotalChunksProcessed);
 
-	//// 즉시 파편 정리
-	//CleanupSmallFragments();
-
-	// 0.5초 후 추가 정리
-	// GetWorld()->GetTimerManager().SetTimer(
-	//	FragmentCleanupTimerHandle,
-	//	this,
-	//	&URealtimeDestructibleMeshComponent::CleanupSmallFragments,
-	//	0.5f,
-	//	false
-	//);
 
 	// 디버그: AccumulatedRemovedMesh (OriginalMesh ∩ ToolMesh) 와이어프레임 그리기
-	if (bDebugMeshIslandRemoval)
-	{
-		if (UWorld* DebugWorld = GetWorld())
-		{
-			FTransform ComponentTransform = GetComponentTransform();
+	// if (bDebugMeshIslandRemoval)
+	// {
+	// 	if (UWorld* DebugWorld = GetWorld())
+	// 	{
+	// 		FTransform ComponentTransform = GetComponentTransform();
+	//
+	// 		for (int32 TriId : AccumulatedRemovedMesh.TriangleIndicesItr())
+	// 		{
+	// 			FIndex3i Tri = AccumulatedRemovedMesh.GetTriangle(TriId);
+	//
+	// 			// 로컬 좌표 → 월드 좌표 변환
+	// 			FVector V0 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.A)));
+	// 			FVector V1 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.B)));
+	// 			FVector V2 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.C)));
+	//
+	// 			// 삼각형 엣지 그리기 (시안색, 4.5초)
+	// 			DrawDebugLine(DebugWorld, V0, V1, FColor::Cyan, false, 4.5f, 0, 1.0f);
+	// 			DrawDebugLine(DebugWorld, V1, V2, FColor::Cyan, false, 4.5f, 0, 1.0f);
+	// 			DrawDebugLine(DebugWorld, V2, V0, FColor::Cyan, false, 4.5f, 0, 1.0f);
+	// 		}
+	//
+	// 		UE_LOG(LogTemp, Warning, TEXT("[DEBUG] AccumulatedRemovedMesh wireframe drawn: %d triangles (Cyan, 4.5sec)"),
+	// 			AccumulatedRemovedMesh.TriangleCount());
+	// 	}
+	// }
 
-			for (int32 TriId : AccumulatedRemovedMesh.TriangleIndicesItr())
-			{
-				FIndex3i Tri = AccumulatedRemovedMesh.GetTriangle(TriId);
-
-				// 로컬 좌표 → 월드 좌표 변환
-				FVector V0 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.A)));
-				FVector V1 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.B)));
-				FVector V2 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.C)));
-
-				// 삼각형 엣지 그리기 (시안색, 4.5초)
-				DrawDebugLine(DebugWorld, V0, V1, FColor::Cyan, false, 4.5f, 0, 1.0f);
-				DrawDebugLine(DebugWorld, V1, V2, FColor::Cyan, false, 4.5f, 0, 1.0f);
-				DrawDebugLine(DebugWorld, V2, V0, FColor::Cyan, false, 4.5f, 0, 1.0f);
-			}
-
-			UE_LOG(LogTemp, Warning, TEXT("[DEBUG] AccumulatedRemovedMesh wireframe drawn: %d triangles (Cyan, 4.5sec)"),
-				AccumulatedRemovedMesh.TriangleCount());
-		}
-	}
-
-	OutRemovedMeshIsland = MoveTemp(AccumulatedRemovedMesh);
 	return true;
 }
 
@@ -2384,13 +2306,13 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 					for (int32 Tid : Comp.Indices)
 					{
 						if (Mesh->IsTriangle(Tid))
-						{
-							TrianglesToRemove.Add(Tid);
-						}
+					{
+									TrianglesToRemove.Add(Tid);
+								}
+								}
+								}
+								}
 					}
-				}
-			}
-		}
 
 		// EditMesh를 사용하여 삼각형 제거 및 Compact (렌더링 업데이트 보장)
 		if (TrianglesToRemove.Num() > 0)
@@ -2698,23 +2620,8 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 		CellState.AddDetachedGroup(Group);
 
 		// 분리된 셀의 삼각형 삭제 (시각적 처리)
-		FDynamicMesh3 DetachedToolMesh;
-		if (RemoveTrianglesForDetachedCells(Group, DetachedToolMesh))
-		{
-			// 머티리얼 수집 (모든 청크에서 사용되는 머티리얼)
-			TArray<UMaterialInterface*> Materials;
-			if (ChunkMeshComponents.Num() > 0 && ChunkMeshComponents[0])
-			{
-				for (int32 i = 0; i < ChunkMeshComponents[0]->GetNumMaterials(); ++i)
-				{
-					Materials.Add(ChunkMeshComponents[0]->GetMaterial(i));
-				}
+		RemoveTrianglesForDetachedCells(Group);		
 			}
-
-			// 삭제된 메시 형태의 파편 액터 생성
-			SpawnDebrisActor(MoveTemp(DetachedToolMesh), Materials);
-		}
-	}
 
 	// 분리된 셀들을 파괴됨 상태로 이동
 	CellState.MoveAllDetachedToDestroyed();
