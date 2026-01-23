@@ -239,6 +239,7 @@ void FRealtimeBooleanProcessor::EnqueueRemaining(FBulletHole&& Operation)
 void FRealtimeBooleanProcessor::EnqueueIslandRemoval(
 	int32 ChunkIndex,
 	TSharedPtr<UE::Geometry::FDynamicMesh3> ToolMesh,
+	TSharedPtr<UE::Geometry::FDynamicMesh3> DebrisToolMesh,
 	TSharedPtr<FIslandRemovalContext> Context)
 {
 	if (ChunkIndex == INDEX_NONE)
@@ -254,6 +255,7 @@ void FRealtimeBooleanProcessor::EnqueueIslandRemoval(
 	FUnionResult WorkItem = {};
 	WorkItem.ChunkIndex = ChunkIndex;
 	WorkItem.SharedToolMesh = ToolMesh;
+	WorkItem.DebrisSharedToolMesh = DebrisToolMesh;
 	WorkItem.OutDebrisMesh = MakeShared<FDynamicMesh3>();
 	WorkItem.WorkType = EBooleanWorkType::IslandRemoval;
 	WorkItem.IslandContext = Context;
@@ -770,7 +772,6 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				Ops.bSimplifyOutput = false;
 
 				FDynamicMesh3 LocalTool = *UnionResult.SharedToolMesh;				
-
 				// intersection
 				FDynamicMesh3 Debris;
 				bool bSuccessIntersection = ApplyMeshBooleanAsync(
@@ -882,7 +883,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					          	Context->Owner->CleanupSmallFragments();
 					          }
 				          }
-			          }
+			          } 
 
 			          // ===== Decrement counters (shutdown check) =====
 			          if (LifeTime.IsValid() && LifeTime->bAlive.load() && SlotSubtractWorkerCounts.IsValidIndex(

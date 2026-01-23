@@ -59,6 +59,7 @@ struct FUnionResult
 	TWeakObjectPtr<UDynamicMeshComponent> TargetChunkMesh = nullptr;
 
 	TSharedPtr<UE::Geometry::FDynamicMesh3> SharedToolMesh = nullptr;
+	TSharedPtr<UE::Geometry::FDynamicMesh3> DebrisSharedToolMesh = nullptr;
 	TSharedPtr<UE::Geometry::FDynamicMesh3> OutDebrisMesh = nullptr;
 	TSharedPtr<FIslandRemovalContext> IslandContext;
 	EBooleanWorkType WorkType = EBooleanWorkType::BulletHole;
@@ -252,7 +253,7 @@ public:
 	void EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh = nullptr);
 	/** Re-enqueues remaining requests (including retries). */
 	void EnqueueRemaining(FBulletHole&& Operation);
-	void EnqueueIslandRemoval(int32 ChunkIndex, TSharedPtr<UE::Geometry::FDynamicMesh3> ToolMesh, TSharedPtr<FIslandRemovalContext> Context);
+	void EnqueueIslandRemoval(int32 ChunkIndex, TSharedPtr<UE::Geometry::FDynamicMesh3> ToolMesh, TSharedPtr<UE::Geometry::FDynamicMesh3> DebrisToolMesh, TSharedPtr<FIslandRemovalContext> Context);
 
 	/**
 	 * Builds per-chunk batches from queued ops and starts workers when work is available.

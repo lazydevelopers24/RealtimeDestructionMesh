@@ -104,7 +104,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	 //	}
 	 //}
 	
-	 VoxelizeWithTriangles(SourceMesh, OutLayout);
+	VoxelizeWithTriangles(SourceMesh, OutLayout);
 
 	 FillInsideVoxels(OutLayout);
 
