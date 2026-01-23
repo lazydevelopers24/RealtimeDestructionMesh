@@ -544,23 +544,30 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	return DestructionResult;
 }
 
-void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults)
+void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults, bool bForceRun)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_DisconnectedCellStateLogic);
 
-	//파괴된게 없으면 패스
-	bool bHasAnyDestruction = false;
-	for (const FDestructionResult& Result : AllResults)
+	UE_LOG(LogTemp, Warning, TEXT("[DisconnectedCellStateLogic] ENTER: AllResults=%d, DestroyedCells=%d, bForceRun=%d"),
+		AllResults.Num(), CellState.DestroyedCells.Num(), bForceRun ? 1 : 0);
+
+	//파괴된게 없으면 패스 (bForceRun이면 무조건 BFS 실행)
+	if (!bForceRun)
 	{
-		if (Result.HasAnyDestruction())
+		bool bHasAnyDestruction = false;
+		for (const FDestructionResult& Result : AllResults)
 		{
-			bHasAnyDestruction = true;
-			break;
+			if (Result.HasAnyDestruction())
+			{
+				bHasAnyDestruction = true;
+				break;
+			}
 		}
-	} 
-	if (!bHasAnyDestruction)
-	{
-		return;
+		if (!bHasAnyDestruction)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DisconnectedCellStateLogic] EARLY RETURN: No destruction in AllResults"));
+			return;
+		}
 	}
 
 
@@ -621,7 +628,8 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		//=====================================================================
 		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
 
-		// 분리된 셀의 삼각형 삭제
+		// 분리된 셀의 삼각형 삭제 (데디서버: 렌더링 불필요, Cell Box만 업데이트)
+		if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_Phase4);
 
@@ -669,13 +677,18 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 	}
 	else
 	{
-		// 분리된 셀 없어도 파괴된 셀 있으면 파편 정리 (RemoveTrianglesForDetachedCells 통하지 않으므로)
-		// CleanupSmallFragments();
+		// 분리된 셀 없어도 파괴된 셀 있으면 파편 정리 (데디서버 제외)
+		if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
+		{
+			CleanupSmallFragments();
+		}
 	}
 
-	
-		for (const FDestructionResult& Result : AllResults)
+	// 데칼 정리 (데디서버에서는 불필요)
+	if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
 	{
+		for (const FDestructionResult& Result : AllResults)
+		{
 			ProcessDecalRemoval(Result);
 		}
 
@@ -683,9 +696,9 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		{
 			FDestructionResult DetachResult;
 			DetachResult.NewlyDestroyedCells = DisconnectedCells.Array();
-
 			ProcessDecalRemoval(DetachResult);
 		}
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("UpdateCellStateFromDestruction Complete: Destroyed=%d, DetachedGroups=%d"),
 		CellState.DestroyedCells.Num(), CellState.DetachedGroups.Num());
@@ -813,19 +826,28 @@ void URealtimeDestructibleMeshComponent::BuildServerCellCollision()
 		CellToCollisionChunkMap.Add(CellId, ChunkIndex);
 	}
 
-	// 서버에서 원본 메시: Pawn 채널만 Ignore (총알은 충돌, 캐릭터는 Cell Box로 처리)
-	SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	// 서버에서 원본 메시 콜리전 완전 비활성화 (총알 판정은 클라에서 처리, 서버는 Cell Box만 사용)
+	SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	// ChunkMeshComponents도 Pawn Ignore 설정
 	for (UDynamicMeshComponent* ChunkMesh : ChunkMeshComponents)
 	{
 		if (ChunkMesh)
 		{
-			ChunkMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+			ChunkMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[ServerCellCollision] Mesh: Pawn Ignore (Main + %d ChunkMeshes), Cell Box handles Pawn"), ChunkMeshComponents.Num());
+	UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] After NoCollision: Main CollisionEnabled=%d, HasPhysics=%d"),
+		(int32)GetCollisionEnabled(), IsPhysicsStateCreated() ? 1 : 0);
+	for (int32 i = 0; i < ChunkMeshComponents.Num(); ++i)
+	{
+		if (ChunkMeshComponents[i])
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] ChunkMesh[%d] CollisionEnabled=%d, HasPhysics=%d"),
+				i, (int32)ChunkMeshComponents[i]->GetCollisionEnabled(),
+				ChunkMeshComponents[i]->IsPhysicsStateCreated() ? 1 : 0);
+		}
+	}
 
 	// 각 청크의 콜리전 컴포넌트 및 BodySetup 생성
 	for (int32 i = 0; i < TotalChunks; ++i)
@@ -1059,17 +1081,10 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 			bHasPhysicsBody = ChunkBodyInstance->IsValidBodyInstance();
 		}
 
-		// 데디케이티드 서버: 물리 상태 강제 갱신 (콜리전 변경사항 즉시 반영)
-		if (World->GetNetMode() == NM_DedicatedServer && bHasPhysicsBody)
+		// 물리 필터 데이터 강제 업데이트 (InitBody로 생성된 바디 유지)
+		if (bHasPhysicsBody)
 		{
-			ChunkComp->RecreatePhysicsState();
-
-			// ★ 데디서버 필수: 물리 필터 데이터 강제 업데이트
-			FBodyInstance* ServerBI = ChunkComp->GetBodyInstance();
-			if (ServerBI)
-			{
-				ServerBI->UpdatePhysicsFilterData();
-			}
+			ChunkBodyInstance->UpdatePhysicsFilterData();
 		}
 
 		UE_LOG(LogTemp, Warning, TEXT("[CellBoxDebug] Chunk %d: Boxes=%d, HasPhysicsBody=%d, CollisionEnabled=%d, BodySetupBoxes=%d"),
@@ -3226,6 +3241,8 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 	// DedicatedServer는 스킵 (렌더링 없음)
 	if (NetMode == NM_DedicatedServer)
 	{
+
+		
 		return;
 	}
 
@@ -3250,6 +3267,7 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 	if (DisconnectedCells.Num() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Client] BFS result: No disconnected cells"));
+		CleanupSmallFragments();
 		return;
 		}
 
@@ -3588,17 +3606,23 @@ void URealtimeDestructibleMeshComponent::ApplyRenderUpdate()
 
 void URealtimeDestructibleMeshComponent::ApplyCollisionUpdate(UDynamicMeshComponent* TargetComp)
 {
+	// 서버 Cell Collision 활성 시: 원본 메시 콜리전 불필요 (Cell Box가 처리)
+	if (bServerCellCollisionInitialized)
+	{
+		TargetComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		return;
+	}
 	TargetComp->UpdateCollision();
-
-	/*
-	 * deprecated_realdestruction
-	 * UpdateCollision 내부에서 RecreatePhysicsState함수 호출
-	 */
-	 // RecreatePhysicsState();
 }
 
 void URealtimeDestructibleMeshComponent::ApplyCollisionUpdateAsync(UDynamicMeshComponent* TargetComp)
 {
+	// 서버 Cell Collision 활성 시: 원본 메시 콜리전 불필요 (Cell Box가 처리)
+	if (bServerCellCollisionInitialized)
+	{
+		TargetComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		return;
+	}
 	UE_LOG(LogTemp, Display, TEXT("Call Collision Update %f"), FPlatformTime::Seconds());
 	TargetComp->UpdateCollision(true);
 }
@@ -4646,6 +4670,13 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 		DrawActivePhysicsBoxesDebug();
 	}
 
+	// 서버 Cell Box Collision: 지연 초기화 (BeginPlay에서 GridCellLayout이 유효하지 않았던 경우)
+	if (GetOwner() && GetOwner()->HasAuthority() && !bServerCellCollisionInitialized && bEnableServerCellCollision && GridCellLayout.IsValid())
+	{
+		UE_LOG(LogTemp, Display, TEXT("[ServerCellCollision] Deferred init: GridCellLayout now valid, calling BuildServerCellCollision()"));
+		BuildServerCellCollision();
+	}
+
 	// 서버 Cell Box Collision: Dirty 청크 업데이트 (서버에서만)
 	if (GetOwner() && GetOwner()->HasAuthority())
 	{
@@ -4780,28 +4811,18 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 			}
 		}
 
-		// 데디서버: Multicast는 자기 자신에게 실행 안 됨, GridCell 판정만 직접 처리
+		// 데디서버: Multicast는 자기 자신에게 실행 안 됨, BFS로 분리된 셀 찾기
+		// DestructionLogic은 RequestDestruction에서 이미 호출되어 셀이 파괴됨
+		// 여기서는 BFS만 실행하여 분리된 셀을 찾아 Cell Box 업데이트
 		UWorld* World = GetWorld();
 		if (World && World->GetNetMode() == NM_DedicatedServer)
 		{
-			// ===== 로그 추가 ===== 
 			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH START] Ops=%d ##########"), PendingServerBatchOpsCompact.Num());
 
-			UE_LOG(LogTemp, Warning, TEXT("[ServerBatching] DedicatedServer: GridCell processing %d ops"), PendingServerBatchOpsCompact.Num());
-
 			TArray<FDestructionResult> AllResults;
-			AllResults.Reserve(PendingServerBatchOpsCompact.Num()); 
-			for (const FCompactDestructionOp& CompactOp : PendingServerBatchOpsCompact)
-			{
-				FRealtimeDestructionRequest Request = CompactOp.Decompress();
-				FDestructionResult Result = DestructionLogic(Request);
-				AllResults.Add(Result);
-			}
+			DisconnectedCellStateLogic(AllResults, true);
 
-			//DisconnectedCellStateLogic(AllResults);
-
-			// ===== 로그 추가 =====
-			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########")); 
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########"));
 		}
 
 		// 압축된 데이터로 전파
@@ -4844,27 +4865,16 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 			}
 		}
 
-		// 데디서버: Multicast는 자기 자신에게 실행 안 됨, GridCell 판정만 직접 처리
+		// 데디서버: Multicast는 자기 자신에게 실행 안 됨, BFS로 분리된 셀 찾기
 		UWorld* WorldNonCompact = GetWorld();
 		if (WorldNonCompact && WorldNonCompact->GetNetMode() == NM_DedicatedServer)
 		{
-			UE_LOG(LogTemp, Warning, TEXT(""));
-			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH START] Ops=%d (non-compact) ##########"), PendingServerBatchOpsCompact.Num());
-
-			UE_LOG(LogTemp, Warning, TEXT("[ServerBatching] DedicatedServer: GridCell processing %d ops (non-compact)"), PendingServerBatchOps.Num());
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH START] Ops=%d (non-compact) ##########"), PendingServerBatchOps.Num());
 
 			TArray<FDestructionResult> AllResults;
-			AllResults.Reserve(PendingServerBatchOps.Num());
-			for (const FRealtimeDestructionOp& Op : PendingServerBatchOps)
-			{
-				FDestructionResult Result = DestructionLogic(Op.Request);
-				AllResults.Add(Result);	UpdateCellStateFromDestruction(Op.Request);
-			}
-
-			//DisconnectedCellStateLogic(AllResults);
+			DisconnectedCellStateLogic(AllResults, true);
 
 			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########"));
-			UE_LOG(LogTemp, Warning, TEXT("")); 
 		}
 
 		// 비압축 데이터로 전파
@@ -5138,9 +5148,17 @@ int32 URealtimeDestructibleMeshComponent::BuildChunkMeshesFromGeometryCollection
 		//CellComp->SetRelativeTransform(FTransform::Identity);
 
 		// Collision 설정
-		CellComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		CellComp->SetCollisionProfileName(TEXT("BlockAll"));
-		CellComp->SetComplexAsSimpleCollisionEnabled(true);
+		if (bServerCellCollisionInitialized)
+		{
+			// 서버에서 Cell Box가 물리 담당 → 원본 메시 콜리전 비활성화
+			CellComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+		else
+		{
+			CellComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			CellComp->SetCollisionProfileName(TEXT("BlockAll"));
+			CellComp->SetComplexAsSimpleCollisionEnabled(true);
+		}
 
 
 		// Tick 활성화   

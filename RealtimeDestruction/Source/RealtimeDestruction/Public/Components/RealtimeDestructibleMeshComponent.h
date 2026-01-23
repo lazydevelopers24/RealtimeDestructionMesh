@@ -804,7 +804,7 @@ public:
 	 */
 	void UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request);
 	FDestructionResult DestructionLogic(const FRealtimeDestructionRequest& Request);
-	void DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults); 
+	void DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults, bool bForceRun = false);
 	/**
 	 * GridCellId를 ChunkId로 변환
 	 * @param GridCellId - 격자 셀 ID
