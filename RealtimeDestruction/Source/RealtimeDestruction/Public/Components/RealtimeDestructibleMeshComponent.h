@@ -504,31 +504,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced")
 	bool bEnableSubcell = true;
 
-#if WITH_EDITORONLY_DATA
-	UPROPERTY(EditAnywhere, Category = "RealtimeDestructibleMesh|Cell")
-	TArray<TObjectPtr<UStaticMeshComponent>> AnchorPlanes;
-
-	UPROPERTY(EditAnywhere, Category = "RealtimeDestructibleMesh|Cell")
-	TArray<TObjectPtr<UStaticMeshComponent>> EraserPlanes;
-#endif
-
-#if WITH_EDITOR
-	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh|Cell")
-	void AddAnchorPlane();
-
-	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh|Cell")
-	void AddEraserPlane();
-	
-	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh|Cell")
-	void ApplyAnchorPlane();
-
-	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh|Cell")
-	void ClearAnchorPlanes();
-
-	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh|Cell")
-	void ClearAllAnchorCells();
-#endif	
-
 	/**
 	 * SuperCell 기반 Hierarchical BFS 최적화 사용 여부
 	 * true: 2-Level Hierarchical BFS 사용 (대규모 Grid에서 성능 향상)
