@@ -680,10 +680,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 	// ===== 4. Subtract compute =====
 	FDynamicMesh3 ResultMesh;
-	bool bSuccess = false;
-	bool bOverBudget = false;
-	bool bHasDebris = false;
-	double StartFrameTimeMs = FPlatformTime::Seconds();
+	bool bSuccess = false; 
+	bool bHasDebris = false; 
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE("SlotSubtract_Compute");
 
@@ -813,10 +811,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					EGeometryScriptBooleanOperation::Subtract,
 					Ops);
 			}
-		}
-
-		double FrameDurationMs = (FPlatformTime::Seconds() - StartFrameTimeMs) * 1000.0;
-		bOverBudget = (FrameDurationMs > FrameBudgetMs);
+		} 
 	}
 
 	// ===== 5. Apply results (GameThread) =====
@@ -830,8 +825,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          ResultMesh = MoveTemp(ResultMesh),
 			          Context = UnionResult.IslandContext,
 			          Decals = MoveTemp(UnionResult.Decals),
-			          UnionCount = UnionResult.UnionCount,
-			          bOverBudget,
+			          UnionCount = UnionResult.UnionCount, 
 			          bSuccess,
 			          this]() mutable
 		          {
@@ -896,35 +890,34 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          Proc->ChunkGenerations[ChunkIndex]++;
 			          Proc->ChunkHoleCount[ChunkIndex] += UnionCount;
 
-			          if (!bOverBudget)
-			          {
-				          // If queue has work, re-kick.
-				          if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
-				          {
-					          Proc->KickSubtractWorker(SlotIndex);
-				          }
-				          // Next kick.
-				          Proc->KickProcessIfNeededPerChunk();
-			          }
-			          else
-			          {
-				          // Skip kick if over budget
-				          // retry in URealtimeDestructibleMeshComponent::TickComponent
-				          UE_LOG(LogTemp, Display, TEXT("Slot %d yielding"), SlotIndex);
-			          }
+			         
+				    // If queue has work, re-kick.
+				    if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
+				    {
+					    Proc->KickSubtractWorker(SlotIndex);
+				    }
+				    // Next kick.
+				    Proc->KickProcessIfNeededPerChunk();
+			          
+			          //else
+			          //{
+				      //    // Skip kick if over budget
+				      //    // retry in URealtimeDestructibleMeshComponent::TickComponent
+				      //    UE_LOG(LogTemp, Display, TEXT("Slot %d yielding"), SlotIndex);
+			          //}
 		          });
 	}
 	else
 	{
 		// Even on failure, re-kick if queue has work (GameThread).
-		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex, bOverBudget]()
-		{
+		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex]()
+		{ 
 			if (SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
 			{
 				SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
 			}
 
-			if (!bOverBudget && !SlotSubtractQueues[SlotIndex]->IsEmpty())
+			if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
 			{
 				KickSubtractWorker(SlotIndex);
 			}
