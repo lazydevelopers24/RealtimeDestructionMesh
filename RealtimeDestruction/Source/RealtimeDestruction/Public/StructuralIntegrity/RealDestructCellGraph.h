@@ -1,4 +1,11 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Copyright (c) 2026 Lazy Developers <lazydeveloper24@gmail.com>. All rights reserved.
+// This plugin is distributed under the Fab Standard License.
+//
+// This product was independently developed by us while participating in the Epic Project, a developer-support
+// program of the KRAFTON JUNGLE GameTech Lab. All rights, title, and interest in and to the product are exclusively
+// vested in us. Krafton, Inc. was not involved in its development and distribution and disclaims all representations
+// and warranties, express or implied, and assumes no responsibility or liability for any consequences arising from
+// the use of this product.
 
 #pragma once
 #include "CoreMinimal.h"
@@ -16,110 +23,108 @@ using UE::Geometry::FDynamicMesh3;
 using UE::Geometry::FMeshConnectedComponents;
 using UE::Geometry::FIndex3i;
 
-// 절단 평면의 유한 사각형 영역(슬라이스 면)을 표현
+// Represents a finite rectangular area on a cutting plane (slice face).
 struct FChunkDivisionPlaneRect
 {
-	FVector PlaneOrigin = FVector::ZeroVector;     // 평면 위의 기준점 (Plane 방정식의 한 점)
-	FVector PlaneNormal = FVector::UpVector;       // 평면의 법선 (정규화 권장)
-	FVector RectCenter = FVector::ZeroVector;      // 사각형 중심점 (반드시 평면 위)
-	FVector RectAxisU = FVector::ForwardVector;    // 평면 내 U 축 (정규화, PlaneNormal과 직교)
-	FVector RectAxisV = FVector::RightVector;      // 평면 내 V 축 (정규화, PlaneNormal과 직교)
-	FVector2D HalfExtents = FVector2D::ZeroVector; // 사각형 반 크기 (U/V 방향 길이의 절반)
-	int32 ChunkA = INDEX_NONE;                     // 평면 한쪽에 있는 청크 ID
-	int32 ChunkB = INDEX_NONE;                     // 평면 반대쪽에 있는 청크 ID
+	FVector PlaneOrigin = FVector::ZeroVector;     // Reference point on the plane (a point on the plane equation)
+	FVector PlaneNormal = FVector::UpVector;       // Plane normal (should be normalized)
+	FVector RectCenter = FVector::ZeroVector;      // Rectangle center (must lie on the plane)
+	FVector RectAxisU = FVector::ForwardVector;    // U axis on the plane (normalized, orthogonal to PlaneNormal)
+	FVector RectAxisV = FVector::RightVector;      // V axis on the plane (normalized, orthogonal to PlaneNormal)
+	FVector2D HalfExtents = FVector2D::ZeroVector; // Half extents (half of U/V lengths)
+	int32 ChunkA = INDEX_NONE;                     // Chunk ID on one side of the plane
+	int32 ChunkB = INDEX_NONE;                     // Chunk ID on the other side of the plane
 };
 
-// 평면 사각형에 접한 삼각형의 2D 투영 데이터
+// 2D projected data of triangles touching the plane rectangle.
 struct FChunkBoundaryTriangle2D
 {
-	FVector2D P0 = FVector2D::ZeroVector; // 평면 UV 좌표 0
-	FVector2D P1 = FVector2D::ZeroVector; // 평면 UV 좌표 1
-	FVector2D P2 = FVector2D::ZeroVector; // 평면 UV 좌표 2
-	FBox2D Bounds;                        // 삼각형 2D AABB
+	FVector2D P0 = FVector2D::ZeroVector; // Plane UV coordinate 0
+	FVector2D P1 = FVector2D::ZeroVector; // Plane UV coordinate 1
+	FVector2D P2 = FVector2D::ZeroVector; // Plane UV coordinate 2
+	FBox2D Bounds;                        // Triangle 2D AABB
 };
 
-// 그래프 인접 정보: 현재 노드와 연결된 상대 노드
+// Graph adjacency info: neighbor node connected to the current node.
 struct FChunkCellNeighbor
 {
-	int32 ChunkId = INDEX_NONE;            // 연결된 상대 Chunk ID
-	int32 CellId = INDEX_NONE;             // 연결된 상대 Cell ID (상대 Chunk 내부에서 고유)
-	int32 DivisionPlaneIndex = INDEX_NONE; // 연결 기준이 되는 분할 평면 인덱스 (없으면 INDEX_NONE)
+	int32 ChunkId = INDEX_NONE;            // Neighbor chunk ID
+	int32 CellId = INDEX_NONE;             // Neighbor cell ID (unique within the neighbor chunk)
+	int32 DivisionPlaneIndex = INDEX_NONE; // Division plane index used for the connection (INDEX_NONE if none)
 };
 
-// 그래프 노드: Chunk/Cell 단위 정보
+// Graph node: chunk/cell-level information.
 struct FChunkCellNode
 {
-	int32 ChunkId = INDEX_NONE;               // Chunk ID (하나의 UDynamicMeshComponent에 대응)
-	int32 CellId = INDEX_NONE;                // Cell ID (해당 Chunk 내부에서만 고유, FMeshConnectedComponent에 대응)
-	TArray<FChunkCellNeighbor> Neighbors;     // 인접 노드 목록
-	bool bIsAnchor = false;                   // Anchor 여부
+	int32 ChunkId = INDEX_NONE;               // Chunk ID (corresponds to one UDynamicMeshComponent)
+	int32 CellId = INDEX_NONE;                // Cell ID (unique within the chunk, corresponds to FMeshConnectedComponent)
+	TArray<FChunkCellNeighbor> Neighbors;     // Neighbor list
+	bool bIsAnchor = false;                   // Anchor flag
 };
 
-// 한 Chunk 내부의 Cell(ConnectedComponent) 캐시
+// Per-chunk cell (connected component) cache.
 struct FChunkCellCache
 {
 	int32 ChunkId = INDEX_NONE;                 // Chunk ID
-	TArray<int32> CellIds;                      // Cell ID 목록 (배열 인덱스와 1:1)
-	TArray<TArray<int32>> CellTriangles;        // Cell별 삼각형 ID 목록
-	TArray<FBox> CellBounds;                    // Cell별 AABB
-	bool bHasGeometry = false;                  // 해당 Chunk에 유효한 지오메트리가 있는지
-	int32 MeshRevision = 0;                     // 메쉬 갱신 버전 (옵션)
+	TArray<int32> CellIds;                      // Cell ID list (1:1 with array indices)
+	TArray<TArray<int32>> CellTriangles;        // Triangle ID list per cell
+	TArray<FBox> CellBounds;                    // AABB per cell
+	bool bHasGeometry = false;                  // Whether the chunk has valid geometry
+	int32 MeshRevision = 0;                     // Mesh revision (optional)
 };
 
-// Old Cell -> New Cell(s) 매핑 정보
+// Old Cell -> New Cell(s) mapping info.
 struct FCellMapping
 {
-	int32 OldCellId = INDEX_NONE;       // 갱신 전 Cell ID
-	TArray<int32> NewCellIds;           // 갱신 후 Cell ID들 (분할 시 여러 개)
-	bool bDestroyed = false;            // 완전 소멸 여부
+	int32 OldCellId = INDEX_NONE;       // Cell ID before update
+	TArray<int32> NewCellIds;           // Cell IDs after update (multiple if split)
+	bool bDestroyed = false;            // Fully destroyed flag
 };
 
-// Chunk 갱신 결과
+// Chunk update result.
 struct FChunkUpdateResult
 {
-	int32 ChunkId = INDEX_NONE;         // 갱신된 Chunk ID
-	TArray<FCellMapping> Mappings;      // Old -> New Cell 매핑 목록
-	FChunkCellCache OldCache;           // 갱신 전 캐시
-	FChunkCellCache NewCache;           // 갱신 후 캐시
+	int32 ChunkId = INDEX_NONE;         // Updated chunk ID
+	TArray<FCellMapping> Mappings;      // Old -> New cell mapping list
+	FChunkCellCache OldCache;           // Cache before update
+	FChunkCellCache NewCache;           // Cache after update
 };
 
-// <추후 병목 발생시 도입 고려해볼 것들 메모>
-// - (ChunkId, CellId) -> NodeIndex 조회 캐시: 인접/갱신 시 선형 탐색 최소화
-// - Cell 매칭 결과 캐시: 재계산 후 Old/New CellId 매핑 유지
-// - Anchor 노드 목록: BFS 시작점 스캔 비용 절감
-
-
+// <Potential additions if bottlenecks appear>
+// - (ChunkId, CellId) -> NodeIndex lookup cache: minimize linear searches for adjacency/updates
+// - Cell matching cache: preserve Old/New CellId mapping after recompute
+// - Anchor node list: reduce BFS start-point scan cost
 
 /**
- * URealtimeDestructibleMesh가 소유한 메시들의 기하학적 데이터를 그래프로 구조화합니다.
- * 구조화된 그래프는 FStructuralIntegritySystem에 구조적 무결성 분석에 사용됩니다.
+ * Structures geometry data from URealtimeDestructibleMesh-owned meshes into a graph.
+ * The structured graph is used by FStructuralIntegritySystem for structural analysis.
  */
 class REALTIMEDESTRUCTION_API FRealDestructCellGraph
 {
 public:
 	//=========================================================================
-	// 초기화 및 그래프 구축
+	// Initialization and graph construction
 	//=========================================================================
 
 	/**
-	 * 격자 슬라이싱 결과로 분할 평면 리스트 생성.
-	 * Bounds는 로컬 좌표계 AABB를 넣을 것
+	 * Build a division plane list from grid slicing results.
+	 * Bounds should be the local-space AABB.
 	 */
 	void BuildDivisionPlanesFromGrid(
 		const FBox& Bounds, // Source static mesh's AABB
 		const FIntVector& SliceCount,
-		const TArray<int32>& ChunkIdByGridIndex); // Grid cell index 에 대응하는 chunk id
+		const TArray<int32>& ChunkIdByGridIndex); // Chunk id per grid cell index
 
 	/**
-	 * 각 청크의 Connected Component(Cell)를 계산하고,
-	 * 분할 평면을 기준으로 청크 간 Cell 연결을 판정하여 그래프를 구성.
-	 * - BuildDivisionPlanesFromGrid()가 먼저 호출되어야 함
-	 * - ChunkMeshes 배열 크기는 DivisionPlanes에 참조된 ChunkId 범위를 포함해야 함
+	 * Compute connected components (cells) for each chunk and build the graph by
+	 * determining inter-chunk cell connectivity using division planes.
+	 * - BuildDivisionPlanesFromGrid() must be called first
+	 * - ChunkMeshes size must cover the ChunkId range referenced by DivisionPlanes
 	 *
-	 * @param ChunkMeshes - 청크별 메시 포인터 배열 (인덱스 = ChunkId)
-	 * @param PlaneTolerance - 평면 거리 허용 오차 (단위: cm)
-	 * @param RectTolerance - 사각형 영역 확장 허용 오차 (단위: cm)
-	 * @param FloorHeightThreshold - 바닥 Anchor 감지 Z 높이 임계값 (단위: cm, Bounds.Min.Z 기준 상대값)
+	 * @param ChunkMeshes - mesh pointer array per chunk (index = ChunkId)
+	 * @param PlaneTolerance - plane distance tolerance (cm)
+	 * @param RectTolerance - rectangle expansion tolerance (cm)
+	 * @param FloorHeightThreshold - floor anchor Z threshold (cm, relative to Bounds.Min.Z)
 	 */
 	void BuildGraph(
 		const TArray<FDynamicMesh3*>& ChunkMeshes,
@@ -127,44 +132,44 @@ public:
 		float RectTolerance = 0.1f,
 		float FloorHeightThreshold = 10.0f);
 
-	/** CellGraph의 노드 구조를 IntegritySystem이 사용할 수 있는 1차원 인접 리스트 형태로 변환 */
+	/** Convert graph nodes to a flat adjacency list usable by IntegritySystem. */
 	FStructuralIntegrityInitData BuildInitDataFromGraph() const;
 
 	/**
-	 * 현재 그래프 상태를 스냅샷으로 생성 (신규 SyncGraph API용)
-	 * - 노드는 (ChunkId, CellId) 기준 정렬
-	 * - Anchor 노드 목록 포함
+	 * Create a snapshot of the current graph state (for the new SyncGraph API).
+	 * - Nodes are sorted by (ChunkId, CellId)
+	 * - Includes the anchor node list
 	 */
 	FStructuralIntegrityGraphSnapshot BuildGraphSnapshot() const;
 
-	/** 그래프 초기화 상태 확인 */
+	/** Check whether the graph is initialized. */
 	bool IsGraphBuilt() const { return Nodes.Num() > 0; }
 
-	/** 그래프 리셋 */
+	/** Reset the graph. */
 	void Reset();
 
 	//=========================================================================
-	// 런타임 그래프 갱신
+	// Runtime graph updates
 	//=========================================================================
 
 	/**
-	 * 수정된 청크들의 Cell을 재계산하고 Old-New 매핑 생성
+	 * Recompute cells for modified chunks and build Old->New mappings.
 	 *
-	 * @param ModifiedChunkIds - 수정된 청크 ID 집합
-	 * @param ChunkMeshes - 청크별 메시 포인터 배열 (인덱스 = ChunkId)
-	 * @return 청크별 갱신 결과 (Old->New Cell 매핑 포함)
+	 * @param ModifiedChunkIds - set of modified chunk IDs
+	 * @param ChunkMeshes - mesh pointer array per chunk (index = ChunkId)
+	 * @return Update results per chunk (includes Old->New cell mapping)
 	 */
 	TArray<FChunkUpdateResult> UpdateModifiedChunks(
 		const TSet<int32>& ModifiedChunkIds,
 		const TArray<FDynamicMesh3*>& ChunkMeshes);
 
 	/**
-	 * 갱신된 청크들과 관련된 Division Plane의 연결을 재검사
+	 * Recheck connections on division planes related to updated chunks.
 	 *
-	 * @param UpdateResults - UpdateModifiedChunks()의 결과
-	 * @param ChunkMeshes - 청크별 메시 포인터 배열
-	 * @param PlaneTolerance - 평면 거리 허용 오차 (단위: cm)
-	 * @param RectTolerance - 사각형 영역 확장 허용 오차 (단위: cm)
+	 * @param UpdateResults - results from UpdateModifiedChunks()
+	 * @param ChunkMeshes - mesh pointer array per chunk
+	 * @param PlaneTolerance - plane distance tolerance (cm)
+	 * @param RectTolerance - rectangle expansion tolerance (cm)
 	 */
 	void RebuildConnectionsForChunks(
 		const TArray<FChunkUpdateResult>& UpdateResults,
@@ -173,32 +178,32 @@ public:
 		float RectTolerance = 0.1f);
 
 	//=========================================================================
-	// 경계 삼각형 및 연결 검사 (정적 유틸리티)
+	// Boundary triangle and connectivity checks (static utilities)
 	//=========================================================================
 	
 	/**
-	 * 특정 분할 평면의 사각 영역에 접하는 경계 삼각형이 존재하는지 검사
+	 * Check if there are boundary triangles touching the rectangle area of a division plane.
 	 *
-     * 주어진 메시의 삼각형들 중에서 분할 평면에 접하는 삼각형들을 찾고,
-	 * 해당 삼각형들을 평면의 로컬 좌표계(U/V 축)로 투영하여 반환한다.
-	 * (반환된 삼각형들은 반대쪽 청크의 삼각형과 실제로 맞닿는지 판정하는 데에 활용)
+     * Finds triangles in the mesh that touch the division plane, projects them into the
+	 * plane-local U/V space, and returns the projections.
+	 * (Returned triangles are used to test actual contact with triangles on the opposite chunk.)
 	 *
-	 * 판정 기준:
- 	 * 1. 삼각형의 세 정점 모두 평면으로부터 PlaneTolerance 이내에 위치
-	 * 2. 투영된 삼각형이 사각형 영역(HalfExtents)과 RectTolerance 이내로 교차
+	 * Criteria:
+ 	 * 1. All three triangle vertices are within PlaneTolerance of the plane
+	 * 2. The projected triangle intersects the rectangle area (HalfExtents) within RectTolerance
 	 *
-	 * 사용 시나리오:
-	 * - Boolean 연산 후 두 청크 사이의 연결 상태 확인
-	 * - 경계 삼각형이 없으면 해당 방향으로의 연결이 끊어진 것으로 판정
+	 * Usage:
+	 * - Verify connectivity between two chunks after boolean operations
+	 * - If no boundary triangles exist, connectivity in that direction is considered broken
 	 *
-	 * @param Mesh - 검사할 메시 (청크의 FDynamicMesh3)
-	 * @param TriangleIds - 검사 대상 삼각형 ID 목록 (해당 Cell의 삼각형들)
-	 * @param Plane - 분할 평면 정보 (평면 방정식 + 사각형 영역)
-	 * @param PlaneTolerance - 평면 거리 허용 오차 (단위: cm). 정점이 이 거리 이내면 평면 위로 판정
-	 * @param RectTolerance - 사각형 영역 확장 허용 오차 (단위: cm). 영역 경계를 이만큼 확장하여 판정
-	 * @param OutTriangles - [출력] 평면에 접한 삼각형들의 2D 투영 데이터
-	 * @param OutBounds - [출력] OutTriangles 전체를 감싸는 2D AABB
-	 * @return 경계 삼각형이 하나 이상 존재하면 true
+	 * @param Mesh - mesh to test (chunk's FDynamicMesh3)
+	 * @param TriangleIds - triangle IDs to test (triangles in the cell)
+	 * @param Plane - division plane info (plane equation + rectangle area)
+	 * @param PlaneTolerance - plane distance tolerance (cm). Vertex within this distance counts as on-plane
+	 * @param RectTolerance - rectangle expansion tolerance (cm). Rect boundary is expanded by this amount
+	 * @param OutTriangles - [out] 2D projection data of triangles touching the plane
+	 * @param OutBounds - [out] 2D AABB enclosing all OutTriangles
+	 * @return True if at least one boundary triangle exists
 	 */
 	static bool HasBoundaryTrianglesOnPlane(
 		const FDynamicMesh3& Mesh,
@@ -210,28 +215,28 @@ public:
 		FBox2D& OutBounds);
 
 	/**
-	 * 두 노드(청크/셀)가 동일 분할 평면 기준으로 여전히 연결되어 있는지 검사
+	 * Check whether two nodes (chunk/cell) are still connected by the same division plane.
 	 *
-	 * 양쪽 메시 모두에서 분할 평면에 접하는 경계 삼각형을 찾고,
-	 * 해당 삼각형들의 2D 투영이 서로 겹치는지 확인하여 연결 여부를 판정한다.
+	 * Finds boundary triangles touching the division plane in both meshes and tests whether
+	 * their 2D projections overlap to determine connectivity.
 	 *
-	 * 연결 판정 조건:
-	 * 1. MeshA에 평면에 접하는 경계 삼각형이 존재
-	 * 2. MeshB에 평면에 접하는 경계 삼각형이 존재
-	 * 3. 양쪽 경계 삼각형의 2D 투영 영역이 서로 교차
+	 * Connectivity criteria:
+	 * 1. MeshA has boundary triangles touching the plane
+	 * 2. MeshB has boundary triangles touching the plane
+	 * 3. The 2D projection areas overlap
 	 *
-	 * 사용 시나리오:
-	 * - Boolean 연산 후 인접했던 두 청크의 연결 상태 재검사
-	 * - false 반환 시 FStructuralIntegritySystem에 연결 끊김을 통보
+	 * Usage:
+	 * - Recheck connectivity between two previously adjacent chunks after boolean operations
+	 * - If false, notify FStructuralIntegritySystem of disconnection
 	 *
-	 * @param MeshA - 첫 번째 청크의 메시
-	 * @param TriangleIdsA - MeshA에서 검사할 삼각형 ID 목록 (해당 Cell의 삼각형들)
-	 * @param MeshB - 두 번째 청크의 메시
-	 * @param TriangleIdsB - MeshB에서 검사할 삼각형 ID 목록 (해당 Cell의 삼각형들)
-	 * @param Plane - 두 청크를 분리하는 분할 평면 정보
-	 * @param PlaneTolerance - 평면 거리 허용 오차 (단위: cm)
-	 * @param RectTolerance - 사각형 영역 확장 허용 오차 (단위: cm)
-	 * @return 두 노드가 해당 평면에서 연결되어 있으면 true, 끊어졌으면 false
+	 * @param MeshA - first chunk mesh
+	 * @param TriangleIdsA - triangle IDs in MeshA (cell triangles)
+	 * @param MeshB - second chunk mesh
+	 * @param TriangleIdsB - triangle IDs in MeshB (cell triangles)
+	 * @param Plane - division plane separating the two chunks
+	 * @param PlaneTolerance - plane distance tolerance (cm)
+	 * @param RectTolerance - rectangle expansion tolerance (cm)
+	 * @return True if the nodes are connected on this plane, false if disconnected
 	 */
 	static bool AreNodesConnectedByPlane(
 		const FDynamicMesh3& MeshA,
@@ -246,39 +251,39 @@ public:
 	// Getters
 	//=========================================================================
 
-	/** 노드 개수 반환 */
+	/** Get node count. */
 	int32 GetNodeCount() const { return Nodes.Num(); }
 
-	/** 청크 개수 반환 */
+	/** Get chunk count. */
 	int32 GetChunkCount() const { return ChunkCellCaches.Num(); }
 
-	/** 특정 노드 조회 (읽기 전용) */
+	/** Get a node (read-only). */
 	const FChunkCellNode* GetNode(int32 NodeIndex) const;
 
-	/** (ChunkId, CellId)로 노드 인덱스 조회 */
+	/** Find node index by (ChunkId, CellId). */
 	int32 FindNodeIndex(int32 ChunkId, int32 CellId) const;
 
-	/** 특정 청크의 Cell 캐시 조회 */
+	/** Get cell cache for a chunk. */
 	const FChunkCellCache* GetChunkCellCache(int32 ChunkId) const;
 
 private:
 	//=========================================================================
-	// 내부 헬퍼 함수
+	// Internal helpers
 	//=========================================================================
 
 	/**
-	 * 단일 청크의 Connected Component(Cell) 계산
-	 * @param Mesh - 분석할 메시
-	 * @param ChunkId - 청크 ID
-	 * @param OutCache - 결과를 저장할 캐시
+	 * Build connected components (cells) for a single chunk.
+	 * @param Mesh - mesh to analyze
+	 * @param ChunkId - chunk ID
+	 * @param OutCache - output cache
 	 */
 	void BuildChunkCellCache(const FDynamicMesh3& Mesh, int32 ChunkId, FChunkCellCache& OutCache);
 
 	/**
-	 * 분할 평면 기준 청크 간 Cell 연결 검사 및 노드 생성
-	 * @param ChunkMeshes - 청크 메시 배열
-	 * @param PlaneTolerance - 평면 거리 허용 오차
-	 * @param RectTolerance - 사각형 영역 확장 허용 오차
+	 * Check inter-chunk cell connectivity by division planes and build nodes.
+	 * @param ChunkMeshes - chunk mesh array
+	 * @param PlaneTolerance - plane distance tolerance
+	 * @param RectTolerance - rectangle expansion tolerance
 	 */
 	void BuildNodesAndConnections(
 		const TArray<FDynamicMesh3*>& ChunkMeshes,
@@ -286,12 +291,12 @@ private:
 		float RectTolerance);
 
 	/**
-	 * Cell의 바닥 Anchor 여부 판정
-	 * @param Cache - Cell이 속한 청크의 캐시
-	 * @param CellId - Cell ID
-	 * @param Mesh - 청크 메시
-	 * @param FloorHeightThreshold - 바닥 높이 임계값
-	 * @return 바닥에 접하면 true
+	 * Check whether a cell is anchored to the floor.
+	 * @param Cache - cache for the chunk containing the cell
+	 * @param CellId - cell ID
+	 * @param Mesh - chunk mesh
+	 * @param FloorHeightThreshold - floor height threshold
+	 * @return True if the cell touches the floor
 	 */
 	bool IsCellOnFloor(
 		const FChunkCellCache& Cache,
@@ -300,18 +305,18 @@ private:
 		float FloorHeightThreshold) const;
 
 	/**
-	 * AABB 중첩 기반 Old -> New Cell 매핑 생성
-	 * @param OldCache - 갱신 전 캐시
-	 * @param NewCache - 갱신 후 캐시
-	 * @return Cell 매핑 배열
+	 * Build Old -> New cell mappings based on AABB overlap.
+	 * @param OldCache - cache before update
+	 * @param NewCache - cache after update
+	 * @return Cell mapping array
 	 */
 	TArray<FCellMapping> BuildCellMappings(
 		const FChunkCellCache& OldCache,
 		const FChunkCellCache& NewCache);
 
 	/**
-	 * 특정 Division Plane에 대한 연결 재구축
-	 * 해당 평면과 관련된 기존 연결을 제거하고 새로 검사
+	 * Rebuild connections for a specific division plane.
+	 * Removes existing connections for that plane and rechecks them.
 	 */
 	void RebuildConnectionsOnPlane(
 		int32 PlaneIndex,
@@ -320,21 +325,21 @@ private:
 		float RectTolerance);
 
 	/**
-	 * 특정 청크의 모든 노드 제거
+	 * Remove all nodes for a chunk.
 	 */
 	void RemoveNodesForChunk(int32 ChunkId);
 
 	/**
-	 * 청크의 새 Cell들에 대한 노드 추가
+	 * Add nodes for new cells in a chunk.
 	 */
 	void AddNodesForChunk(int32 ChunkId, const FChunkCellCache& NewCache);
 
 	//=========================================================================
-	// 데이터
+	// Data
 	//=========================================================================
 
-	TArray<FChunkCellNode> Nodes;                   // 그래프 노드 (모든 Cell)
-	TArray<FChunkDivisionPlaneRect> DivisionPlanes; // 청크 분할 평면
-	TArray<FChunkCellCache> ChunkCellCaches;        // 청크별 Cell 캐시
-	FBox MeshBounds;                                // 전체 메시 바운딩 박스 (Anchor 판정용)
+	TArray<FChunkCellNode> Nodes;                   // Graph nodes (all cells)
+	TArray<FChunkDivisionPlaneRect> DivisionPlanes; // Chunk division planes
+	TArray<FChunkCellCache> ChunkCellCaches;        // Per-chunk cell caches
+	FBox MeshBounds;                                // Whole mesh bounds (for anchor tests)
 };

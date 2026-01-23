@@ -1,4 +1,11 @@
-// Copyright 2025. All Rights Reserved.
+// Copyright (c) 2026 Lazy Developers <lazydeveloper24@gmail.com>. All rights reserved.
+// This plugin is distributed under the Fab Standard License.
+//
+// This product was independently developed by us while participating in the Epic Project, a developer-support
+// program of the KRAFTON JUNGLE GameTech Lab. All rights, title, and interest in and to the product are exclusively
+// vested in us. Krafton, Inc. was not involved in its development and distribution and disclaims all representations
+// and warranties, express or implied, and assumes no responsibility or liability for any consequences arising from
+// the use of this product.
 
 #pragma once
 
@@ -15,21 +22,21 @@ struct FKSphylElem;
 namespace UE { namespace Geometry { class FDynamicMesh3; } }
 
 /**
- * 격자 셀 빌더 (에디터 유틸리티)
- * StaticMesh 또는 DynamicMesh로부터 격자 셀 레이아웃을 생성
+ * Grid cell builder (editor utility).
+ * Builds a grid cell layout from a StaticMesh or DynamicMesh.
  */
 class REALTIMEDESTRUCTION_API FGridCellBuilder
 {
 public:
 	/**
-	 * 스태틱 메시에서 격자 셀 레이아웃 생성
+	 * Build a grid cell layout from a static mesh.
 	 *
-	 * @param SourceMesh - 소스 메시
-	 * @param MeshScale - 메시 스케일 (컴포넌트 스케일)
-	 * @param CellSize - 셀 크기 (cm, 월드 스페이스)
-	 * @param AnchorHeightThreshold - 앵커 판정 높이 임계값 (cm)
-	 * @param OutLayout - 출력 레이아웃
-	 * @return 성공 여부
+	 * @param SourceMesh - source mesh
+	 * @param MeshScale - mesh scale (component scale)
+	 * @param CellSize - cell size (cm, world space)
+	 * @param AnchorHeightThreshold - anchor height threshold (cm)
+	 * @param OutLayout - output layout
+	 * @return Whether the build succeeded
 	 */
 	static bool BuildFromStaticMesh(
 		const UStaticMesh* SourceMesh,
@@ -39,13 +46,13 @@ public:
 		FGridCellLayout& OutLayout);
 
 	/**
-	 * 다이나믹 메시에서 격자 셀 레이아웃 생성
+	 * Build a grid cell layout from a dynamic mesh.
 	 *
-	 * @param Mesh - 소스 다이나믹 메시
-	 * @param CellSize - 셀 크기 (cm)
-	 * @param AnchorHeightThreshold - 앵커 판정 높이 임계값 (cm)
-	 * @param OutLayout - 출력 레이아웃
-	 * @return 성공 여부
+	 * @param Mesh - source dynamic mesh
+	 * @param CellSize - cell size (cm)
+	 * @param AnchorHeightThreshold - anchor height threshold (cm)
+	 * @param OutLayout - output layout
+	 * @return Whether the build succeeded
 	 */
 	static bool BuildFromDynamicMesh(
 		const UE::Geometry::FDynamicMesh3& Mesh,
@@ -77,7 +84,7 @@ public:
 
 private:
 	/**
-	 * 바운딩 박스로부터 격자 크기 계산
+	 * Calculate grid dimensions from a bounding box.
 	 */
 	static void CalculateGridDimensions(
 		const FBox& Bounds,
@@ -85,46 +92,46 @@ private:
 		FGridCellLayout& OutLayout);
 
 	/**
-	 * 삼각형을 셀에 할당
+	 * Assign triangles to cells.
 	 */
 	static void AssignTrianglesToCells(
 		const UE::Geometry::FDynamicMesh3& Mesh,
 		FGridCellLayout& OutLayout);
 
 	/**
-	 * 인접 관계 계산 (6방향)
+	 * Calculate adjacency (6 directions).
 	 */
 	static void CalculateNeighbors(FGridCellLayout& OutLayout);
 
 	/**
-	 * 앵커 셀 판정
+	 * Determine anchor cells.
 	 */
 	static void DetermineAnchors(
 		FGridCellLayout& OutLayout,
 		float HeightThreshold);
 	
 	/**
-	 * 메시 복셀화 (내부 셀 채우기) - DynamicMesh 버전
+	 * Voxelize mesh (fill interior cells) - DynamicMesh version.
 	 */
 	static void VoxelizeMesh(
 		const UE::Geometry::FDynamicMesh3& Mesh,
 		FGridCellLayout& OutLayout);
 
 	/**
-	 * 모든 Collision 타입 기반 복셀화 (Convex, Box, Sphere, Capsule)
+	 * Voxelize using all collision types (Convex, Box, Sphere, Capsule).
 	 */
 	static void VoxelizeWithCollision(
 		const UBodySetup* BodySetup,
 		FGridCellLayout& OutLayout);
 
 	/**
-	 * Convex Collision 기반 복셀화 (호환성용)
+	 * Voxelize using convex collision (compatibility).
 	 */
 	static void VoxelizeWithConvex(
 		const UBodySetup* BodySetup,
 		FGridCellLayout& OutLayout);
 
-	/** StaticMesh의 실제 삼각형 기반 복셀화 */
+	/** Voxelize using StaticMesh render triangles. */
 	static void VoxelizeWithTriangles(
 		const UStaticMesh* SourceMesh,
 		FGridCellLayout& OutLayout);
@@ -137,28 +144,28 @@ private:
 	static void FillInsideVoxels(FGridCellLayout& OutLayout);
 
 	/**
-	 * 점이 Convex Hull 내부에 있는지 판단
+	 * Check whether a point is inside a convex hull.
 	 */
 	static bool IsPointInsideConvex(
 		const FKConvexElem& ConvexElem,
 		const FVector& Point);
 
 	/**
-	 * 점이 Box 내부에 있는지 판단
+	 * Check whether a point is inside a box.
 	 */
 	static bool IsPointInsideBox(
 		const FKBoxElem& BoxElem,
 		const FVector& Point);
 
 	/**
-	 * 점이 Sphere 내부에 있는지 판단
+	 * Check whether a point is inside a sphere.
 	 */
 	static bool IsPointInsideSphere(
 		const FKSphereElem& SphereElem,
 		const FVector& Point);
 
 	/**
-	 * 점이 Capsule 내부에 있는지 판단
+	 * Check whether a point is inside a capsule.
 	 */
 	static bool IsPointInsideCapsule(
 		const FKSphylElem& CapsuleElem,

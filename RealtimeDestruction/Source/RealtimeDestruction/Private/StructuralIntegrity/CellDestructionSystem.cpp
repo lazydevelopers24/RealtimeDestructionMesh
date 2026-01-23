@@ -3,10 +3,10 @@
 #include "StructuralIntegrity/CellDestructionSystem.h"
 #include "StructuralIntegrity/SubCellProcessor.h" 
 //=============================================================================
-// FCellDestructionSystem - SubCell Level API
+// FCellDestructionSystem - SubCell level API
 //=============================================================================
 
-FDestructionResult FCellDestructionSystem::ProcessCellDestructionWithSubCells(
+FDestructionResult FCellDestructionSystem::ProcessCellDestructionSubCellLevel(
 	const FGridCellLayout& GridLayout,
 	const FQuantizedDestructionInput& Shape,
 	const FTransform& MeshTransform,
@@ -19,7 +19,7 @@ FDestructionResult FCellDestructionSystem::ProcessCellDestructionWithSubCells(
 		return Result;
 	}
 
-	// 1. SubCellProcessor를 통한 SubCell 파괴 처리
+	// 1. SubCell destruction via SubCellProcessor
 	TArray<int32> AffectedCells;
 	TMap<int32, TArray<int32>> NewlyDeadSubCells;
 
@@ -32,10 +32,10 @@ FDestructionResult FCellDestructionSystem::ProcessCellDestructionWithSubCells(
 		&NewlyDeadSubCells
 	);
 
-	// 2. 결과 정리
+	// 2. Collect results
 	Result.AffectedCells = MoveTemp(AffectedCells);
 
-	// NewlyDeadSubCells (TMap<int32, TArray<int32>>) → FDestructionResult.NewlyDeadSubCells (TMap<int32, FIntArray>)
+	// NewlyDeadSubCells (TMap<int32, TArray<int32>>) -> FDestructionResult.NewlyDeadSubCells (TMap<int32, FIntArray>)
 	for (auto& Pair : NewlyDeadSubCells)
 	{
 		FIntArray SubCellArray;
@@ -44,7 +44,7 @@ FDestructionResult FCellDestructionSystem::ProcessCellDestructionWithSubCells(
 		Result.NewlyDeadSubCells.Add(Pair.Key, MoveTemp(SubCellArray));
 	}
 
-	// 3. 완전히 파괴된 Cell 수집 (SubCellProcessor 내부에서 이미 DestroyedCells에 추가됨)
+	// 3. Collect fully destroyed cells (already added to DestroyedCells in SubCellProcessor)
 	for (int32 CellId : Result.AffectedCells)
 	{
 		if (InOutCellState.DestroyedCells.Contains(CellId))
@@ -57,10 +57,10 @@ FDestructionResult FCellDestructionSystem::ProcessCellDestructionWithSubCells(
 }
 
 //=============================================================================
-// FCellDestructionSystem - 셀 파괴 판정 (기존 Cell Level API)
+// FCellDestructionSystem - Cell destruction evaluation (legacy cell-level API)
 //=============================================================================
 
-TArray<int32> FCellDestructionSystem::CalculateDestroyedCells(
+TArray<int32> FCellDestructionSystem::ProcessCellDestruction(
 	const FGridCellLayout& GridLayout,
 	const FQuantizedDestructionInput& Shape,
 	const FTransform& MeshTransform,
@@ -70,7 +70,7 @@ TArray<int32> FCellDestructionSystem::CalculateDestroyedCells(
 
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); CellId++)
 	{
-		// 이미 파괴되었거나 존재하지 않는 셀은 스킵
+		// Skip already destroyed or non-existent cells
 		if (!GridLayout.GetCellExists(CellId) || DestroyedCells.Contains(CellId))
 		{
 			continue;
@@ -85,14 +85,14 @@ TArray<int32> FCellDestructionSystem::CalculateDestroyedCells(
 	return NewlyDestroyed;
 }
 
-FDestructionResult FCellDestructionSystem::CalculateDestroyedCells(
+FDestructionResult FCellDestructionSystem::ProcessCellDestruction(
 	const FGridCellLayout& GridLayout,
 	const FQuantizedDestructionInput& Shape,
 	const FTransform& MeshTransform,
 	FCellState& InOutCellState)
 {
 	FDestructionResult Result;
-	Result.NewlyDestroyedCells = CalculateDestroyedCells(GridLayout, Shape, MeshTransform, InOutCellState.DestroyedCells);
+	Result.NewlyDestroyedCells = ProcessCellDestruction(GridLayout, Shape, MeshTransform, InOutCellState.DestroyedCells);
 	InOutCellState.DestroyCells(Result.NewlyDestroyedCells);
 	return Result;
 }
@@ -103,14 +103,14 @@ bool FCellDestructionSystem::IsCellDestroyed(
 	const FQuantizedDestructionInput& Shape,
 	const FTransform& MeshTransform)
 {
-	// Phase 1: 중심점 검사 (빠른 판정)
+	// Phase 1: center-point test (fast)
 	const FVector WorldCenter = GridLayout.IdToWorldCenter(CellId, MeshTransform);
 	if (Shape.ContainsPoint(WorldCenter))
 	{
 		return true;
 	}
 
-	// Phase 2: 꼭지점 과반수 검사 (경계 케이스)
+	// Phase 2: majority-of-vertices test (edge cases)
 	const TArray<FVector> LocalVertices = GridLayout.GetCellVertices(CellId);
 	int32 DestroyedVertices = 0;
 
@@ -119,7 +119,7 @@ bool FCellDestructionSystem::IsCellDestroyed(
 		const FVector WorldVertex = MeshTransform.TransformPosition(LocalVertex);
 		if (Shape.ContainsPoint(WorldVertex))
 		{
-			// 과반수 (4개) 도달 시 즉시 반환
+			// Return immediately when majority (4) is reached
 			if (++DestroyedVertices >= 4)
 			{
 				return true;
@@ -131,7 +131,7 @@ bool FCellDestructionSystem::IsCellDestroyed(
 }
 
 //=============================================================================
-// FCellDestructionSystem - 구조적 무결성 검사
+// FCellDestructionSystem - Structural integrity checks
 //=============================================================================
 
 TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
@@ -166,7 +166,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsCellLevel(
 	TSet<int32> Connected;
 	TQueue<int32> Queue;
 
-	// 1. 앵커에서 BFS 시작
+	// 1. Start BFS from anchors
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); CellId++)
 	{
 		if (GridLayout.GetCellExists(CellId) &&
@@ -178,7 +178,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsCellLevel(
 		}
 	}
 
-	// 2. BFS 탐색
+	// 2. BFS traversal
 	while (!Queue.IsEmpty())
 	{
 		int32 Current;
@@ -195,7 +195,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsCellLevel(
 		}
 	}
 
-	// 3. 연결되지 않은 셀 = 분리됨
+	// 3. Unconnected cells are detached
 	TSet<int32> Disconnected;
 	int32 ValidCellCount = 0;
 	int32 AnchorCount = 0;
@@ -229,7 +229,7 @@ TArray<TArray<int32>> FCellDestructionSystem::GroupDetachedCells(
 	TSet<int32> Visited;
 
 	//=========================================================================
-	// Phase 1: BFS로 Disconnected Cell 그룹화
+	// Phase 1: Group disconnected cells via BFS
 	//=========================================================================
 	for (int32 StartCell : DisconnectedCells)
 	{
@@ -238,7 +238,7 @@ TArray<TArray<int32>> FCellDestructionSystem::GroupDetachedCells(
 			continue;
 		}
 
-		// BFS로 연결된 분리 셀 그룹 찾기
+		// Find a connected detached cell group via BFS
 		TArray<int32> Group;
 		TQueue<int32> Queue;
 
@@ -269,7 +269,7 @@ TArray<TArray<int32>> FCellDestructionSystem::GroupDetachedCells(
 }
 
 //=============================================================================
-// FCellDestructionSystem - 유틸리티
+// FCellDestructionSystem - Utilities
 //=============================================================================
 
 FVector FCellDestructionSystem::CalculateGroupCenter(
@@ -301,7 +301,7 @@ FVector FCellDestructionSystem::CalculateDebrisVelocity(
 		return FVector::ZeroVector;
 	}
 
-	// 가장 가까운 파괴 입력 찾기
+	// Find the closest destruction input
 	float MinDistSq = MAX_FLT;
 	FVector ClosestCenter = FVector::ZeroVector;
 
@@ -317,7 +317,7 @@ FVector FCellDestructionSystem::CalculateDebrisVelocity(
 		}
 	}
 
-	// 폭발 방향으로 속도
+	// Velocity in the explosion direction
 	const FVector Direction = (DebrisCenter - ClosestCenter).GetSafeNormal();
 	return Direction * BaseSpeed;
 }
@@ -331,7 +331,7 @@ bool FCellDestructionSystem::IsBoundaryCell(
 	{
 		if (DestroyedCells.Contains(Neighbor))
 		{
-			return true;  // 파괴된 셀과 인접 = 경계
+			return true;  // Adjacent to a destroyed cell = boundary
 		}
 	}
 	return false;
@@ -352,7 +352,7 @@ FDestructionBatchProcessor::FDestructionBatchProcessor()
 
 void FDestructionBatchProcessor::QueueDestruction(const FCellDestructionShape& Shape)
 {
-	// 양자화하여 저장
+	// Store quantized
 	PendingDestructions.Add(FQuantizedDestructionInput::FromDestructionShape(Shape));
 }
 
@@ -398,18 +398,18 @@ void FDestructionBatchProcessor::ProcessBatch()
 		return;
 	}
 
-	// 결과 초기화
+	// Initialize results
 	LastBatchResult = FBatchedDestructionEvent();
 	LastBatchResult.DestructionInputs = PendingDestructions;
 
 	//=====================================================
-	// Phase 1: 모든 파괴 입력으로 셀 판정
+	// Phase 1: Evaluate cells for all destruction inputs
 	//=====================================================
 	TSet<int32> NewlyDestroyed;
 
 	for (const auto& Input : PendingDestructions)
 	{
-		TArray<int32> Cells = FCellDestructionSystem::CalculateDestroyedCells(
+		TArray<int32> Cells = FCellDestructionSystem::ProcessCellDestruction(
 			*LayoutPtr, Input, MeshTransform, CellStatePtr->DestroyedCells);
 
 		for (int32 CellId : Cells)
@@ -425,7 +425,7 @@ void FDestructionBatchProcessor::ProcessBatch()
 	}
 
 	//=====================================================
-	// Phase 2: 셀 상태 업데이트
+	// Phase 2: Update cell state
 	//=====================================================
 	for (int32 CellId : NewlyDestroyed)
 	{
@@ -433,7 +433,7 @@ void FDestructionBatchProcessor::ProcessBatch()
 	}
 
 	//=====================================================
-	// Phase 3: BFS 1회만 실행 (배칭의 핵심)
+	// Phase 3: Run BFS once (core of batching)
 	//=====================================================
 	TSet<int32> Disconnected = FCellDestructionSystem::FindDisconnectedCellsCellLevel(
 		*LayoutPtr, CellStatePtr->DestroyedCells);
@@ -442,7 +442,7 @@ void FDestructionBatchProcessor::ProcessBatch()
 		*LayoutPtr, Disconnected, CellStatePtr->DestroyedCells);
 
 	//=====================================================
-	// Phase 4: 분리된 셀들도 파괴 처리
+	// Phase 4: Destroy detached cells as well
 	//=====================================================
 	for (const auto& Group : DetachedGroups)
 	{
@@ -453,14 +453,14 @@ void FDestructionBatchProcessor::ProcessBatch()
 	}
 
 	//=====================================================
-	// Phase 5: 이벤트 생성
+	// Phase 5: Create events
 	//=====================================================
 	for (int32 CellId : NewlyDestroyed)
 	{
 		LastBatchResult.DestroyedCellIds.Add((int16)CellId);
 	}
 
-	// 파편 정보 생성
+	// Create debris info
 	for (const auto& Group : DetachedGroups)
 	{
 		FDetachedDebrisInfo DebrisInfo;
@@ -481,7 +481,7 @@ void FDestructionBatchProcessor::ProcessBatch()
 		LastBatchResult.DetachedDebris.Add(DebrisInfo);
 	}
 
-	// 큐 초기화
+	// Clear queue
 	PendingDestructions.Empty();
 
 	UE_LOG(LogTemp, Log, TEXT("FDestructionBatchProcessor: Processed %d destroyed cells, %d debris groups"),
@@ -489,57 +489,57 @@ void FDestructionBatchProcessor::ProcessBatch()
 }
 
 //=============================================================================
-// FCellDestructionSystem - SubCell 레벨 연결성 검사 (2x2x2 최적화)
+// FCellDestructionSystem - Subcell-level connectivity check (2x2x2 optimization)
 //=============================================================================
 
 namespace SubCellBFSHelper
 {
 	/**
-	 * 경계면 SubCell 쌍 테이블 (2x2x2 전용)
-	 * 각 방향별로 (현재 Cell SubCell, 이웃 Cell SubCell) 쌍 4개
+	 * Boundary subcell pair table (2x2x2 only).
+	 * Four pairs per direction: (current cell subcell, neighbor cell subcell).
 	 *
-	 * SubCell 배치:
+	 * SubCell layout:
 	 *   Z=0: 0(0,0,0), 1(1,0,0), 2(0,1,0), 3(1,1,0)
 	 *   Z=1: 4(0,0,1), 5(1,0,1), 6(0,1,1), 7(1,1,1)
 	 */
 	struct FBoundarySubCellPair
 	{
-		int32 Current;   // 현재 Cell의 경계 SubCell
-		int32 Neighbor;  // 이웃 Cell의 대응 SubCell
+		int32 Current;   // Boundary subcell in the current cell
+		int32 Neighbor;  // Corresponding subcell in the neighbor cell
 	};
 
-	// +X 방향: X=1 (1,3,5,7) → 이웃의 X=0 (0,2,4,6)
+	// +X direction: X=1 (1,3,5,7) -> neighbor X=0 (0,2,4,6)
 	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_POS_X[4] = {
 		{1, 0}, {3, 2}, {5, 4}, {7, 6}
 	};
 
-	// -X 방향: X=0 (0,2,4,6) → 이웃의 X=1 (1,3,5,7)
+	// -X direction: X=0 (0,2,4,6) -> neighbor X=1 (1,3,5,7)
 	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_NEG_X[4] = {
 		{0, 1}, {2, 3}, {4, 5}, {6, 7}
 	};
 
-	// +Y 방향: Y=1 (2,3,6,7) → 이웃의 Y=0 (0,1,4,5)
+	// +Y direction: Y=1 (2,3,6,7) -> neighbor Y=0 (0,1,4,5)
 	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_POS_Y[4] = {
 		{2, 0}, {3, 1}, {6, 4}, {7, 5}
 	};
 
-	// -Y 방향: Y=0 (0,1,4,5) → 이웃의 Y=1 (2,3,6,7)
+	// -Y direction: Y=0 (0,1,4,5) -> neighbor Y=1 (2,3,6,7)
 	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_NEG_Y[4] = {
 		{0, 2}, {1, 3}, {4, 6}, {5, 7}
 	};
 
-	// +Z 방향: Z=1 (4,5,6,7) → 이웃의 Z=0 (0,1,2,3)
+	// +Z direction: Z=1 (4,5,6,7) -> neighbor Z=0 (0,1,2,3)
 	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_POS_Z[4] = {
 		{4, 0}, {5, 1}, {6, 2}, {7, 3}
 	};
 
-	// -Z 방향: Z=0 (0,1,2,3) → 이웃의 Z=1 (4,5,6,7)
+	// -Z direction: Z=0 (0,1,2,3) -> neighbor Z=1 (4,5,6,7)
 	inline constexpr FBoundarySubCellPair BOUNDARY_PAIRS_NEG_Z[4] = {
 		{0, 4}, {1, 5}, {2, 6}, {3, 7}
 	};
 
 	/**
-	 * 방향별 경계 SubCell 쌍 배열 반환
+	 * Return boundary subcell pair array for a direction.
 	 * @param Direction - 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
 	 */
 	inline const FBoundarySubCellPair* GetBoundaryPairs(int32 Direction)
@@ -557,9 +557,9 @@ namespace SubCellBFSHelper
 	}
 
 	/**
-	 * 두 Cell 사이에 연결된 경계 SubCell 쌍이 있는지 확인
-	 * @param Direction - CellA → CellB 방향 (0-5)
-	 * @return 양쪽 모두 살아있는 경계 SubCell 쌍이 하나라도 있으면 true
+	 * Check if there is any connected boundary subcell pair between two cells.
+	 * @param Direction - direction from CellA to CellB (0-5)
+	 * @return True if any boundary pair is alive on both sides
 	 */
 	bool HasConnectedBoundary(
 		int32 CellA,
@@ -578,15 +578,15 @@ namespace SubCellBFSHelper
 			if (CellState.IsSubCellAlive(CellA, Pairs[i].Current) &&
 				CellState.IsSubCellAlive(CellB, Pairs[i].Neighbor))
 			{
-				return true;  // 연결된 쌍 발견
+				return true;  // Connected pair found
 			}
 		}
 
-		return false;  // 연결 없음
+		return false;  // No connection
 	}
 
 	/**
-	 * Cell에 살아있는 SubCell이 있는지 확인
+	 * Check if a cell has any alive subcell.
 	 */
 	bool HasAliveSubCell(int32 CellId, const FCellState& CellState)
 	{
@@ -598,24 +598,24 @@ namespace SubCellBFSHelper
 		const FSubCell* SubCellState = CellState.SubCellStates.Find(CellId);
 		if (!SubCellState)
 		{
-			return true;  // 상태 없으면 모두 살아있음
+			return true;  // If no state, all subcells are alive
 		}
 
 		return !SubCellState->IsFullyDestroyed();
 	}
 
 	/**
-	 * Cell 단위 BFS로 Anchor 도달 여부 확인 (2x2x2 최적화)
+	 * Check anchor reachability via cell-level BFS (2x2x2 optimization).
 	 *
-	 * 2x2x2에서는 Cell 내 모든 SubCell이 서로 연결되므로,
-	 * Cell 단위로 탐색하고 경계 연결만 SubCell 레벨로 검사
+	 * In 2x2x2, all subcells within a cell are connected, so we traverse at the cell level
+	 * and only check boundary connectivity at the subcell level.
 	 *
-	 * @param GridLayout - 격자 레이아웃
-	 * @param CellState - 셀 상태
-	 * @param StartCellId - 시작 Cell
-	 * @param ConfirmedConnected - 이미 Connected 확인된 Cell들
-	 * @param OutVisitedCells - 방문한 Cell 집합 (출력)
-	 * @return Anchor 도달 여부
+	 * @param GridLayout - grid layout
+	 * @param CellState - cell state
+	 * @param StartCellId - start cell
+	 * @param ConfirmedConnected - cells already confirmed as connected
+	 * @param OutVisitedCells - visited cell set (output)
+	 * @return Whether an anchor is reachable
 	 */
 	bool PerformSubCellBFS(
 		const FGridCellLayout& GridLayout,
@@ -626,13 +626,13 @@ namespace SubCellBFSHelper
 	{
 		OutVisitedCells.Reset();
 
-		// 시작 Cell에 살아있는 SubCell이 있는지 확인
+		// Check if the start cell has any alive subcell
 		if (!HasAliveSubCell(StartCellId, CellState))
 		{
 			return false;
 		}
 
-		// Cell 단위 BFS
+		// Cell-level BFS
 		TQueue<int32> CellQueue;
 		TSet<int32> VisitedCells;
 
@@ -645,19 +645,19 @@ namespace SubCellBFSHelper
 			int32 CurrCellId;
 			CellQueue.Dequeue(CurrCellId);
 
-			// Anchor Cell에 도달했는지 확인
+			// Check if an anchor cell is reached
 			if (GridLayout.GetCellIsAnchor(CurrCellId))
 			{
 				return true;
 			}
 
-			// 이미 Connected 확인된 Cell에 도달
+			// Reached a cell already confirmed as connected
 			if (ConfirmedConnected.Contains(CurrCellId))
 			{
 				return true;
 			}
 
-			// 6방향 이웃 Cell 탐색
+			// Explore 6-direction neighbor cells
 			const FIntVector CurrCoord = GridLayout.IdToCoord(CurrCellId);
 
 			for (int32 Dir = 0; Dir < 6; ++Dir)
@@ -675,7 +675,7 @@ namespace SubCellBFSHelper
 
 				const int32 NeighborCellId = GridLayout.CoordToId(NeighborCoord);
 
-				// 이미 방문했거나 유효하지 않은 Cell 스킵
+				// Skip already visited or invalid cells
 				if (VisitedCells.Contains(NeighborCellId))
 				{
 					continue;
@@ -691,7 +691,7 @@ namespace SubCellBFSHelper
 					continue;
 				}
 
-				// 경계 SubCell 연결 검사
+				// Check boundary subcell connectivity
 				if (HasConnectedBoundary(CurrCellId, NeighborCellId, Dir, CellState))
 				{
 					VisitedCells.Add(NeighborCellId);
@@ -701,36 +701,36 @@ namespace SubCellBFSHelper
 			}
 		}
 
-		// Anchor에 도달하지 못함
+		// Failed to reach an anchor
 		return false;
 	}
 
 	/**
-	 * SubCell 내부 인접 테이블 (2x2x2 전용, 6방향)
-	 * 각 SubCell에서 6방향으로 인접한 SubCell ID (-1이면 해당 방향에 인접 없음)
-	 * 순서: -X, +X, -Y, +Y, -Z, +Z
+	 * Subcell internal adjacency table (2x2x2 only, 6 directions).
+	 * For each subcell, adjacent subcell IDs in 6 directions (-1 if none).
+	 * Order: -X, +X, -Y, +Y, -Z, +Z
 	 */
 	inline constexpr int32 SUBCELL_ADJACENCY[8][6] = {
-		// SubCell 0 (0,0,0): -X=없음, +X=1, -Y=없음, +Y=2, -Z=없음, +Z=4
+		// SubCell 0 (0,0,0): -X=none, +X=1, -Y=none, +Y=2, -Z=none, +Z=4
 		{-1, 1, -1, 2, -1, 4},
-		// SubCell 1 (1,0,0): -X=0, +X=없음, -Y=없음, +Y=3, -Z=없음, +Z=5
+		// SubCell 1 (1,0,0): -X=0, +X=none, -Y=none, +Y=3, -Z=none, +Z=5
 		{0, -1, -1, 3, -1, 5},
-		// SubCell 2 (0,1,0): -X=없음, +X=3, -Y=0, +Y=없음, -Z=없음, +Z=6
+		// SubCell 2 (0,1,0): -X=none, +X=3, -Y=0, +Y=none, -Z=none, +Z=6
 		{-1, 3, 0, -1, -1, 6},
-		// SubCell 3 (1,1,0): -X=2, +X=없음, -Y=1, +Y=없음, -Z=없음, +Z=7
+		// SubCell 3 (1,1,0): -X=2, +X=none, -Y=1, +Y=none, -Z=none, +Z=7
 		{2, -1, 1, -1, -1, 7},
-		// SubCell 4 (0,0,1): -X=없음, +X=5, -Y=없음, +Y=6, -Z=0, +Z=없음
+		// SubCell 4 (0,0,1): -X=none, +X=5, -Y=none, +Y=6, -Z=0, +Z=none
 		{-1, 5, -1, 6, 0, -1},
-		// SubCell 5 (1,0,1): -X=4, +X=없음, -Y=없음, +Y=7, -Z=1, +Z=없음
+		// SubCell 5 (1,0,1): -X=4, +X=none, -Y=none, +Y=7, -Z=1, +Z=none
 		{4, -1, -1, 7, 1, -1},
-		// SubCell 6 (0,1,1): -X=없음, +X=7, -Y=4, +Y=없음, -Z=2, +Z=없음
+		// SubCell 6 (0,1,1): -X=none, +X=7, -Y=4, +Y=none, -Z=2, +Z=none
 		{-1, 7, 4, -1, 2, -1},
-		// SubCell 7 (1,1,1): -X=6, +X=없음, -Y=5, +Y=없음, -Z=3, +Z=없음
+		// SubCell 7 (1,1,1): -X=6, +X=none, -Y=5, +Y=none, -Z=3, +Z=none
 		{6, -1, 5, -1, 3, -1},
 	};
 
 	/**
-	 * 반대 방향 반환
+	 * Return the opposite direction.
 	 * 0(-X) <-> 1(+X), 2(-Y) <-> 3(+Y), 4(-Z) <-> 5(+Z)
 	 */
 	inline constexpr int32 GetOppositeDirection(int32 Direction)
@@ -739,7 +739,7 @@ namespace SubCellBFSHelper
 	}
 
 	/**
-	 * 특정 방향의 경계 SubCell ID 목록 반환 (4개)
+	 * Return boundary subcell IDs for a direction (4 entries).
 	 * @param Direction - 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
 	 */
 	inline void GetBoundarySubCellIds(int32 Direction, int32 OutIds[4])
@@ -755,13 +755,13 @@ namespace SubCellBFSHelper
 	}
 
 	/**
-	 * Detached Cell 경계에서 Connected Cell 내부로 SubCell Flooding
-	 * 경계 SubCell에서 시작하여 Dead SubCell을 만날 때까지 확장
+	 * Flood subcells from a detached cell boundary into a connected cell.
+	 * Starts at boundary subcells and expands until hitting dead subcells.
 	 *
-	 * @param CellState - 셀 상태
-	 * @param ConnectedCellId - Connected Cell ID
-	 * @param DirectionFromDetached - Detached → Connected 방향 (0-5)
-	 * @return Flooding된 SubCell ID 목록
+	 * @param CellState - cell state
+	 * @param ConnectedCellId - connected cell ID
+	 * @param DirectionFromDetached - direction from detached to connected (0-5)
+	 * @return Flooded subcell ID list
 	 */
 	TArray<int32> FloodSubCellsFromBoundary(
 		const FCellState& CellState,
@@ -770,18 +770,18 @@ namespace SubCellBFSHelper
 	{
 		TArray<int32> Result;
 
-		// Detached → Connected 방향의 반대 = Connected Cell에서 Detached와 맞닿은 면
+		// Opposite of detached->connected direction = face touching the detached cell
 		const int32 BoundaryDirection = GetOppositeDirection(DirectionFromDetached);
 
-		// 경계 SubCell ID들 가져오기
+		// Get boundary subcell IDs
 		int32 BoundarySubCellIds[4];
 		GetBoundarySubCellIds(BoundaryDirection, BoundarySubCellIds);
 
-		// BFS를 위한 자료구조
+		// BFS data structures
 		TSet<int32> Visited;
 		TQueue<int32> Queue;
 
-		// 경계 SubCell들을 시작점으로 추가
+		// Add boundary subcells as starting points
 		for (int32 i = 0; i < 4; ++i)
 		{
 			const int32 SubCellId = BoundarySubCellIds[i];
@@ -792,7 +792,7 @@ namespace SubCellBFSHelper
 			}
 		}
 
-		// BFS 탐색
+		// BFS traversal
 		while (!Queue.IsEmpty())
 		{
 			int32 CurrentSubCellId;
@@ -800,21 +800,21 @@ namespace SubCellBFSHelper
 
 			const bool bIsAlive = CellState.IsSubCellAlive(ConnectedCellId, CurrentSubCellId);
 
-			// 결과에 추가 (살아있든 죽었든)
+			// Add to result (alive or dead)
 			Result.Add(CurrentSubCellId);
 
-			// 죽은 SubCell이면 확장 중단 (경계 역할)
+			// If subcell is dead, stop expanding (acts as boundary)
 			if (!bIsAlive)
 			{
 				continue;
 			}
 
-			// 살아있는 SubCell이면 인접 SubCell로 확장
+			// If subcell is alive, expand to adjacent subcells
 			for (int32 Dir = 0; Dir < 6; ++Dir)
 			{
 				const int32 NeighborSubCellId = SUBCELL_ADJACENCY[CurrentSubCellId][Dir];
 
-				// 유효하지 않거나 이미 방문한 SubCell은 스킵
+				// Skip invalid or already visited subcells
 				if (NeighborSubCellId < 0 || Visited.Contains(NeighborSubCellId))
 				{
 					continue;
@@ -829,7 +829,7 @@ namespace SubCellBFSHelper
 	}
 
 	/**
-	 * Detached 그룹의 경계 Cell 정보
+	 * Boundary cell info for a detached group.
 	 */
 	struct FBoundaryCellInfo
 	{
@@ -838,7 +838,7 @@ namespace SubCellBFSHelper
 	};
 
 	/**
-	 * Detached 그룹에서 경계 Cell 목록 추출 (인접 Connected Cell 정보 포함)
+	 * Extract boundary cells from a detached group (includes adjacent connected cells).
 	 */
 	TArray<FBoundaryCellInfo> GetGroupBoundaryCellsWithAdjacency(
 		const FGridCellLayout& GridLayout,
@@ -847,7 +847,7 @@ namespace SubCellBFSHelper
 	{
 		TArray<FBoundaryCellInfo> Result;
 
-		// 빠른 검색을 위해 그룹 Cell들을 Set으로 변환
+		// Convert group cells to a set for fast lookup
 		TSet<int32> GroupCellSet;
 		GroupCellSet.Reserve(GroupCellIds.Num());
 		for (int32 CellId : GroupCellIds)
@@ -855,7 +855,7 @@ namespace SubCellBFSHelper
 			GroupCellSet.Add(CellId);
 		}
 
-		// 각 그룹 Cell에 대해 경계 여부 판정
+		// Determine boundary status for each group cell
 		for (int32 CellId : GroupCellIds)
 		{
 			FBoundaryCellInfo Info;
@@ -863,7 +863,7 @@ namespace SubCellBFSHelper
 
 			const FIntVector CellCoord = GridLayout.IdToCoord(CellId);
 
-			// 6방향 이웃 탐색
+			// Check 6-direction neighbors
 			for (int32 Dir = 0; Dir < 6; ++Dir)
 			{
 				const FIntVector NeighborCoord = CellCoord + FIntVector(
@@ -872,7 +872,7 @@ namespace SubCellBFSHelper
 					DIRECTION_OFFSETS[Dir][2]
 				);
 
-				// 유효하지 않은 좌표는 스킵
+				// Skip invalid coordinates
 				if (!GridLayout.IsValidCoord(NeighborCoord))
 				{
 					continue;
@@ -880,29 +880,29 @@ namespace SubCellBFSHelper
 
 				const int32 NeighborCellId = GridLayout.CoordToId(NeighborCoord);
 
-				// 그룹에 속한 Cell은 스킵
+				// Skip cells inside the group
 				if (GroupCellSet.Contains(NeighborCellId))
 				{
 					continue;
 				}
 
-				// 존재하지 않는 Cell은 스킵
+				// Skip non-existent cells
 				if (!GridLayout.GetCellExists(NeighborCellId))
 				{
 					continue;
 				}
 
-				// 파괴된 Cell은 스킵 (Connected Cell만 대상)
+				// Skip destroyed cells (only connected cells are considered)
 				if (CellState.DestroyedCells.Contains(NeighborCellId))
 				{
 					continue;
 				}
 
-				// Connected Cell 발견 → 인접 목록에 추가
+				// Found a connected cell -> add to adjacency list
 				Info.AdjacentConnectedCells.Add(TPair<int32, int32>(NeighborCellId, Dir));
 			}
 
-			// 인접한 Connected Cell이 하나라도 있으면 경계 Cell
+			// If any adjacent connected cell exists, it's a boundary cell
 			if (Info.AdjacentConnectedCells.Num() > 0)
 			{
 				Result.Add(MoveTemp(Info));
@@ -922,7 +922,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 
 	TSet<int32> Connected;
 
-	// 1. 모든 Anchor Cell에서 BFS 시작
+	// 1. Start BFS from all anchor cells
 	TQueue<int32> Queue;
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); CellId++)
 	{
@@ -936,7 +936,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 		}
 	}
 
-	// 2. BFS: SubCell 경계 연결성으로 도달 가능한 모든 Cell 찾기
+	// 2. BFS: find all cells reachable via subcell boundary connectivity
 	while (!Queue.IsEmpty())
 	{
 		int32 CurrCellId;
@@ -974,7 +974,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 				continue;
 			}
 
-			// SubCell 경계 연결성 검사
+			// Check subcell boundary connectivity
 			if (HasConnectedBoundary(CurrCellId, NeighborCellId, Dir, CellState))
 			{
 				Connected.Add(NeighborCellId);
@@ -983,7 +983,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 		}
 	}
 
-	// 3. 전체 Grid에서 Connected가 아닌 Cell = Disconnected
+	// 3. Cells not in Connected are disconnected
 	TSet<int32> Disconnected;
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); CellId++)
 	{
@@ -999,14 +999,14 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 }
 
 //=============================================================================
-// FCellDestructionSystem - Hierarchical BFS (SuperCell 최적화)
+// FCellDestructionSystem - Hierarchical BFS (SuperCell optimization)
 //=============================================================================
 
 namespace HierarchicalBFSHelper
 {
 	/**
-	 * SuperCell의 Cell 좌표 범위 계산
-	 * TArray 할당 없이 직접 좌표 순회용
+	 * Compute the cell coordinate range of a SuperCell.
+	 * Intended for direct coordinate iteration without TArray allocations.
 	 */
 	struct FSupercellCellRange
 	{
@@ -1027,8 +1027,8 @@ namespace HierarchicalBFSHelper
 	};
 
 	/**
-	 * SuperCell 내 유효한 모든 Cell을 Connected로 마킹
-	 * TArray 할당 없이 직접 좌표 순회
+	 * Mark all valid cells in a SuperCell as connected.
+	 * Direct coordinate iteration without TArray allocations.
 	 */
 	void MarkAllCellsInSupercell(
 		int32 SupercellId,
@@ -1046,7 +1046,7 @@ namespace HierarchicalBFSHelper
 				for (int32 X = Range.StartX; X < Range.EndX; ++X)
 				{
 					const int32 CellId = GridLayout.CoordToId(X, Y, Z);
-					// 파괴된 Cell은 제외
+					// Exclude destroyed cells
 					if (GridLayout.GetCellExists(CellId) && !CellState.DestroyedCells.Contains(CellId))
 					{
 						ConnectedCells.Add(CellId);
@@ -1057,7 +1057,7 @@ namespace HierarchicalBFSHelper
 	}
 
 	/**
-	 * Neighbor Cell 추가 헬퍼 (SubCell 모드 분기 포함)
+	 * Helper to add a neighbor cell (includes subcell-mode branching).
 	 */
 	FORCEINLINE void TryAddNeighborCell(
 		int32 BoundaryCellId,
@@ -1100,11 +1100,11 @@ namespace HierarchicalBFSHelper
 	}
 
 	/**
-	 * SuperCell 노드 처리 (Intact SuperCell에서 인접 노드 탐색)
+	 * Process a SuperCell node (search adjacent nodes from an intact SuperCell).
 	 *
-	 * 성능 최적화:
-	 * - IsSupercellIntact() (비트필드 O(1))만 사용
-	 * - TArray 할당 없이 직접 좌표 순회
+	 * Performance optimizations:
+	 * - Use only IsSupercellIntact() (bitfield O(1))
+	 * - Direct coordinate iteration without TArray allocations
 	 */
 	void ProcessSupercellNode(
 		int32 SupercellId,
@@ -1119,7 +1119,7 @@ namespace HierarchicalBFSHelper
 		const FSupercellCellRange Range(SupercellId, SupercellState, GridLayout);
 		const FIntVector SupercellCoord = SupercellState.SupercellIdToCoord(SupercellId);
 
-		// 6방향 인접 SuperCell 탐색
+		// Search 6-direction adjacent SuperCells
 		for (int32 Dir = 0; Dir < 6; ++Dir)
 		{
 			const FIntVector NeighborSCCoord = SupercellCoord + FIntVector(
@@ -1135,29 +1135,29 @@ namespace HierarchicalBFSHelper
 
 			const int32 NeighborSupercellId = SupercellState.SupercellCoordToId(NeighborSCCoord);
 
-			// 이미 방문한 SuperCell은 스킵
+			// Skip visited SuperCells
 			if (VisitedSupercells.Contains(NeighborSupercellId))
 			{
 				continue;
 			}
 
-			// 인접 SuperCell이 Intact인지 확인 (비트필드 체크만 - O(1))
+			// Check if adjacent SuperCell is intact (bitfield only - O(1))
 			if (SupercellState.IsSupercellIntact(NeighborSupercellId))
 			{
-				// Intact SuperCell → SuperCell 노드로 추가
+				// Intact SuperCell -> add as a SuperCell node
 				VisitedSupercells.Add(NeighborSupercellId);
 				Queue.Enqueue(FBFSNode::MakeSupercell(NeighborSupercellId));
 				MarkAllCellsInSupercell(NeighborSupercellId, SupercellState, GridLayout, CellState, ConnectedCells); 
 			}
 			else
 			{
-				// Broken SuperCell → 경계 Cell에서 인접 Cell로 직접 연결
-				// TArray 할당 없이 직접 좌표 순회
+				// Broken SuperCell -> connect directly from boundary cells to neighbor cells
+				// Direct coordinate iteration without TArray allocations
 
-				// 방향별 경계면 Cell 순회 및 인접 Cell 처리
+				// Traverse boundary face cells per direction and process adjacent cells
 				switch (Dir)
 				{
-				case 0: // -X: 우리의 X=StartX 면 → 인접 Cell은 X=StartX-1
+				case 0: // -X: our X=StartX face -> neighbor cell is X=StartX-1
 					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 					{
 						for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
@@ -1172,7 +1172,7 @@ namespace HierarchicalBFSHelper
 					}
 					break;
 
-				case 1: // +X: 우리의 X=EndX-1 면 → 인접 Cell은 X=EndX
+				case 1: // +X: our X=EndX-1 face -> neighbor cell is X=EndX
 					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 					{
 						for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
@@ -1187,7 +1187,7 @@ namespace HierarchicalBFSHelper
 					}
 					break;
 
-				case 2: // -Y: 우리의 Y=StartY 면 → 인접 Cell은 Y=StartY-1
+				case 2: // -Y: our Y=StartY face -> neighbor cell is Y=StartY-1
 					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 					{
 						for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1202,7 +1202,7 @@ namespace HierarchicalBFSHelper
 					}
 					break;
 
-				case 3: // +Y: 우리의 Y=EndY-1 면 → 인접 Cell은 Y=EndY
+				case 3: // +Y: our Y=EndY-1 face -> neighbor cell is Y=EndY
 					for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 					{
 						for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1217,7 +1217,7 @@ namespace HierarchicalBFSHelper
 					}
 					break;
 
-				case 4: // -Z: 우리의 Z=StartZ 면 → 인접 Cell은 Z=StartZ-1
+				case 4: // -Z: our Z=StartZ face -> neighbor cell is Z=StartZ-1
 					for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
 					{
 						for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1232,7 +1232,7 @@ namespace HierarchicalBFSHelper
 					}
 					break;
 
-				case 5: // +Z: 우리의 Z=EndZ-1 면 → 인접 Cell은 Z=EndZ
+				case 5: // +Z: our Z=EndZ-1 face -> neighbor cell is Z=EndZ
 					for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
 					{
 						for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1250,10 +1250,10 @@ namespace HierarchicalBFSHelper
 			}
 		}
 
-		// Orphan Cell과의 연결 (SuperCell 경계의 Cell들에서 외부 Orphan Cell로)
-		// TArray 할당 없이 6면의 경계 Cell을 직접 순회
+		// Connect to orphan cells (from SuperCell boundary cells to external orphan cells)
+		// Iterate the 6 boundary faces directly without TArray allocations
 
-		// -X 경계면
+		// -X boundary face
 		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 		{
 			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
@@ -1271,7 +1271,7 @@ namespace HierarchicalBFSHelper
 			}
 		}
 
-		// +X 경계면
+		// +X boundary face
 		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 		{
 			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
@@ -1289,7 +1289,7 @@ namespace HierarchicalBFSHelper
 			}
 		}
 
-		// -Y 경계면
+		// -Y boundary face
 		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 		{
 			for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1307,7 +1307,7 @@ namespace HierarchicalBFSHelper
 			}
 		}
 
-		// +Y 경계면
+		// +Y boundary face
 		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
 		{
 			for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1325,7 +1325,7 @@ namespace HierarchicalBFSHelper
 			}
 		}
 
-		// -Z 경계면
+		// -Z boundary face
 		for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
 		{
 			for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1343,7 +1343,7 @@ namespace HierarchicalBFSHelper
 			}
 		}
 
-		// +Z 경계면
+		// +Z boundary face
 		for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
 		{
 			for (int32 X = Range.StartX; X < Range.EndX; ++X)
@@ -1363,9 +1363,9 @@ namespace HierarchicalBFSHelper
 	}
 
 	/**
-	 * Cell 노드 처리 (개별 Cell에서 인접 노드 탐색)
+	 * Process a cell node (search adjacent nodes from an individual cell).
 	 *
-	 * 성능 최적화: IsSupercellIntact() (비트필드 O(1))만 사용
+	 * Performance optimization: use only IsSupercellIntact() (bitfield O(1))
 	 */
 	void ProcessCellNode(
 		int32 CellId,
@@ -1409,7 +1409,7 @@ namespace HierarchicalBFSHelper
 				continue;
 			}
 
-			// SubCell 모드에서는 경계 연결성 확인
+			// In subcell mode, check boundary connectivity
 			bool bIsConnected = true;
 			if (bEnableSubcell)
 			{
@@ -1423,19 +1423,19 @@ namespace HierarchicalBFSHelper
 
 			const int32 NeighborSupercellId = SupercellState.GetSupercellForCell(NeighborCellId);
 
-			// Neighbor가 Intact SuperCell에 속하는지 확인 (비트필드 체크만 - O(1))
+			// Check if neighbor belongs to an intact SuperCell (bitfield only - O(1))
 			if (NeighborSupercellId != INDEX_NONE &&
 			    !VisitedSupercells.Contains(NeighborSupercellId) &&
 			    SupercellState.IsSupercellIntact(NeighborSupercellId))
 			{
-				// Intact SuperCell → SuperCell 노드로 확장
+				// Intact SuperCell -> expand to SuperCell node
 				VisitedSupercells.Add(NeighborSupercellId);
 				Queue.Enqueue(FBFSNode::MakeSupercell(NeighborSupercellId));
 				MarkAllCellsInSupercell(NeighborSupercellId, SupercellState, GridLayout, CellState, ConnectedCells);
 			}
 			else
 			{
-				// Broken SuperCell 또는 Orphan → Cell 단위 추가
+				// Broken SuperCell or orphan -> add at cell level
 				ConnectedCells.Add(NeighborCellId);
 				Queue.Enqueue(FBFSNode::MakeCell(NeighborCellId));
 			}
@@ -1457,8 +1457,8 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 	TQueue<FBFSNode> Queue;
 
 	//=========================================================================
-	// Step 1: Anchor 초기화
-	// 성능 최적화: IsSupercellIntact() (비트필드 O(1))만 사용
+	// Step 1: Initialize anchors
+	// Performance optimization: use only IsSupercellIntact() (bitfield O(1))
 	//=========================================================================
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); ++CellId)
 	{
@@ -1477,7 +1477,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 			continue;
 		}
 
-		// SubCell 모드에서는 살아있는 SubCell이 있어야 함
+		// In subcell mode, must have an alive subcell
 		if (bEnableSubcell && !SubCellBFSHelper::HasAliveSubCell(CellId, CellState))
 		{
 			continue;
@@ -1485,19 +1485,19 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 
 		const int32 SupercellId = SupercellState.GetSupercellForCell(CellId);
 
-		// Intact 여부는 비트필드로만 확인 (O(1))
+		// Intact check uses bitfield only (O(1))
 		if (SupercellId != INDEX_NONE &&
 		    !VisitedSupercells.Contains(SupercellId) &&
 		    SupercellState.IsSupercellIntact(SupercellId))
 		{
-			// Intact SuperCell → 단일 노드로 추가
+			// Intact SuperCell -> add as a single node
 			VisitedSupercells.Add(SupercellId);
 			Queue.Enqueue(FBFSNode::MakeSupercell(SupercellId));
 			MarkAllCellsInSupercell(SupercellId, SupercellState, GridLayout, CellState, ConnectedCells);
 		}
 		else
 		{
-			// Broken SuperCell 또는 Orphan → Cell 단위 추가
+			// Broken SuperCell or orphan -> add at cell level
 			if (!ConnectedCells.Contains(CellId))
 			{
 				ConnectedCells.Add(CellId);
@@ -1507,7 +1507,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 	}
 
 	//=========================================================================
-	// Step 2: BFS 탐색
+	// Step 2: BFS traversal
 	//=========================================================================
 	while (!Queue.IsEmpty())
 	{
@@ -1516,7 +1516,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 
 		if (Current.bIsSupercell)
 		{
-			// Case A: Intact SuperCell 노드
+			// Case A: Intact SuperCell node
 			ProcessSupercellNode(
 				Current.Id,
 				GridLayout,
@@ -1529,7 +1529,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 		}
 		else
 		{
-			// Case B: 개별 Cell 노드
+			// Case B: Individual cell node
 			ProcessCellNode(
 				Current.Id,
 				GridLayout,
@@ -1553,11 +1553,11 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsHierarchicalLevel(
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsHierarchicalLevel);
 
-	// 1. 앵커에 연결된 Cell 찾기
+	// 1. Find cells connected to anchors
 	TSet<int32> ConnectedCells = FindConnectedCellsHierarchical(
 		GridLayout, SupercellState, CellState, bEnableSubcell);
 
-	// 2. 전체 Grid에서 Connected가 아닌 Cell = Disconnected
+	// 2. Cells not in Connected are disconnected
 	TSet<int32> Disconnected;
 
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); ++CellId)

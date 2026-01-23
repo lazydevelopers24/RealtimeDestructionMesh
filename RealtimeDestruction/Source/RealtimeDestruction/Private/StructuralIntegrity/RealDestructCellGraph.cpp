@@ -1,5 +1,4 @@
 #include "StructuralIntegrity/RealDestructCellGraph.h"
-
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Selections/MeshConnectedComponents.h"
 
@@ -110,7 +109,7 @@ void FRealDestructCellGraph::BuildDivisionPlanesFromGrid(
 	DivisionPlanes.Reset();
 	MeshBounds = Bounds;
 
-	// Data validation - Slice Count 및 ChunkId 데이터 체크
+	// Data validation - slice count and ChunkId checks
 	const int32 CountX = SliceCount.X;
 	const int32 CountY = SliceCount.Y;
 	const int32 CountZ = SliceCount.Z;
@@ -119,7 +118,7 @@ void FRealDestructCellGraph::BuildDivisionPlanesFromGrid(
 		return;
 	}
 
-	// Data validation - Bounding Box 체크
+	// Data validation - bounding box check
 	const FVector BoundsMin = Bounds.Min;
 	const FVector BoundsMax = Bounds.Max;
 	const FVector BoundsSize = BoundsMax - BoundsMin;
@@ -132,7 +131,7 @@ void FRealDestructCellGraph::BuildDivisionPlanesFromGrid(
 	const double CellSizeY = BoundsSize.Y / static_cast<double>(CountY);
 	const double CellSizeZ = BoundsSize.Z / static_cast<double>(CountZ);
 
-	// 절단 평면의 사각형 영역 개수 계산
+	// Estimate number of plane rectangle regions
 	const int32 EstimatedPlaneCount =
 		(CountX - 1) * CountY * CountZ +
 		(CountY - 1) * CountX * CountZ +
@@ -147,7 +146,7 @@ void FRealDestructCellGraph::BuildDivisionPlanesFromGrid(
 		return X + (Y * CountX) + (Z * CountX * CountY);
 	};
 
-	// X 축 경계 평면
+	// X-axis boundary planes
 	for (int32 X = 1; X < CountX; ++X)
 	{
 		const double PlaneX = BoundsMin.X + (CellSizeX * static_cast<double>(X));
@@ -181,7 +180,7 @@ void FRealDestructCellGraph::BuildDivisionPlanesFromGrid(
 		}
 	}
 
-	// Y 축 경계 평면
+	// Y-axis boundary planes
 	for (int32 Y = 1; Y < CountY; ++Y)
 	{
 		const double PlaneY = BoundsMin.Y + (CellSizeY * static_cast<double>(Y));
@@ -215,7 +214,7 @@ void FRealDestructCellGraph::BuildDivisionPlanesFromGrid(
 		}
 	}
 
-	// Z 축 경계 평면
+	// Z-axis boundary planes
 	for (int32 Z = 1; Z < CountZ; ++Z)
 	{
 		const double PlaneZ = BoundsMin.Z + (CellSizeZ * static_cast<double>(Z));
@@ -408,7 +407,7 @@ bool FRealDestructCellGraph::AreNodesConnectedByPlane(
 }
 
 //=========================================================================
-// 그래프 구축
+// Graph construction
 //=========================================================================
 
 void FRealDestructCellGraph::Reset()
@@ -425,7 +424,7 @@ void FRealDestructCellGraph::BuildGraph(
 	float RectTolerance,
 	float FloorHeightThreshold)
 {
-	// 기존 노드 초기화 (DivisionPlanes는 유지)
+	// Reset existing nodes (keep DivisionPlanes)
 	Nodes.Reset();
 	ChunkCellCaches.Reset();
 
@@ -434,9 +433,9 @@ void FRealDestructCellGraph::BuildGraph(
 		return;
 	}
 
-	// 1. 전체 메시 바운드 확인 (Anchor 판정용)
-	// BuildDivisionPlanesFromGrid에서 설정된 Bounds 사용 (원본 메시 기준)
-	// 설정되지 않은 경우에만 현재 메시에서 계산
+	// 1. Check full mesh bounds (for anchor tests)
+	// Use Bounds set by BuildDivisionPlanesFromGrid (based on original mesh)
+	// Compute from current mesh only if not set
 	if (!MeshBounds.IsValid)
 	{
 		for (int32 ChunkId = 0; ChunkId < ChunkMeshes.Num(); ++ChunkId)
@@ -460,7 +459,7 @@ void FRealDestructCellGraph::BuildGraph(
 		}
 	}
 
-	// 2. 각 청크의 Cell 캐시 구축
+	// 2. Build cell cache for each chunk
 	ChunkCellCaches.SetNum(ChunkMeshes.Num());
 	int32 CachesWithGeometry = 0;
 	for (int32 ChunkId = 0; ChunkId < ChunkMeshes.Num(); ++ChunkId)
@@ -482,11 +481,11 @@ void FRealDestructCellGraph::BuildGraph(
 	UE_LOG(LogTemp, Log, TEXT("BuildGraph: %d/%d chunks have geometry"), CachesWithGeometry, ChunkMeshes.Num());
 	UE_LOG(LogTemp, Log, TEXT("BuildGraph: %d division planes"), DivisionPlanes.Num());
 
-	// 3. 노드 생성 및 연결 구축
+	// 3. Build nodes and connections
 	BuildNodesAndConnections(ChunkMeshes, PlaneTolerance, RectTolerance);
 	UE_LOG(LogTemp, Log, TEXT("BuildGraph: Created %d nodes after BuildNodesAndConnections"), Nodes.Num());
 
-	// 4. Anchor 판정
+	// 4. Determine anchors
 	for (FChunkCellNode& Node : Nodes)
 	{
 		const int32 ChunkId = Node.ChunkId;
@@ -515,7 +514,7 @@ void FRealDestructCellGraph::BuildChunkCellCache(const FDynamicMesh3& Mesh, int3
 		return;
 	}
 
-	// Connected Component 계산
+	// Compute connected components
 	FMeshConnectedComponents ConnectedComponents(&Mesh);
 	ConnectedComponents.FindConnectedTriangles();
 
@@ -537,7 +536,7 @@ void FRealDestructCellGraph::BuildChunkCellCache(const FDynamicMesh3& Mesh, int3
 		const FMeshConnectedComponents::FComponent& Component = ConnectedComponents.GetComponent(CompIdx);
 		OutCache.CellTriangles[CompIdx] = Component.Indices;
 
-		// Cell 바운드 계산
+		// Compute cell bounds
 		FBox CellBound(ForceInit);
 		for (int32 TriId : Component.Indices)
 		{
@@ -563,8 +562,8 @@ void FRealDestructCellGraph::BuildNodesAndConnections(
 	float PlaneTolerance,
 	float RectTolerance)
 {
-	// 1. 먼저 모든 Cell에 대해 노드 생성
-	// (ChunkId, CellId) -> NodeIndex 매핑용
+	// 1. Create nodes for all cells first
+	// For (ChunkId, CellId) -> NodeIndex mapping
 	TMap<TPair<int32, int32>, int32> CellToNodeIndex;
 
 	for (int32 ChunkId = 0; ChunkId < ChunkCellCaches.Num(); ++ChunkId)
@@ -588,10 +587,10 @@ void FRealDestructCellGraph::BuildNodesAndConnections(
 		}
 	}
 
-	// 2. 같은 Chunk 내 Cell 간 연결 (동일 Chunk 내 모든 Cell은 서로 분리됨 - Connected Component이므로)
-	// -> 같은 Chunk 내 Cell들은 연결되지 않음
+	// 2. Within the same chunk, cells are not connected (each is a connected component)
+	// -> Cells within the same chunk are not connected
 
-	// 3. 다른 Chunk 간 Cell 연결 (분할 평면 기준)
+	// 3. Connect cells across chunks (by division planes)
 	for (int32 PlaneIdx = 0; PlaneIdx < DivisionPlanes.Num(); ++PlaneIdx)
 	{
 		const FChunkDivisionPlaneRect& Plane = DivisionPlanes[PlaneIdx];
@@ -622,7 +621,7 @@ void FRealDestructCellGraph::BuildNodesAndConnections(
 		const FDynamicMesh3& MeshA = *ChunkMeshes[ChunkA];
 		const FDynamicMesh3& MeshB = *ChunkMeshes[ChunkB];
 
-		// ChunkA의 각 Cell과 ChunkB의 각 Cell 사이 연결 검사
+		// Check connections between each cell in ChunkA and each cell in ChunkB
 		for (int32 CellIdA : CacheA.CellIds)
 		{
 			const TArray<int32>& TrianglesA = CacheA.CellTriangles[CellIdA];
@@ -631,7 +630,7 @@ void FRealDestructCellGraph::BuildNodesAndConnections(
 			{
 				const TArray<int32>& TrianglesB = CacheB.CellTriangles[CellIdB];
 
-				// 경계 삼각형 검사로 연결 판정
+				// Determine connectivity via boundary triangle tests
 				const bool bConnected = AreNodesConnectedByPlane(
 					MeshA, TrianglesA,
 					MeshB, TrianglesB,
@@ -639,7 +638,7 @@ void FRealDestructCellGraph::BuildNodesAndConnections(
 
 				if (bConnected)
 				{
-					// 양방향 연결 추가
+					// Add bidirectional connections
 					const int32* NodeIndexAPtr = CellToNodeIndex.Find(TPair<int32, int32>(ChunkA, CellIdA));
 					const int32* NodeIndexBPtr = CellToNodeIndex.Find(TPair<int32, int32>(ChunkB, CellIdB));
 
@@ -648,14 +647,14 @@ void FRealDestructCellGraph::BuildNodesAndConnections(
 						const int32 NodeIndexA = *NodeIndexAPtr;
 						const int32 NodeIndexB = *NodeIndexBPtr;
 
-						// A -> B 연결
+						// A -> B connection
 						FChunkCellNeighbor NeighborB;
 						NeighborB.ChunkId = ChunkB;
 						NeighborB.CellId = CellIdB;
 						NeighborB.DivisionPlaneIndex = PlaneIdx;
 						Nodes[NodeIndexA].Neighbors.Add(NeighborB);
 
-						// B -> A 연결
+						// B -> A connection
 						FChunkCellNeighbor NeighborA;
 						NeighborA.ChunkId = ChunkA;
 						NeighborA.CellId = CellIdA;
@@ -685,7 +684,7 @@ bool FRealDestructCellGraph::IsCellOnFloor(
 		return false;
 	}
 
-	// Cell의 최저점이 전체 메시 바운드의 바닥과 가까우면 Anchor
+	// Anchor if the cell's lowest point is near the mesh bounds floor
 	const float FloorZ = MeshBounds.Min.Z;
 	const float CellMinZ = CellBound.Min.Z;
 
@@ -693,7 +692,7 @@ bool FRealDestructCellGraph::IsCellOnFloor(
 }
 
 //=========================================================================
-// InitData 변환
+// InitData conversion
 //=========================================================================
 
 FStructuralIntegrityInitData FRealDestructCellGraph::BuildInitDataFromGraph() const
@@ -705,7 +704,7 @@ FStructuralIntegrityInitData FRealDestructCellGraph::BuildInitDataFromGraph() co
 		return InitData;
 	}
 
-	// (ChunkId, CellId) -> 1차원 인덱스 매핑
+	// (ChunkId, CellId) -> 1D index mapping
 	TMap<TPair<int32, int32>, int32> CellToFlatIndex;
 	for (int32 NodeIdx = 0; NodeIdx < Nodes.Num(); ++NodeIdx)
 	{
@@ -713,7 +712,7 @@ FStructuralIntegrityInitData FRealDestructCellGraph::BuildInitDataFromGraph() co
 		CellToFlatIndex.Add(TPair<int32, int32>(Node.ChunkId, Node.CellId), NodeIdx);
 	}
 
-	// CellNeighbors 배열 구축
+	// Build CellNeighbors array
 	InitData.CellNeighbors.SetNum(Nodes.Num());
 	for (int32 NodeIdx = 0; NodeIdx < Nodes.Num(); ++NodeIdx)
 	{
@@ -730,11 +729,11 @@ FStructuralIntegrityInitData FRealDestructCellGraph::BuildInitDataFromGraph() co
 			}
 		}
 
-		// 결정론적 순서를 위해 정렬
+		// Sort for deterministic order
 		NeighborIndices.Sort();
 	}
 
-	// Anchor Cell ID 수집
+	// Collect anchor cell IDs
 	for (int32 NodeIdx = 0; NodeIdx < Nodes.Num(); ++NodeIdx)
 	{
 		if (Nodes[NodeIdx].bIsAnchor)
@@ -743,7 +742,7 @@ FStructuralIntegrityInitData FRealDestructCellGraph::BuildInitDataFromGraph() co
 		}
 	}
 
-	// 결정론적 순서
+	// Deterministic order
 	InitData.AnchorCellIds.Sort();
 
 	return InitData;
@@ -758,7 +757,7 @@ FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() c
 		return Snapshot;
 	}
 
-	// 1. 노드를 (ChunkId, CellId) 기준으로 정렬된 순서로 수집
+	// 1. Collect nodes sorted by (ChunkId, CellId)
 	TArray<int32> SortedNodeIndices;
 	SortedNodeIndices.Reserve(Nodes.Num());
 	for (int32 i = 0; i < Nodes.Num(); ++i)
@@ -766,7 +765,7 @@ FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() c
 		SortedNodeIndices.Add(i);
 	}
 
-	// 결정론적 정렬: ChunkId 우선, 같으면 CellId로
+	// Deterministic sort: ChunkId first, then CellId
 	SortedNodeIndices.Sort([this](int32 A, int32 B)
 	{
 		const FChunkCellNode& NodeA = Nodes[A];
@@ -778,7 +777,7 @@ FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() c
 		return NodeA.CellId < NodeB.CellId;
 	});
 
-	// 2. NodeKeys 배열 구축
+	// 2. Build NodeKeys array
 	Snapshot.NodeKeys.Reserve(Nodes.Num());
 	for (int32 NodeIdx : SortedNodeIndices)
 	{
@@ -786,7 +785,7 @@ FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() c
 		Snapshot.NodeKeys.Add(FCellKey(Node.ChunkId, Node.CellId));
 	}
 
-	// 3. NeighborKeys 배열 구축
+	// 3. Build NeighborKeys array
 	Snapshot.NeighborKeys.SetNum(Nodes.Num());
 	for (int32 i = 0; i < SortedNodeIndices.Num(); ++i)
 	{
@@ -801,12 +800,12 @@ FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() c
 			NeighborKeyList.Add(FCellKey(Neighbor.ChunkId, Neighbor.CellId));
 		}
 
-		// 결정론적 순서
+		// Deterministic order
 		NeighborKeyList.Sort();
 		Snapshot.NeighborKeys[i] = FStructuralIntegrityNeighborList(NeighborKeyList);
 	}
 
-	// 4. AnchorKeys 수집
+	// 4. Collect AnchorKeys
 	for (int32 NodeIdx : SortedNodeIndices)
 	{
 		const FChunkCellNode& Node = Nodes[NodeIdx];
@@ -816,13 +815,13 @@ FStructuralIntegrityGraphSnapshot FRealDestructCellGraph::BuildGraphSnapshot() c
 		}
 	}
 
-	// 이미 정렬된 순서로 순회했으므로 AnchorKeys도 정렬됨
+	// AnchorKeys are already sorted due to the iteration order
 
 	return Snapshot;
 }
 
 //=========================================================================
-// 조회 함수
+// Query functions
 //=========================================================================
 
 const FChunkCellNode* FRealDestructCellGraph::GetNode(int32 NodeIndex) const
@@ -856,7 +855,7 @@ const FChunkCellCache* FRealDestructCellGraph::GetChunkCellCache(int32 ChunkId) 
 }
 
 //=========================================================================
-// 런타임 그래프 갱신
+// Runtime graph updates
 //=========================================================================
 
 TArray<FChunkUpdateResult> FRealDestructCellGraph::UpdateModifiedChunks(
@@ -867,7 +866,7 @@ TArray<FChunkUpdateResult> FRealDestructCellGraph::UpdateModifiedChunks(
 
 	for (int32 ChunkId : ModifiedChunkIds)
 	{
-		// 유효성 검사
+		// Validation
 		if (ChunkId < 0 || ChunkId >= ChunkMeshes.Num() || ChunkMeshes[ChunkId] == nullptr)
 		{
 			continue;
@@ -881,22 +880,22 @@ TArray<FChunkUpdateResult> FRealDestructCellGraph::UpdateModifiedChunks(
 		FChunkUpdateResult Result;
 		Result.ChunkId = ChunkId;
 
-		// 1. Old Cache 백업
+		// 1. Backup old cache
 		Result.OldCache = ChunkCellCaches[ChunkId];
 
-		// 2. 메쉬에서 Connected Components 재계산
+		// 2. Recompute connected components from the mesh
 		BuildChunkCellCache(*ChunkMeshes[ChunkId], ChunkId, Result.NewCache);
 
-		// 3. AABB 기반 Old → New 매핑
+		// 3. AABB-based Old -> New mapping
 		Result.Mappings = BuildCellMappings(Result.OldCache, Result.NewCache);
 
-		// 4. 기존 노드 제거
+		// 4. Remove old nodes
 		RemoveNodesForChunk(ChunkId);
 
-		// 5. 새 노드 추가
+		// 5. Add new nodes
 		AddNodesForChunk(ChunkId, Result.NewCache);
 
-		// 6. 캐시 업데이트
+		// 6. Update cache
 		ChunkCellCaches[ChunkId] = Result.NewCache;
 
 		Results.Add(MoveTemp(Result));
@@ -924,7 +923,7 @@ TArray<FCellMapping> FRealDestructCellGraph::BuildCellMappings(
 			continue;
 		}
 
-		// Old Cell과 겹치는 모든 New Cell 찾기
+		// Find all new cells overlapping the old cell
 		for (int32 NewIdx = 0; NewIdx < NewCache.CellIds.Num(); ++NewIdx)
 		{
 			const FBox& NewBounds = NewCache.CellBounds[NewIdx];
@@ -939,7 +938,7 @@ TArray<FCellMapping> FRealDestructCellGraph::BuildCellMappings(
 			}
 		}
 
-		// 매핑된 New Cell이 없으면 소멸
+		// If no mapped new cell, mark as destroyed
 		Map.bDestroyed = (Map.NewCellIds.Num() == 0);
 	}
 
@@ -952,7 +951,7 @@ void FRealDestructCellGraph::RebuildConnectionsForChunks(
 	float PlaneTolerance,
 	float RectTolerance)
 {
-	// 수정된 청크와 관련된 Division Plane 인덱스 수집
+	// Collect division plane indices related to modified chunks
 	TSet<int32> AffectedPlaneIndices;
 
 	for (const FChunkUpdateResult& Result : UpdateResults)
@@ -967,7 +966,7 @@ void FRealDestructCellGraph::RebuildConnectionsForChunks(
 		}
 	}
 
-	// 각 영향받은 평면에서 연결 재검사
+	// Recheck connections on each affected plane
 	for (int32 PlaneIdx : AffectedPlaneIndices)
 	{
 		RebuildConnectionsOnPlane(PlaneIdx, ChunkMeshes, PlaneTolerance, RectTolerance);
@@ -991,7 +990,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 	const int32 ChunkA = Plane.ChunkA;
 	const int32 ChunkB = Plane.ChunkB;
 
-	// 유효성 검사
+	// Validation
 	if (ChunkA < 0 || ChunkA >= ChunkCellCaches.Num() ||
 		ChunkB < 0 || ChunkB >= ChunkCellCaches.Num())
 	{
@@ -1012,7 +1011,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 		return;
 	}
 
-	// 1. 이 평면과 관련된 기존 연결 제거
+	// 1. Remove existing connections for this plane
 	for (FChunkCellNode& Node : Nodes)
 	{
 		Node.Neighbors.RemoveAll([PlaneIndex](const FChunkCellNeighbor& N) {
@@ -1020,7 +1019,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 		});
 	}
 
-	// 2. 새 연결 검사 및 추가
+	// 2. Check and add new connections
 	const FDynamicMesh3& MeshA = *ChunkMeshes[ChunkA];
 	const FDynamicMesh3& MeshB = *ChunkMeshes[ChunkB];
 
@@ -1029,7 +1028,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 		const int32 CellIdA = CacheA.CellIds[CellIdxA];
 		const TArray<int32>& TrianglesA = CacheA.CellTriangles[CellIdxA];
 
-		// CellA의 경계 삼각형 검사
+		// Check boundary triangles for CellA
 		TArray<FChunkBoundaryTriangle2D> BoundaryTrisA;
 		FBox2D BoundsA(ForceInit);
 		bool bHasBoundaryA = HasBoundaryTrianglesOnPlane(
@@ -1047,7 +1046,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 			const int32 CellIdB = CacheB.CellIds[CellIdxB];
 			const TArray<int32>& TrianglesB = CacheB.CellTriangles[CellIdxB];
 
-			// CellB의 경계 삼각형 검사
+			// Check boundary triangles for CellB
 			TArray<FChunkBoundaryTriangle2D> BoundaryTrisB;
 			FBox2D BoundsB(ForceInit);
 			bool bHasBoundaryB = HasBoundaryTrianglesOnPlane(
@@ -1060,7 +1059,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 				continue;
 			}
 
-			// 2D Bounds 중첩 검사
+			// Check 2D bounds overlap
 			if (!BoundsOverlap2D(BoundsA, BoundsB))
 			{
 				continue;
@@ -1096,20 +1095,20 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 				continue;
 			}
 
-			// 연결 확인됨 - 양방향 연결 추가
+			// Connection confirmed - add bidirectional links
 			int32 NodeIdxA = FindNodeIndex(ChunkA, CellIdA);
 			int32 NodeIdxB = FindNodeIndex(ChunkB, CellIdB);
 
 			if (NodeIdxA != INDEX_NONE && NodeIdxB != INDEX_NONE)
 			{
-				// A → B
+				// A -> B
 				FChunkCellNeighbor NeighborB;
 				NeighborB.ChunkId = ChunkB;
 				NeighborB.CellId = CellIdB;
 				NeighborB.DivisionPlaneIndex = PlaneIndex;
 				Nodes[NodeIdxA].Neighbors.Add(NeighborB);
 
-				// B → A
+				// B -> A
 				FChunkCellNeighbor NeighborA;
 				NeighborA.ChunkId = ChunkA;
 				NeighborA.CellId = CellIdA;
@@ -1122,7 +1121,7 @@ void FRealDestructCellGraph::RebuildConnectionsOnPlane(
 
 void FRealDestructCellGraph::RemoveNodesForChunk(int32 ChunkId)
 {
-	// 해당 청크의 노드들을 참조하는 다른 노드의 Neighbor에서 제거
+	// Remove references to this chunk's nodes from other nodes' neighbors
 	for (FChunkCellNode& Node : Nodes)
 	{
 		Node.Neighbors.RemoveAll([ChunkId](const FChunkCellNeighbor& N) {
@@ -1130,7 +1129,7 @@ void FRealDestructCellGraph::RemoveNodesForChunk(int32 ChunkId)
 		});
 	}
 
-	// 해당 청크의 노드 제거
+	// Remove nodes for this chunk
 	Nodes.RemoveAll([ChunkId](const FChunkCellNode& Node) {
 		return Node.ChunkId == ChunkId;
 	});
@@ -1148,9 +1147,9 @@ void FRealDestructCellGraph::AddNodesForChunk(int32 ChunkId, const FChunkCellCac
 		FChunkCellNode NewNode;
 		NewNode.ChunkId = ChunkId;
 		NewNode.CellId = CellId;
-		NewNode.bIsAnchor = false;  // Anchor 여부는 별도로 설정 필요
+		NewNode.bIsAnchor = false;  // Anchor flag must be set separately
 
-		// Anchor 판정: 바닥에 가까운지 확인
+		// Anchor test: check proximity to the floor
 		if (MeshBounds.IsValid && CellId < NewCache.CellBounds.Num())
 		{
 			const FBox& CellBound = NewCache.CellBounds[CellId];
@@ -1158,7 +1157,7 @@ void FRealDestructCellGraph::AddNodesForChunk(int32 ChunkId, const FChunkCellCac
 			{
 				const float FloorZ = MeshBounds.Min.Z;
 				const float CellMinZ = CellBound.Min.Z;
-				// 기본 임계값 10.0f 사용
+				// Use default threshold 10.0f
 				NewNode.bIsAnchor = (CellMinZ - FloorZ) <= 10.0f;
 			}
 		}

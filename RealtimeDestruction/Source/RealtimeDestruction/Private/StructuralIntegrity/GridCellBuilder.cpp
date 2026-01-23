@@ -30,7 +30,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	OutLayout.Reset();
 	OutLayout.CellSize = CellSize;
 
-	// 1. 바운딩 박스 계산 (로컬 스페이스 유지)
+	// 1. Compute bounding box (keep local space)
 	const FBox LocalBounds = SourceMesh->GetBoundingBox();
 	if (!LocalBounds.IsValid)
 	{
@@ -38,10 +38,10 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 		return false;
 	}
 
-	// 스케일 저장 (Collision 체크 시 사용)
+	// Store scale (used for collision checks)
 	OutLayout.MeshScale = MeshScale;
 
-	// 스케일 적용된 크기로 격자 차원 계산 (셀 수 결정용)
+	// Compute grid dimensions using scaled size (for cell counts)
 	const FVector ScaledSize = LocalBounds.GetSize() * MeshScale;
 	const FIntVector GridDimensions(
 		FMath::Max(1, FMath::CeilToInt(ScaledSize.X / CellSize.X)),
@@ -49,17 +49,17 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 		FMath::Max(1, FMath::CeilToInt(ScaledSize.Z / CellSize.Z))
 	);
 
-	// 로컬 스페이스 셀 크기 (스케일 역적용)
+	// Local-space cell size (inverse scale applied)
 	const FVector LocalCellSize(
 		CellSize.X / MeshScale.X,
 		CellSize.Y / MeshScale.Y,
 		CellSize.Z / MeshScale.Z
 	);
 
-	// 2. 격자 설정 (로컬 스페이스)
+	// 2. Configure grid (local space)
 	OutLayout.GridOrigin = LocalBounds.Min;
 	OutLayout.GridSize = GridDimensions;
-	OutLayout.CellSize = LocalCellSize;  // 로컬 스페이스 셀 크기
+	OutLayout.CellSize = LocalCellSize;  // Local-space cell size
 
 	const int32 TotalCells = OutLayout.GetTotalCellCount();
 
@@ -77,10 +77,10 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 		return false;
 	}
 
-	// 3. 비트필드 초기화 (0으로 초기화됨)
+	// 3. Initialize bitfields (zeroed)
 	OutLayout.InitializeBitfields();
 
-	 // 4. Collision 기반 복셀화 (우선순위: Convex > Box > Sphere > Capsule > BoundingBox)
+	 // 4. Collision-based voxelization (priority: Convex > Box > Sphere > Capsule > BoundingBox)
 	 //UBodySetup* BodySetup = SourceMesh->GetBodySetup();
 	 //if (BodySetup)
 	 //{
@@ -88,7 +88,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	 //}
 	 //else
 	 //{
-	 //	// BodySetup 없으면 바운딩 박스로 채우기
+	 //	// If no BodySetup, fill with the bounding box
 	 //	UE_LOG(LogTemp, Warning, TEXT("FGridCellBuilder: No BodySetup, filling bounding box"));
 	 //	for (int32 i = 0; i < TotalCells; i++)
 	 //	{
@@ -101,10 +101,10 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 
 	 FillInsideVoxels(OutLayout);
 
-	// 6. 인접 관계 계산
+	// 6. Compute neighbors
 	CalculateNeighbors(OutLayout);
 
-	// 7. 앵커 판정
+	// 7. Determine anchors
 	DetermineAnchors(OutLayout, AnchorHeightThreshold);
 
 	UE_LOG(LogTemp, Log, TEXT("FGridCellBuilder: Built grid %dx%dx%d, valid cells: %d"),
@@ -123,7 +123,7 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 	OutLayout.Reset();
 	OutLayout.CellSize = CellSize;
 
-	// 1. 바운딩 박스 계산
+	// 1. Compute bounding box
 	FAxisAlignedBox3d Bounds = Mesh.GetBounds();
 	if (Bounds.IsEmpty() || Bounds.Volume() <= 0)
 	{
@@ -136,26 +136,26 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 		FVector(Bounds.Max.X, Bounds.Max.Y, Bounds.Max.Z)
 	);
 
-	// 2. 격자 크기 계산
+	// 2. Compute grid dimensions
 	CalculateGridDimensions(UnrealBounds, CellSize, OutLayout);
 
 	const int32 TotalCells = OutLayout.GetTotalCellCount();
-	if (TotalCells <= 0 || TotalCells > 1000000)  // 100만 셀 제한
+	if (TotalCells <= 0 || TotalCells > 1000000)  // 1,000,000 cell limit
 	{
 		UE_LOG(LogTemp, Warning, TEXT("FGridCellBuilder: Invalid cell count: %d"), TotalCells);
 		return false;
 	}
 
-	// 3. 비트필드 초기화 (0으로 초기화됨)
+	// 3. Initialize bitfields (zeroed)
 	OutLayout.InitializeBitfields();
 
-	// 4. 삼각형 할당
+	// 4. Assign triangles
 	AssignTrianglesToCells(Mesh, OutLayout);
 
-	// 6. 인접 관계 계산
+	// 6. Compute neighbors
 	CalculateNeighbors(OutLayout);
 
-	// 7. 앵커 판정
+	// 7. Determine anchors
 	DetermineAnchors(OutLayout, AnchorHeightThreshold);
 
 	UE_LOG(LogTemp, Log, TEXT("FGridCellBuilder: Built grid %dx%dx%d, valid cells: %d"),
@@ -239,7 +239,7 @@ void FGridCellBuilder::SetAnchorsByFiniteBox(
 		const FVector LocalPos = OutLayout.IdToLocalCenter(CellId);
 		const FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
 
-		// World -> Box Local (회전/스케일 포함)
+		// World -> box local (includes rotation/scale)
 		const FVector BoxSpacePos = BoxTransform.InverseTransformPosition(WorldPos);
 
 		const bool bInside =
@@ -297,8 +297,8 @@ void FGridCellBuilder::SetAnchorsByFiniteSphere(
 		const FVector LocalPos = OutLayout.IdToLocalCenter(CellId);
 		const FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
 
-		// World -> Sphere Local (스케일까지 포함해 역변환)
-		// 이 방식은 SphereTransform에 비균일 스케일이 들어오면 월드에서는 Ellipsoid 판정이 됩니다.
+		// World -> sphere local (inverse transform includes scale)
+		// With non-uniform scale in SphereTransform, this becomes an ellipsoid test in world space.
 		const FVector SphereSpacePos = SphereTransform.InverseTransformPosition(WorldPos);
 
 		const bool bInside = SphereSpacePos.SizeSquared() <= RadiusSq;
@@ -370,10 +370,10 @@ void FGridCellBuilder::AssignTrianglesToCells(
 	const FDynamicMesh3& Mesh,
 	FGridCellLayout& OutLayout)
 {
-	// 1. 먼저 복셀화 수행 (유효 셀 등록)
+	// 1. Voxelize first (register valid cells)
 	VoxelizeMesh(Mesh, OutLayout);
 
-	// 2. 삼각형을 해당 셀에 할당 (희소 배열 사용)
+	// 2. Assign triangles to cells (sparse array)
 	for (int32 TriId : Mesh.TriangleIndicesItr())
 	{
 		const FIndex3i Tri = Mesh.GetTriangle(TriId);
@@ -394,7 +394,7 @@ void FGridCellBuilder::AssignTrianglesToCells(
 
 		const int32 CellId = OutLayout.CoordToId(X, Y, Z);
 
-		// 희소 배열에 삼각형 추가
+		// Add triangle to sparse array
 		FIntArray* Triangles = OutLayout.GetCellTrianglesMutable(CellId);
 		if (Triangles)
 		{
@@ -407,7 +407,7 @@ void FGridCellBuilder::VoxelizeMesh(
 	const UE::Geometry::FDynamicMesh3& Mesh,
 	FGridCellLayout& OutLayout)
 {
-	// DynamicMesh 버전 - 바운딩 박스로 채우기 (Convex 정보 없음)
+	// DynamicMesh version - fill with bounding box (no convex data)
 	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	for (int32 CellId = 0; CellId < TotalCells; CellId++)
 	{
@@ -430,7 +430,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 	const FKAggregateGeom& AggGeom = BodySetup->AggGeom;
 	const int32 TotalCells = OutLayout.GetTotalCellCount();
 
-	// Collision 타입별 개수 확인
+	// Check counts by collision type
 	const int32 NumConvex = AggGeom.ConvexElems.Num();
 	const int32 NumBox = AggGeom.BoxElems.Num();
 	const int32 NumSphere = AggGeom.SphereElems.Num();
@@ -439,7 +439,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 	UE_LOG(LogTemp, Log, TEXT("VoxelizeWithCollision: Convex=%d, Box=%d, Sphere=%d, Capsule=%d"),
 		NumConvex, NumBox, NumSphere, NumCapsule);
 
-	// Convex 데이터 상세 로그
+	// Convex data detail log
 	for (int32 i = 0; i < NumConvex; i++)
 	{
 		const FKConvexElem& Elem = AggGeom.ConvexElems[i];
@@ -447,7 +447,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 			i, Elem.VertexData.Num(), Elem.IndexData.Num());
 	}
 
-	// Box 데이터 상세 로그
+	// Box data detail log
 	for (int32 i = 0; i < NumBox; i++)
 	{
 		const FKBoxElem& Elem = AggGeom.BoxElems[i];
@@ -455,7 +455,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 			i, Elem.X, Elem.Y, Elem.Z, Elem.Center.X, Elem.Center.Y, Elem.Center.Z);
 	}
 
-	// 아무 Collision도 없으면 바운딩 박스로 채우기
+	// If no collision, fill with bounding box
 	if (NumConvex == 0 && NumBox == 0 && NumSphere == 0 && NumCapsule == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("VoxelizeWithCollision: No collision elements, filling bounding box"));
@@ -467,14 +467,14 @@ void FGridCellBuilder::VoxelizeWithCollision(
 		return;
 	}
 
-	// 각 셀에 대해 Collision 내부인지 판단
-	// (셀 중심은 런타임 계산, Collision도 로컬 스페이스)
+	// For each cell, test whether it lies inside collision
+	// (cell centers are computed at runtime; collision is in local space)
 	for (int32 CellId = 0; CellId < TotalCells; CellId++)
 	{
 		const FVector CellCenterLocal = OutLayout.IdToLocalCenter(CellId);
 		bool bCellExists = false;
 
-		// Convex 체크
+		// Convex check
 		for (const FKConvexElem& Elem : AggGeom.ConvexElems)
 		{
 			if (IsPointInsideConvex(Elem, CellCenterLocal))
@@ -484,7 +484,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 			}
 		}
 
-		// Box 체크
+		// Box check
 		if (!bCellExists)
 		{
 			for (const FKBoxElem& Elem : AggGeom.BoxElems)
@@ -497,7 +497,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 			}
 		}
 
-		// Sphere 체크
+		// Sphere check
 		if (!bCellExists)
 		{
 			for (const FKSphereElem& Elem : AggGeom.SphereElems)
@@ -510,7 +510,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 			}
 		}
 
-		// Capsule 체크
+		// Capsule check
 		if (!bCellExists)
 		{
 			for (const FKSphylElem& Elem : AggGeom.SphylElems)
@@ -523,7 +523,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 			}
 		}
 
-		// 유효 셀 등록
+		// Register valid cell
 		if (bCellExists)
 		{
 			OutLayout.SetCellExists(CellId, true);
@@ -539,7 +539,7 @@ void FGridCellBuilder::VoxelizeWithConvex(
 	const UBodySetup* BodySetup,
 	FGridCellLayout& OutLayout)
 {
-	// 호환성을 위해 유지 - VoxelizeWithCollision으로 위임
+	// Kept for compatibility - delegate to VoxelizeWithCollision
 	VoxelizeWithCollision(BodySetup, OutLayout);
 }
 
@@ -548,13 +548,13 @@ void FGridCellBuilder::VoxelizeWithConvex(
       const UStaticMesh* SourceMesh,
       FGridCellLayout& OutLayout)
   {
-      // MeshDescription 가져오기 (Mesh에 대한 자세한 정보가 있음)
+      // Get MeshDescription (contains detailed mesh data)
       UStaticMeshDescription* StaticMeshDesc = const_cast<UStaticMesh*>(SourceMesh)->GetStaticMeshDescription(0);
       const FMeshDescription* MeshDesc = StaticMeshDesc ? &StaticMeshDesc->GetMeshDescription() : nullptr;
 
       if (!MeshDesc)
       {
-          // MeshDescription 없으면 바운딩 박스로 채우기 (fallback)
+          // If no MeshDescription, fill with bounding box (fallback)
           const int32 TotalCells = OutLayout.GetTotalCellCount();
           for (int32 i = 0; i < TotalCells; i++)
           {
@@ -564,24 +564,24 @@ void FGridCellBuilder::VoxelizeWithConvex(
           return;
       }
 
-      // 정점의 Attribute 가져오기
+      // Get vertex attributes
       FStaticMeshConstAttributes Attributes(*MeshDesc);
       TVertexAttributesConstRef<FVector3f> VertexPositions =
           Attributes.GetVertexPositions();
 
-      // 모든 삼각형 순회
+      // Iterate all triangles
       for (const FTriangleID TriID : MeshDesc->Triangles().GetElementIDs())
       {
-          // 삼각형의 3개 정점 인덱스 가져오기
+          // Get three vertex indices of the triangle
           TArrayView<const FVertexID> TriVertices =
               MeshDesc->GetTriangleVertices(TriID);
 
-          // 3개 정점 좌표
+          // Three vertex positions
           const FVector V0 = FVector(VertexPositions[TriVertices[0]]);
           const FVector V1 = FVector(VertexPositions[TriVertices[1]]);
           const FVector V2 = FVector(VertexPositions[TriVertices[2]]);
 
-          // 삼각형의 AABB 계산
+          // Compute triangle AABB
           FVector TriMin, TriMax;
           TriMin.X = FMath::Min3(V0.X, V1.X, V2.X);
           TriMin.Y = FMath::Min3(V0.Y, V1.Y, V2.Y);
@@ -590,7 +590,7 @@ void FGridCellBuilder::VoxelizeWithConvex(
           TriMax.Y = FMath::Max3(V0.Y, V1.Y, V2.Y);
           TriMax.Z = FMath::Max3(V0.Z, V1.Z, V2.Z);
 
-          // 삼각형 AABB가 걸치는 셀 범위 계산
+          // Compute cell range overlapped by the triangle AABB
           const int32 MinCellX = FMath::Clamp(
               FMath::FloorToInt((TriMin.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
               0, OutLayout.GridSize.X - 1);
@@ -611,7 +611,7 @@ void FGridCellBuilder::VoxelizeWithConvex(
               FMath::FloorToInt((TriMax.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
               0, OutLayout.GridSize.Z - 1);
 
-          // 해당 범위의 모든 셀을 유효하게 설정
+          // Mark all cells in range as valid
           for (int32 Z = MinCellZ; Z <= MaxCellZ; Z++)
           {
               for (int32 Y = MinCellY; Y <= MaxCellY; Y++)
@@ -620,13 +620,13 @@ void FGridCellBuilder::VoxelizeWithConvex(
                   {
 					  const int32 CellId = OutLayout.CoordToId(X, Y, Z);
 
-					  // 이미 포함했으면 skip
+					  // Skip if already included
 					  if (OutLayout.GetCellExists(CellId))
 					  {
 						  continue;
 					  }
 
-					  // 없을 때만 교차 검사
+					  // Only test intersection when not already included
 					  FVector CellMin(
 						  OutLayout.GridOrigin.X + X * OutLayout.CellSize.X,
 						  OutLayout.GridOrigin.Y + Y * OutLayout.CellSize.Y,
@@ -650,25 +650,25 @@ void FGridCellBuilder::VoxelizeWithConvex(
 
 bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& V1, const FVector& V2, const FVector& BoxMin, const FVector& BoxMax)
 {
-	// 박스가 0,0,0에 있다고 가정하고 식을 세움, 연산 편리성을 위해서
+	// Assume the box is at (0,0,0) to simplify the math
 	 
-	// 박스 중심과 반 크기 계산
+	// Compute box center and half size
 	const FVector BoxCenter = (BoxMin + BoxMax) * 0.5f;
 	const FVector BoxHalfSize = (BoxMax - BoxMin) * 0.5f;
 
-	// 삼각형을 박스 중심 기준으로 이동
+	// Move the triangle relative to the box center
 	const FVector T0 = V0 - BoxCenter;
 	const FVector T1 = V1 - BoxCenter;
 	const FVector T2 = V2 - BoxCenter;
 
-	// 삼각형 엣지 벡터
+	// Triangle edge vectors
 	const FVector E0 = T1 - T0;
 	const FVector E1 = T2 - T1;
 	const FVector E2 = T0 - T2;
 
- 	// 1. 3개 박스 축 (X, Y, Z)
+ 	// 1. 3 box axes (X, Y, Z)
  
-	// X축
+	// X axis
 	{
 		const float Min = FMath::Min3(T0.X, T1.X, T2.X);
 		const float Max = FMath::Max3(T0.X, T1.X, T2.X);
@@ -678,7 +678,7 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 		}
 	}
 
-	// Y축
+	// Y axis
 	{
 		const float Min = FMath::Min3(T0.Y, T1.Y, T2.Y);
 		const float Max = FMath::Max3(T0.Y, T1.Y, T2.Y);
@@ -688,7 +688,7 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 		}
 	}
 
-	// Z축
+	// Z axis
 	{
 		const float Min = FMath::Min3(T0.Z, T1.Z, T2.Z);
 		const float Max = FMath::Max3(T0.Z, T1.Z, T2.Z);
@@ -698,7 +698,7 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 		}
 	}
 
-	// 2. 삼각형 노멀 축
+	// 2. Triangle normal axis
 	{
 		const FVector Normal = FVector::CrossProduct(E0, E1);
 		const float D = FVector::DotProduct(Normal, T0);
@@ -711,18 +711,18 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 		}
 	}
 
-	// 3. 9개 교차 축 (Cross(박스, 삼각형 엣지))
+	// 3. 9 cross axes (Cross(box axes, triangle edges))
 	
-	// 헬퍼 람다: 축에 대한 분리 테스트
+	// Helper lambda: separating axis test
 	auto TestAxis = [&](const FVector& Axis) -> bool
 		{
-			// 축이 거의 0이면 스킵
+			// Skip if the axis is nearly zero
 			if (Axis.SizeSquared() < KINDA_SMALL_NUMBER)
 			{
-				return true; // 분리 안됨 (테스트 통과)
+				return true; // Not separated (test passes)
 			}
 
-			// 삼각형 정점들을 축에 투영
+			// Project triangle vertices onto the axis
 			const float P0 = FVector::DotProduct(Axis, T0);
 			const float P1 = FVector::DotProduct(Axis, T1);
 			const float P2 = FVector::DotProduct(Axis, T2);
@@ -730,61 +730,61 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 			const float TriMin = FMath::Min3(P0, P1, P2);
 			const float TriMax = FMath::Max3(P0, P1, P2);
 
-			// 박스를 축에 투영 (박스 반크기의 축 투영 합)
+			// Project the box onto the axis (sum of half-extent projections)
 			const float BoxR = BoxHalfSize.X * FMath::Abs(Axis.X) +
 				BoxHalfSize.Y * FMath::Abs(Axis.Y) +
 				BoxHalfSize.Z * FMath::Abs(Axis.Z);
 
-			// 분리 테스트
+			// Separating axis test
 			if (TriMin > BoxR || TriMax < -BoxR)
 			{
-				return false; // 분리됨!
+				return false; // Separated!
 			}
-			return true; // 분리 안됨
+			return true; // Not separated
 		};
 
-	// Cross(X축, 엣지들) 
+	// Cross(X axis, edges)
 	if (!TestAxis(FVector(0, -E0.Z, E0.Y))) return false; 
 	if (!TestAxis(FVector(0, -E1.Z, E1.Y))) return false; 
 	if (!TestAxis(FVector(0, -E2.Z, E2.Y))) return false; 
 
-	// Cross(Y축, 엣지들)
+	// Cross(Y axis, edges)
 	if (!TestAxis(FVector(E0.Z, 0, -E0.X))) return false; 
 	if (!TestAxis(FVector(E1.Z, 0, -E1.X))) return false; 
 	if (!TestAxis(FVector(E2.Z, 0, -E2.X))) return false; 
 
-	// Cross(Z축, 엣지들)
+	// Cross(Z axis, edges)
 	if (!TestAxis(FVector(-E0.Y, E0.X, 0))) return false; 
 	if (!TestAxis(FVector(-E1.Y, E1.X, 0))) return false; 
 	if (!TestAxis(FVector(-E2.Y, E2.X, 0))) return false; 
 
-	// 모든 테스트 통과 == 교차!
+	// All tests passed == intersect
 	return true;
 }
 
 void FGridCellBuilder::FillInsideVoxels(FGridCellLayout& OutLayout)
 {
-	// 방문 여부 체크용 (메모리 아끼려면 TBitArray가 좋지만 편의상 TSet 사용)
+	// Visited check (TBitArray is more memory-friendly, but TSet is used for convenience)
 	TSet<int32> VisitedOutside;
 	TQueue<int32> Queue;
 
 	const FIntVector GridSize = OutLayout.GridSize;
 
-	// 1. 초기화: 격자의 가장자리(Boundary) 6면을 큐에 넣음 (여기는 무조건 바깥 공기임)
+	// 1. Initialize: enqueue the 6 boundary faces of the grid (always outside air)
 	for (int32 Z = 0; Z < GridSize.Z; ++Z)
 	{
 		for (int32 Y = 0; Y < GridSize.Y; ++Y)
 		{
 			for (int32 X = 0; X < GridSize.X; ++X)
 			{
-				// 테두리 라인인지 확인
+				// Check if on the boundary
 				if (X == 0 || X == GridSize.X - 1 ||
 					Y == 0 || Y == GridSize.Y - 1 ||
 					Z == 0 || Z == GridSize.Z - 1)
 				{
 					int32 CellId = OutLayout.CoordToId(X, Y, Z);
 
-					// 테두리인데 껍데기(Mesh)가 없다면 -> 확실한 공기(Air)
+					// Boundary without shell (mesh) -> definitely air
 					if (!OutLayout.GetCellExists(CellId))
 					{
 						Queue.Enqueue(CellId);
@@ -795,12 +795,12 @@ void FGridCellBuilder::FillInsideVoxels(FGridCellLayout& OutLayout)
 		}
 	}
 
-	// 6방향 탐색용
+	// For 6-direction traversal
 	static const FIntVector Directions[6] = {
 		{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
 	};
 
-	// 2. BFS 탐색 (바깥 공기 전파)
+	// 2. BFS traversal (propagate outside air)
 	int32 CurrentId;
 	while (Queue.Dequeue(CurrentId))
 	{
@@ -810,35 +810,35 @@ void FGridCellBuilder::FillInsideVoxels(FGridCellLayout& OutLayout)
 		{
 			FIntVector NextCoord = CurrentCoord + Dir;
 
-			// 격자 밖이면 패스
+			// Skip if outside the grid
 			if (!OutLayout.IsValidCoord(NextCoord)) continue;
 
 			int32 NextId = OutLayout.CoordToId(NextCoord);
 
-			// 이미 방문했거나(공기), 껍데기(벽)라면 더 못 들어감
+			// If already visited (air) or shell (wall), cannot proceed
 			if (VisitedOutside.Contains(NextId) || OutLayout.GetCellExists(NextId))
 			{
 				continue;
 			}
 
-			// 여기까지 왔으면 빈 공간임 -> 방문 처리 후 큐에 추가
+			// Reached empty space -> mark visited and enqueue
 			VisitedOutside.Add(NextId);
 			Queue.Enqueue(NextId);
 		}
 	}
 
-	// 3. 반전 (Invert): 공기가 닿지 못한 곳 = 내부
+	// 3. Invert: areas unreachable by air are interior
 	const int32 TotalCells = OutLayout.GetTotalCellCount(); 
 
 	for (int32 i = 0; i < TotalCells; ++i)
 	{
-		// 이미 껍데기면 건너뜀
+		// Skip if already shell
 		if (OutLayout.GetCellExists(i)) continue;
 
-		// 바깥 공기가 도달하지 못한 곳 == 내부
+		// Outside air cannot reach -> interior
 		if (!VisitedOutside.Contains(i))
 		{
-			OutLayout.SetCellExists(i, true); // 채운다!
+			OutLayout.SetCellExists(i, true); // Fill
 			OutLayout.RegisterValidCell(i); 
 		}
 	}
@@ -850,7 +850,7 @@ bool FGridCellBuilder::IsPointInsideConvex(
 {
 	const TArray<FVector>& Vertices = ConvexElem.VertexData;
 
-	// VertexData가 없으면 ElemBox (Convex의 바운딩 박스)로 fallback
+	// If no VertexData, fall back to ElemBox (convex bounding box)
 	if (Vertices.Num() < 4)
 	{
 		const FBox& ElemBox = ConvexElem.ElemBox;
@@ -861,7 +861,7 @@ bool FGridCellBuilder::IsPointInsideConvex(
 		return false;
 	}
 
-	// 바운딩 박스 계산 (빠른 reject)
+	// Compute bounding box (quick reject)
 	FBox ConvexBounds(ForceInit);
 	FVector Centroid = FVector::ZeroVector;
 	for (const FVector& V : Vertices)
@@ -871,7 +871,7 @@ bool FGridCellBuilder::IsPointInsideConvex(
 	}
 	Centroid /= Vertices.Num();
 
-	// 바운딩 박스 외부면 빠르게 거부
+	// Quick reject if outside the bounding box
 	if (!ConvexBounds.IsInside(Point))
 	{
 		return false;
@@ -879,14 +879,14 @@ bool FGridCellBuilder::IsPointInsideConvex(
 
 	const TArray<int32>& IndexData = ConvexElem.IndexData;
 
-	// IndexData가 없으면 바운딩 박스 체크로 대체
+	// If no IndexData, fall back to bounding box check
 	if (IndexData.Num() < 3)
 	{
 		return true;
 	}
 
-	// 삼각형 면들로 내부 판정
-	// Centroid를 기준으로 법선 방향 결정 (Centroid는 항상 내부에 있음)
+	// Determine inside using triangle faces
+	// Set normal direction using the centroid (centroid is always inside)
 	for (int32 i = 0; i + 2 < IndexData.Num(); i += 3)
 	{
 		if (IndexData[i] >= Vertices.Num() ||
@@ -900,18 +900,18 @@ bool FGridCellBuilder::IsPointInsideConvex(
 		const FVector& V1 = Vertices[IndexData[i + 1]];
 		const FVector& V2 = Vertices[IndexData[i + 2]];
 
-		// 면의 법선 계산
+		// Compute face normal
 		FVector Normal = FVector::CrossProduct(V1 - V0, V2 - V0).GetSafeNormal();
 
-		// Centroid가 법선의 반대쪽에 있어야 함 (법선은 외부를 향해야 함)
-		// 만약 Centroid가 법선 방향에 있으면 법선 뒤집기
+		// Centroid must be on the opposite side (normal should face outward)
+		// Flip the normal if the centroid lies on the normal side
 		const float CentroidDist = FVector::DotProduct(Centroid - V0, Normal);
 		if (CentroidDist > 0)
 		{
-			Normal = -Normal;  // 법선 뒤집기
+			Normal = -Normal;  // Flip normal
 		}
 
-		// 점이 면의 바깥쪽에 있으면 Convex 외부
+		// If the point is outside any face, it's outside the convex
 		const float Distance = FVector::DotProduct(Point - V0, Normal);
 		if (Distance > KINDA_SMALL_NUMBER)
 		{
@@ -926,19 +926,19 @@ bool FGridCellBuilder::IsPointInsideBox(
 	const FKBoxElem& BoxElem,
 	const FVector& Point)
 {
-	// Center 기준으로 상대 위치 계산
+	// Compute relative position to the center
 	FVector LocalPoint = Point - BoxElem.Center;
 
-	// 회전이 있으면 적용
+	// Apply rotation if present
 	if (!BoxElem.Rotation.IsNearlyZero())
 	{
 		LocalPoint = BoxElem.Rotation.UnrotateVector(LocalPoint);
 	}
 
-	// Half extents (X, Y, Z는 전체 크기이므로 절반으로)
+	// Half extents (X, Y, Z are full sizes, so halve them)
 	const FVector HalfExtent(BoxElem.X * 0.5f, BoxElem.Y * 0.5f, BoxElem.Z * 0.5f);
 
-	// AABB 내부 판정
+	// AABB containment check
 	return FMath::Abs(LocalPoint.X) <= HalfExtent.X &&
 	       FMath::Abs(LocalPoint.Y) <= HalfExtent.Y &&
 	       FMath::Abs(LocalPoint.Z) <= HalfExtent.Z;
@@ -948,7 +948,7 @@ bool FGridCellBuilder::IsPointInsideSphere(
 	const FKSphereElem& SphereElem,
 	const FVector& Point)
 {
-	// 구 중심에서 점까지 거리
+	// Distance from sphere center to point
 	const FVector Center = SphereElem.Center;
 	const float RadiusSq = SphereElem.Radius * SphereElem.Radius;
 
@@ -959,26 +959,26 @@ bool FGridCellBuilder::IsPointInsideCapsule(
 	const FKSphylElem& CapsuleElem,
 	const FVector& Point)
 {
-	// Capsule의 로컬 공간으로 변환
+	// Transform to capsule local space
 	const FTransform CapsuleTransform = CapsuleElem.GetTransform();
 	const FVector LocalPoint = CapsuleTransform.InverseTransformPosition(Point);
 
 	const float Radius = CapsuleElem.Radius;
 	const float HalfLength = CapsuleElem.Length * 0.5f;
 
-	// Z축 방향으로 캡슐이 정렬되어 있다고 가정
-	// 캡슐 = 원통 + 양 끝 반구
+	// Assume capsule is aligned along the Z axis
+	// Capsule = cylinder + two hemispheres
 
-	// Z 좌표가 원통 부분인지 반구 부분인지 확인
+	// Check whether Z is in the cylinder or hemisphere region
 	if (FMath::Abs(LocalPoint.Z) <= HalfLength)
 	{
-		// 원통 부분: XY 평면에서 거리 체크
+		// Cylinder section: distance check in XY plane
 		const float DistXYSq = LocalPoint.X * LocalPoint.X + LocalPoint.Y * LocalPoint.Y;
 		return DistXYSq <= Radius * Radius;
 	}
 	else
 	{
-		// 반구 부분: 가장 가까운 반구 중심에서 거리 체크
+		// Hemisphere section: distance check from nearest hemisphere center
 		const FVector HemiCenter(0, 0, LocalPoint.Z > 0 ? HalfLength : -HalfLength);
 		return FVector::DistSquared(LocalPoint, HemiCenter) <= Radius * Radius;
 	}
@@ -986,14 +986,14 @@ bool FGridCellBuilder::IsPointInsideCapsule(
 
 void FGridCellBuilder::CalculateNeighbors(FGridCellLayout& OutLayout)
 {
-	// 6방향 (±X, ±Y, ±Z)
+	// 6 directions (+/-X, +/-Y, +/-Z)
 	static const FIntVector Directions[6] = {
 		{1, 0, 0}, {-1, 0, 0},
 		{0, 1, 0}, {0, -1, 0},
 		{0, 0, 1}, {0, 0, -1}
 	};
 
-	// 유효 셀만 순회 (희소 배열)
+	// Iterate valid cells only (sparse array)
 	for (int32 CellId : OutLayout.GetValidCellIds())
 	{
 		const FIntVector Coord = OutLayout.IdToCoord(CellId);
@@ -1007,7 +1007,7 @@ void FGridCellBuilder::CalculateNeighbors(FGridCellLayout& OutLayout)
 		{
 			const FIntVector NeighborCoord = Coord + Dir;
 
-			// 범위 체크
+			// Range check
 			if (!OutLayout.IsValidCoord(NeighborCoord))
 			{
 				continue;
@@ -1029,10 +1029,10 @@ void FGridCellBuilder::DetermineAnchors(
 {
 	const float FloorZ = OutLayout.GridOrigin.Z;
 
-	// 유효 셀만 순회 (희소 배열)
+	// Iterate valid cells only (sparse array)
 	for (int32 CellId : OutLayout.GetValidCellIds())
 	{
-		// Z=0 레이어이거나 바닥에 가까운 셀은 앵커
+		// Cells on the Z=0 layer or near the floor are anchors
 		const FIntVector Coord = OutLayout.IdToCoord(CellId);
 		const float CellMinZ = OutLayout.GridOrigin.Z + Coord.Z * OutLayout.CellSize.Z;
 

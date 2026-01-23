@@ -373,7 +373,7 @@ static FAutoConsoleCommandWithWorld GDestructionPerfCmd(
 			return;
 		}
 
-		Debugger->PrintPerformanceStats();
+		// Debugger->PrintPerformanceStats();
 	})
 );
 

@@ -842,12 +842,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 	}
 
 	// Compute SuperCellSize: min(GridSize, 8)
-	//SupercellSize = FIntVector(
-	//	FMath::Min(GridCache.GridSize.X, 8),
-	//	FMath::Min(GridCache.GridSize.Y, 8),
-	//	FMath::Min(GridCache.GridSize.Z, 8)
-	//);
-	SupercellSize = FIntVector(8 ,8 , 8);
+	SupercellSize = FIntVector(8, 8, 8);
 
 	// A SuperCell requires a full SupercellSize fill along each axis
 	// Example: GridSize.X = 5, SupercellSize.X = 4 -> SupercellCount.X = 1 (1 leftover is orphan)
@@ -923,28 +918,6 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 				{ 
 					MarkSupercellBroken(SupercellId);
 				}
-				//const int32 SupercellId = SupercellCoordToId(SCX, SCY, SCZ);
-
-				//// Cell range for this SuperCell
-				//const int32 StartX = SCX * SupercellSize.X;
-				//const int32 StartY = SCY * SupercellSize.Y;
-				//const int32 StartZ = SCZ * SupercellSize.Z;
-
-				//for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
-				//{
-				//	for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
-				//	{
-				//		for (int32 LX = 0; LX < SupercellSize.X; ++LX)
-				//		{
-				//			const int32 CellId = GridCache.CoordToId(
-				//				StartX + LX,
-				//				StartY + LY,
-				//				StartZ + LZ
-				//			);
-				//			CellToSupercell[CellId] = SupercellId;
-				//		}
-				//	}
-				//}
 			}
 		}
 	}

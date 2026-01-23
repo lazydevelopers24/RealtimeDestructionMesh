@@ -418,7 +418,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_ProcessCellDestructionWithSubCells);
 
-		DestructionResult = FCellDestructionSystem::ProcessCellDestructionWithSubCells(
+		DestructionResult = FCellDestructionSystem::ProcessCellDestructionSubCellLevel(
 			GridCellLayout,
 			QuantizedInput,
 			GetComponentTransform(),
@@ -426,7 +426,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	}
 	else
 	{
-		DestructionResult = FCellDestructionSystem::CalculateDestroyedCells(
+		DestructionResult = FCellDestructionSystem::ProcessCellDestruction(
 			GridCellLayout,
 			QuantizedInput,
 			GetComponentTransform(),
