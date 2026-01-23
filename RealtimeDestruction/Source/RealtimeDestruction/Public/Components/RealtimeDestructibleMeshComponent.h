@@ -857,6 +857,16 @@ public:
 	 * @return 제거 성공 여부
 	 */
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
+	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TSet<FIntVector>& InVoxels, FVector InCellSize, double InBoxExpand = 1.0f );
+
+
+	//TODO: 적절한 값들을 찾고 없앨 예정
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "1", ClampMax = "8"))
+	int32 DebrisSplitCount = 1;
+
+	//TODO: 적절한 값들을 찾고 없앨 예정
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
+	int32 MinCellsForDebris = 1;
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
 

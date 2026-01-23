@@ -713,42 +713,66 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				Ops.bFillHoles = true;
 				Ops.bSimplifyOutput = false;
 
-				FDynamicMesh3* ToolMesh = UnionResult.SharedToolMesh.Get();
-				FDynamicMesh3 ToolMeshForIntersection = *ToolMesh;
-				// ToolMeshForIntersection.ReverseOrientation();
-				// ToolMesh->ReverseOrientation();
-
-				// intersection
-				FDynamicMesh3 Debris;
-				bool bSuccessIntersection = ApplyMeshBooleanAsync(
-					&WorkMesh,
-					&ToolMeshForIntersection,
-					&Debris,
-					EGeometryScriptBooleanOperation::Intersection,
-					Ops);
+					//FDynamicMesh3* ToolMesh = UnionResult.SharedToolMesh.Get();
+					//FDynamicMesh3 ToolMeshForIntersection = *ToolMesh;
+					//ToolMeshForIntersection.ReverseOrientation();
+					//ToolMesh->ReverseOrientation();
+					
+					FDynamicMesh3 LocalToolMesh = *UnionResult.SharedToolMesh;
+					//LocalToolMesh.ReverseOrientation();   
+					//FDynamicMesh3 ToolMeshForIntersection = LocalToolMesh;
+					// intersection
+					/*FDynamicMesh3 Debris;
+					bool bSuccessIntersection = ApplyMeshBooleanAsync(
+						&WorkMesh,
+						&ToolMeshForIntersection,
+						&Debris,
+						EGeometryScriptBooleanOperation::Intersection,
+						Ops);
 
 				if (bSuccessIntersection && Debris.TriangleCount() > 0)
 				{
+						if (UnionResult.IslandContext.IsValid())
+						{
+							FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
+							FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
+							FMeshIndexMappings Mappings;
+							Editor.AppendMesh(&Debris, Mappings);
+							bHasDebris = true;
+						}
+					}*/
+
 					if (UnionResult.IslandContext.IsValid())
 					{
-						FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
-						FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
-						FMeshIndexMappings Mappings;
-						Editor.AppendMesh(&Debris, Mappings);
-						bHasDebris = true;
-					}
-				}
+						FDynamicMesh3 Debris;
+						bool bSuccessIntersection = ApplyMeshBooleanAsync(
+							&WorkMesh,
+							&LocalToolMesh,
+							&Debris,
+							EGeometryScriptBooleanOperation::Intersection,
+							Ops);
 
-				// subtract
-				bSuccess = ApplyMeshBooleanAsync(
-					&WorkMesh,
-					ToolMesh,
-					&ResultMesh,
-					EGeometryScriptBooleanOperation::Subtract,
-					Ops);
+						if (bSuccessIntersection && Debris.TriangleCount() > 0)
+						{
+							FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
+							FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
+							FMeshIndexMappings Mappings;
+							Editor.AppendMesh(&Debris, Mappings);
+							bHasDebris = true;
+						}
+
+					}
+
+					// subtract
+					bSuccess = ApplyMeshBooleanAsync(
+						&WorkMesh,
+						&LocalToolMesh,
+						&ResultMesh,
+						EGeometryScriptBooleanOperation::Subtract,
+						Ops);
+				}
 			}
 		}
-	}
 
 	// ===== 5. Apply results (GameThread) =====
 	if (bSuccess)

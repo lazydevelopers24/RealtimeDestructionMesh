@@ -1171,6 +1171,7 @@ void URealtimeDestructibleMeshComponent::UpdateDirtyCollisionChunks()
 
 bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_RemoveTrianglesForDetachedCells);
 	using namespace UE::Geometry;
 
 	if (DetachedCellIds.Num() == 0 || ChunkMeshComponents.Num() == 0)
@@ -1200,456 +1201,833 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		);
 		BaseCells.Add(GridPos);
 	}
+	
+	// 2. BaseCells를 DebrisSplitCount개로 분할
+	TArray<TSet<FIntVector>> FinalPieces;
 
-	// 인접 셀 26방향 확장
-	TSet<FIntVector> OccupiedCells = BaseCells;
-	for (const FIntVector& Pos : BaseCells)
+	if (DebrisSplitCount <= 1 || BaseCells.Num() <= 1)
 	{
-		for (int32 dx = -1; dx <= 1; ++dx)
+		FinalPieces.Add(BaseCells);
+	}
+	else
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Split);
+
+		// 재귀 이분할: 가장 큰 조각을 가장 긴 축 기준 중앙값으로 이분
+		FinalPieces.Add(BaseCells);
+
+		while (FinalPieces.Num() < DebrisSplitCount)
 		{
-			for (int32 dy = -1; dy <= 1; ++dy)
+			// 가장 큰 조각 찾기 
+			int32 LargestIdx = 0;
+			for (int32 i = 1; i < FinalPieces.Num(); i++)
 			{
-				for (int32 dz = -1; dz <= 1; ++dz)
+				if (FinalPieces[i].Num() > FinalPieces[LargestIdx].Num())
 				{
-					OccupiedCells.Add(FIntVector(Pos.X + dx, Pos.Y + dy, Pos.Z + dz));
+					LargestIdx = i;
 				}
 			}
+
+			// 더 이상 분할 불가
+			// 1이 아니라 MinCellsForDebris로 변경아님? 
+			if (FinalPieces[LargestIdx].Num() <= 1)
+			{
+				break; 
+			}
+
+			// Bounding Box 계산
+			FIntVector MinBoundingBox(TNumericLimits<int32>::Max());
+			FIntVector MaxBoundingBox(TNumericLimits<int32>::Lowest());
+			for (const FIntVector& Debris : FinalPieces[LargestIdx])
+			{
+				MinBoundingBox.X = FMath::Min(MinBoundingBox.X, Debris.X);
+				MinBoundingBox.Y = FMath::Min(MinBoundingBox.Y, Debris.Y);
+				MinBoundingBox.Z = FMath::Min(MinBoundingBox.Z, Debris.Z);
+				MaxBoundingBox.X = FMath::Max(MaxBoundingBox.X, Debris.X);
+				MaxBoundingBox.Y = FMath::Max(MaxBoundingBox.Y, Debris.Y);
+				MaxBoundingBox.Z = FMath::Max(MaxBoundingBox.Z, Debris.Z);
+			}
+
+			// 가장 긴 축 찾기
+			int32 ExtX = MaxBoundingBox.X - MinBoundingBox.X;
+			int32 ExtY = MaxBoundingBox.Y - MinBoundingBox.Y;
+			int32 ExtZ = MaxBoundingBox.Z - MinBoundingBox.Z;
+
+			int32 SplitAxis;
+			if (ExtX >= ExtY && ExtX >= ExtZ)
+			{
+				SplitAxis = 0;
+			}
+			else if (ExtY >= ExtZ)
+			{
+				SplitAxis = 1;
+			}
+			else
+			{
+				SplitAxis = 2;
+			}
+			
+			// 중앙값 계산
+			TArray<int32> Values;
+			for (const FIntVector& Debris : FinalPieces[LargestIdx])
+			{
+				int32 Val = (SplitAxis == 0) ? Debris.X : (SplitAxis == 1 ? Debris.Y : Debris.Z);
+				Values.Add(Val);
+			}
+			Values.Sort();
+			int32 Median = Values[Values.Num() / 2];
+
+			// 분할
+			TSet<FIntVector> Left, Right;
+			for (const FIntVector& Debris : FinalPieces[LargestIdx])
+			{
+				int32 Val = (SplitAxis == 0) ? Debris.X : (SplitAxis == 1 ? Debris.Y : Debris.Z);
+				if (Val < Median)
+					Left.Add(Debris);
+				else
+					Right.Add(Debris);
+			}
+
+			// 한쪽이 비면 분할 중단
+			if (Left.Num() == 0 || Right.Num() == 0)
+			{
+				break;
+			}
+
+			// 교체
+			FinalPieces.RemoveAt(LargestIdx);
+			FinalPieces.Add(MoveTemp(Left));
+			FinalPieces.Add(MoveTemp(Right));
 		}
 	}
 
-	UE_LOG(LogTemp, Warning, TEXT("BaseCells=%d, ExpandedCells=%d"), BaseCells.Num(), OccupiedCells.Num());
-
-	// 파편 정리용으로 저장
-	LastOccupiedCells = OccupiedCells;
-
-	// 2. Greedy Meshing으로 ToolMesh 생성
+	// 3. 각 조각별로 ToolMesh 생성 + Enqueue
 	const double BoxExpand = 1.0;
+	for (const TSet<FIntVector>& Piece : FinalPieces)
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_FinalPieces);
 
-	FDynamicMesh3 ToolMesh;
-	ToolMesh.EnableTriangleGroups();
+		// 빈공간들이 있음, 그 부분들 띄어넘는 코드가 필요함 
+		if (Piece.Num() == 0)
+		{
+			continue;
+		}
+
+		// 넉넉 잡게 하기 위해서 26방향 확장 
+		TSet<FIntVector> Expanded = Piece;
+		for (const FIntVector& Pos : Piece)
+		{
+			for (int32 dx = -1; dx <= 1; ++dx)
+			{
+				for (int32 dy = -1; dy <= 1; ++dy)
+				{
+					for (int32 dz = -1; dz <= 1; ++dz)
+					{
+						Expanded.Add(FIntVector(Pos.X + dx, Pos.Y + dy, Pos.Z + dz));
+					}
+				}
+			}
+		}
+
+		LastOccupiedCells.Append(Expanded);
+
+		// Greedy Mesh 생성 
+		FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(Expanded, CellSizeVec, BoxExpand);
+
+		if (ToolMesh.TriangleCount() == 0)
+		{
+			continue;
+		}
+
+		// FillHoles 
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_FillHoles);
+
+			FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
+			for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
+			{
+				FSimpleHoleFiller Filler(&ToolMesh, Loop);
+				if (Filler.Fill())
+				{
+					/*
+					if (Filler.NewTriangles.Num() > 0)
+					{
+						int32 NewTriId = Filler.NewTriangles[0];
+						FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
+						bool bNeedFlip = false;
+
+						for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
+						{
+							int32 Va = NewTri[i];
+							int32 Vb = NewTri[(i + 1) % 3];
+							int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
+							if (EdgeId != FDynamicMesh3::InvalidID)
+							{
+								FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
+								int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
+								if (OtherTriId != FDynamicMesh3::InvalidID &&
+									!Filler.NewTriangles.Contains(OtherTriId))
+								{
+									FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
+									for (int32 j = 0; j < 3; ++j)
+									{
+										if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
+										{
+											bNeedFlip = true;
+											break;
+										}
+										else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
+										{
+											break;
+										}
+									}
+									break;
+								}
+							}
+						}
+
+						if (bNeedFlip)
+						{
+							for (int32 TriId : Filler.NewTriangles)
+							{
+								ToolMesh.ReverseTriOrientation(TriId);
+							}
+						}
+					}
+						*/
+				}
+			}
+		}
+
+		// Smoothing 
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
+
+			ApplyHCLaplacianSmoothing(ToolMesh);
+
+		}
+
+		// ReverseOrientation (Subtract용) 
+		ToolMesh.ReverseOrientation();
+
+		// Debug 그리기
+		if (bDebugMeshIslandRemoval)
+		{
+			if (UWorld* DebugWorld = GetWorld())
+			{
+				FTransform ComponentTransform = GetComponentTransform();
+				FDynamicMesh3 DebugMesh = ToolMesh;
+				DebugMesh.ReverseOrientation(); // 시각화용 원래 방향
+
+				for (int32 TriId : DebugMesh.TriangleIndicesItr())
+				{
+					FIndex3i Tri = DebugMesh.GetTriangle(TriId);
+					FVector V0 = ComponentTransform.TransformPosition(FVector(DebugMesh.GetVertex(Tri.A)));
+					FVector V1 = ComponentTransform.TransformPosition(FVector(DebugMesh.GetVertex(Tri.B)));
+					FVector V2 = ComponentTransform.TransformPosition(FVector(DebugMesh.GetVertex(Tri.C)));
+					DrawDebugLine(DebugWorld, V0, V1, FColor::Yellow, false, 4.5f, 0, 1.0f);
+					DrawDebugLine(DebugWorld, V1, V2, FColor::Yellow, false, 4.5f, 0, 1.0f);
+					DrawDebugLine(DebugWorld, V2, V0, FColor::Yellow, false, 4.5f, 0, 1.0f);
+				}
+			}
+		}
+
+		// Overlapping Chunks
+		TSharedPtr<FDynamicMesh3> SharedToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(ToolMesh));
+		FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
+
+		TArray<int32> OverlappingChunks;
+		for (int32 i = 0; i < GetChunkNum(); i++)
+		{
+			if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
+			{
+				if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
+				{
+					OverlappingChunks.Add(i);
+				}
+			}
+		}
+
+		if (OverlappingChunks.Num() == 0)
+		{
+			continue;
+		}
+
+		// ── (h) Context 생성 (셀 수 체크) ──
+		TSharedPtr<FIslandRemovalContext> Context = nullptr;
+
+		if (Piece.Num() >= MinCellsForDebris)
+		{
+			Context = MakeShared<FIslandRemovalContext>();
+			Context->Owner = this;
+			Context->RemainingTaskCount = OverlappingChunks.Num();
+		}
+
+		// ── (i) Enqueue ──
+		if (BooleanProcessor.IsValid())
+		{
+			for (int32 ChunkIndex : OverlappingChunks)
+			{
+				BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
+			}
+		}
+	}
+	return true;
+	
+	//// 인접 셀 26방향 확장
+	//TSet<FIntVector> OccupiedCells = BaseCells;
+	//for (const FIntVector& Pos : BaseCells)
+	//{
+	//	for (int32 dx = -1; dx <= 1; 
+	// 
+	// ++dx)
+	//	{
+	//		for (int32 dy = -1; dy <= 1; ++dy)
+	//		{
+	//			for (int32 dz = -1; dz <= 1; ++dz)
+	//			{
+	//				OccupiedCells.Add(FIntVector(Pos.X + dx, Pos.Y + dy, Pos.Z + dz));
+	//			}
+	//		}
+	//	}
+	//}
+
+	//UE_LOG(LogTemp, Warning, TEXT("BaseCells=%d, ExpandedCells=%d"), BaseCells.Num(), OccupiedCells.Num());
+
+	//// 파편 정리용으로 저장
+	//LastOccupiedCells = OccupiedCells;
+
+	//// 2. Greedy Meshing으로 ToolMesh 생성
+	//const double BoxExpand = 1.0;
+
+	//FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(OccupiedCells, CellSizeVec, BoxExpand);
+
+
+	//UE_LOG(LogTemp, Warning, TEXT("ToolMesh: Tris=%d, Verts=%d"), ToolMesh.TriangleCount(), ToolMesh.VertexCount());
+
+	//// Non-manifold인 경우 FillHoles로 닫힌 메시로 만들기 (Intersection 연산에 필요)
+	//{
+	//	FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
+	//	for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
+	//	{
+	//		FSimpleHoleFiller Filler(&ToolMesh, Loop);
+	//		if (Filler.Fill())
+	//		{
+	//			// 생성된 삼각형들의 winding 방향 확인 및 보정
+	//			// Edge winding order로 판단: manifold mesh에서 공유 edge는 반대 방향이어야 함
+	//			if (Filler.NewTriangles.Num() > 0)
+	//			{
+	//				int32 NewTriId = Filler.NewTriangles[0];
+	//				FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
+
+	//				bool bNeedFlip = false;
+
+	//				// 새 삼각형의 각 edge에 대해 기존 삼각형과 공유하는지 확인
+	//				for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
+	//				{
+	//					int32 Va = NewTri[i];
+	//					int32 Vb = NewTri[(i + 1) % 3];
+
+	//					// 이 edge를 공유하는 다른 삼각형 찾기
+	//					int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
+	//					if (EdgeId != FDynamicMesh3::InvalidID)
+	//					{
+	//						FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
+	//						int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
+
+	//						// 다른 삼각형이 새로 생성된 삼각형이 아닌지 확인 (기존 삼각형이어야 함)
+	//						if (OtherTriId != FDynamicMesh3::InvalidID &&
+	//							!Filler.NewTriangles.Contains(OtherTriId))
+	//						{
+	//							FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
+
+	//							// 기존 삼각형에서 Va, Vb의 순서 확인
+	//							for (int32 j = 0; j < 3; ++j)
+	//							{
+	//								if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
+	//								{
+	//									// 같은 순서 (Va -> Vb) = winding이 잘못됨
+	//									bNeedFlip = true;
+	//									break;
+	//								}
+	//								else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
+	//								{
+	//									// 반대 순서 (Vb -> Va) = 정상
+	//									break;
+	//								}
+	//							}
+	//							break; // 기존 삼각형 하나만 확인하면 됨
+	//						}
+	//					}
+	//				}
+
+	//				// winding이 잘못되었으면 새 삼각형들 뒤집기
+	//				if (bNeedFlip)
+	//				{
+	//					for (int32 TriId : Filler.NewTriangles)
+	//					{
+	//						ToolMesh.ReverseTriOrientation(TriId);
+	//					}
+	//				}
+	//			}
+	//		}
+	//	}
+	//}
+
+	//// Laplacian Smoothing 적용 (계단 현상 완화)
+	//ApplyHCLaplacianSmoothing(ToolMesh);
+
+	///*
+	// * deprecated_realdestruction
+	// * 디버깅용으로 남겨두었음
+	// * 로직 검증 끝나면 제거 필요
+	// */
+	//// Intersection용 ToolMesh 복사 및 노말 반전
+	//// Greedy meshing으로 생성된 ToolMesh의 노말이 셀 볼륨 안쪽을 향할 수 있으므로
+	//// Intersection에서도 반전된 노말이 필요할 수 있음
+	//FDynamicMesh3 ToolMeshForIntersection = ToolMesh;
+	//ToolMeshForIntersection.ReverseOrientation();
+
+	//// 노말 방향 반전 (Subtract용)
+	//ToolMesh.ReverseOrientation();
+
+	//// 디버그: ToolMesh 와이어프레임 그리기 (월드 좌표)
+	//if (bDebugMeshIslandRemoval)
+	//{
+	//	if (UWorld* DebugWorld = GetWorld())
+	//	{
+	//		FTransform ComponentTransform = GetComponentTransform();
+
+	//		for (int32 TriId : ToolMeshForIntersection.TriangleIndicesItr())
+	//		{
+	//			FIndex3i Tri = ToolMeshForIntersection.GetTriangle(TriId);
+
+	//			// 로컬 좌표 → 월드 좌표 변환
+	//			FVector V0 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.A)));
+	//			FVector V1 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.B)));
+	//			FVector V2 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.C)));
+
+	//			// 삼각형 엣지 그리기 (노란색, 4.5초)
+	//			DrawDebugLine(DebugWorld, V0, V1, FColor::Yellow, false, 4.5f, 0, 1.0f);
+	//			DrawDebugLine(DebugWorld, V1, V2, FColor::Yellow, false, 4.5f, 0, 1.0f);
+	//			DrawDebugLine(DebugWorld, V2, V0, FColor::Yellow, false, 4.5f, 0, 1.0f);
+	//		}
+	//	}
+	//}
+
+	//if (ToolMesh.TriangleCount() == 0)
+	//{
+	//	UE_LOG(LogTemp, Error, TEXT("ToolMesh has 0 triangles!"));
+	//	return false;
+	//}
+
+	////// 디버그: 원본 메시 옆에 ToolMesh 스폰 (로컬→월드 변환 적용)
+	////if (UWorld* World = GetWorld())
+	////{
+	////	FActorSpawnParameters SpawnParams;
+	////	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	////	// 원본 메시 Transform 가져오기
+	////	FTransform MeshTransform = GetComponentTransform();
+
+	////	// ToolMesh 바운드 중심을 월드 좌표로 변환
+	////	FAxisAlignedBox3d ToolBounds = ToolMesh.GetBounds();
+	////	FVector ToolCenterLocal = FVector(ToolBounds.Center());
+	////	FVector ToolCenterWorld = MeshTransform.TransformPosition(ToolCenterLocal);
+
+	////	// 오른쪽으로 오프셋 (바운드 크기 기준)
+	////	FVector BoundsSize = FVector(ToolBounds.Extents()) * 2.0f * MeshTransform.GetScale3D();
+	////	FVector RightOffset = MeshTransform.GetRotation().GetRightVector() * (BoundsSize.Y + 100.0f);
+	////	FVector DebugLocation = ToolCenterWorld + RightOffset;
+
+	////	AActor* DebugActor = World->SpawnActor<AActor>(AActor::StaticClass(), DebugLocation, MeshTransform.Rotator(), SpawnParams);
+	////	if (DebugActor)
+	////	{
+	////		DebugActor->SetActorScale3D(MeshTransform.GetScale3D());
+
+	////		UDynamicMeshComponent* DebugComp = NewObject<UDynamicMeshComponent>(DebugActor);
+	////		DebugComp->RegisterComponent();
+	////		DebugActor->AddInstanceComponent(DebugComp);
+	////		DebugActor->SetRootComponent(DebugComp);
+
+	////		// ToolMesh 복사 후 중심을 원점으로 이동
+	////		FDynamicMesh3 CenteredToolMesh = ToolMesh;
+	////		MeshTransforms::Translate(CenteredToolMesh, -ToolBounds.Center());
+	////		*DebugComp->GetMesh() = CenteredToolMesh;
+	////		DebugComp->NotifyMeshUpdated();
+
+	////		// 10초 후 삭제
+	////		DebugActor->SetLifeSpan(10.0f);
+
+	////		UE_LOG(LogTemp, Warning, TEXT("DEBUG: ToolMesh Center Local=%s, World=%s, BoundsSize=%s"),
+	////			*ToolCenterLocal.ToString(), *ToolCenterWorld.ToString(), *BoundsSize.ToString());
+	////	}
+	////}
+
+	//// 3. 모든 ChunkMeshComponents에 Boolean Subtract 적용
+	//FGeometryScriptMeshBooleanOptions BoolOptions;
+	//BoolOptions.bFillHoles = true;
+	//BoolOptions.bSimplifyOutput = false;
+
+	//int32 TotalChunksProcessed = 0;
+	//TSharedPtr<FDynamicMesh3> SharedToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(ToolMesh));
+	//FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
+
+	//UE_LOG(LogTemp, Warning, TEXT("ToolMesh Bounds: Min=%s, Max=%s"),
+	//	*FVector(ToolBounds.Min).ToString(), *FVector(ToolBounds.Max).ToString());
+
+	//TArray<int32> OverlappingChunks;
+	//for (int32 i = 0; i < GetChunkNum(); i++)
+	//{
+	//	if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
+	//	{
+	//		if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
+	//		{
+	//			OverlappingChunks.Add(i);
+	//		}
+	//	}
+	//	}
+
+	//TSharedPtr<FIslandRemovalContext> Context = MakeShared<FIslandRemovalContext>();
+	//Context->Owner = this;
+	//Context->RemainingTaskCount = OverlappingChunks.Num();
+
+	//if (BooleanProcessor.IsValid())
+	//	{
+	//	for (int32 ChunkIndex : OverlappingChunks)
+	//	{
+	//		UE_LOG(LogTemp, Display, TEXT("DebrisDebug/enqueue"))
+	//		BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
+	//	}
+	//	}
+
+	//UE_LOG(LogTemp, Log, TEXT("RemoveTrianglesForDetachedCells: %d cells, %d chunks affected"),
+	//	DetachedCellIds.Num(), TotalChunksProcessed);
+
+
+	//// 디버그: AccumulatedRemovedMesh (OriginalMesh ∩ ToolMesh) 와이어프레임 그리기
+	//// if (bDebugMeshIslandRemoval)
+	//// {
+	//// 	if (UWorld* DebugWorld = GetWorld())
+	//// 	{
+	//// 		FTransform ComponentTransform = GetComponentTransform();
+	////
+	//// 		for (int32 TriId : AccumulatedRemovedMesh.TriangleIndicesItr())
+	//// 		{
+	//// 			FIndex3i Tri = AccumulatedRemovedMesh.GetTriangle(TriId);
+	////
+	//// 			// 로컬 좌표 → 월드 좌표 변환
+	//// 			FVector V0 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.A)));
+	//// 			FVector V1 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.B)));
+	//// 			FVector V2 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.C)));
+	////
+	//// 			// 삼각형 엣지 그리기 (시안색, 4.5초)
+	//// 			DrawDebugLine(DebugWorld, V0, V1, FColor::Cyan, false, 4.5f, 0, 1.0f);
+	//// 			DrawDebugLine(DebugWorld, V1, V2, FColor::Cyan, false, 4.5f, 0, 1.0f);
+	//// 			DrawDebugLine(DebugWorld, V2, V0, FColor::Cyan, false, 4.5f, 0, 1.0f);
+	//// 		}
+	////
+	//// 		UE_LOG(LogTemp, Warning, TEXT("[DEBUG] AccumulatedRemovedMesh wireframe drawn: %d triangles (Cyan, 4.5sec)"),
+	//// 			AccumulatedRemovedMesh.TriangleCount());
+	//// 	}
+	//// }
+
+	//return true;
+}
+
+FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(const TSet<FIntVector>& InVoxels, FVector InCellSize, double InBoxExpand)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_GenerateGreedyMeshFromVoxels);
+
+	using namespace UE::Geometry;
+
+	FDynamicMesh3 ResultMesh;
+	ResultMesh.EnableTriangleGroups();
+
+	if (InVoxels.Num() == 0)
+	{
+		return ResultMesh;
+	}
 
 	// 외곽 경계 계산
 	FIntVector GridMin(TNumericLimits<int32>::Max());
 	FIntVector GridMax(TNumericLimits<int32>::Lowest());
-	for (const FIntVector& Pos : OccupiedCells)
+	
+	for (const FIntVector& Pos : InVoxels)
 	{
 		GridMin.X = FMath::Min(GridMin.X, Pos.X);
 		GridMin.Y = FMath::Min(GridMin.Y, Pos.Y);
 		GridMin.Z = FMath::Min(GridMin.Z, Pos.Z);
+
 		GridMax.X = FMath::Max(GridMax.X, Pos.X + 1);
 		GridMax.Y = FMath::Max(GridMax.Y, Pos.Y + 1);
 		GridMax.Z = FMath::Max(GridMax.Z, Pos.Z + 1);
 	}
 
-	// 공유 정점 맵
+	// 정점 캐싱 및 생성 람다
 	TMap<FIntVector, int32> CornerToVertexId;
-
-	auto GetOrCreateVertex = [&](const FIntVector& Corner) -> int32
-	{
-		if (int32* Existing = CornerToVertexId.Find(Corner))
+	auto GetOrCreateVertex = [&](const FIntVector& Corner) -> int32 
 		{
-			return *Existing;
-		}
+			if (int32* Existing = CornerToVertexId.Find(Corner))
+			{
+				return *Existing;
+			}
 
-		double ExpX = 0, ExpY = 0, ExpZ = 0;
-		if (Corner.X == GridMin.X) ExpX = -BoxExpand;
-		else if (Corner.X == GridMax.X) ExpX = BoxExpand;
-		if (Corner.Y == GridMin.Y) ExpY = -BoxExpand;
-		else if (Corner.Y == GridMax.Y) ExpY = BoxExpand;
-		if (Corner.Z == GridMin.Z) ExpZ = -BoxExpand;
-		else if (Corner.Z == GridMax.Z) ExpZ = BoxExpand;
+			double ExpX = 0, ExpY = 0, ExpZ = 0;
 
-		FVector3d VertexPos(
-			Corner.X * CellSizeVec.X + ExpX,
-			Corner.Y * CellSizeVec.Y + ExpY,
-			Corner.Z * CellSizeVec.Z + ExpZ
-		);
+			// 외곽에 있는 정점일 경우 BoxExpand 만큼 바깥으로 밀어냄
+			// 한 칸씩 여유 있게 잡기 위함
+			// 외곽에 있는 정점일 경우 BoxExpand만큼 바깥으로 밀어냄
+			if (Corner.X == GridMin.X)
+			{
+				ExpX = -InBoxExpand;
+			}
+			else if (Corner.X == GridMax.X)
+			{
+				ExpX = InBoxExpand;
+			}
 
-		int32 NewId = ToolMesh.AppendVertex(VertexPos);
-		CornerToVertexId.Add(Corner, NewId);
-		return NewId;
-	};
+			if (Corner.Y == GridMin.Y)
+			{
+				ExpY = -InBoxExpand;
+			}
+			else if (Corner.Y == GridMax.Y)
+			{ 
+				ExpY = InBoxExpand; 
+			}
 
-	// 면 방향별 Greedy Meshing
+			if (Corner.Z == GridMin.Z)
+			{
+				ExpZ = -InBoxExpand;
+			}
+			else if (Corner.Z == GridMax.Z)
+			{
+				ExpZ = InBoxExpand;
+			}
+
+			FVector3d VertexPos(
+				Corner.X * InCellSize.X + ExpX,
+				Corner.Y * InCellSize.Y + ExpY,
+				Corner.Z * InCellSize.Z + ExpZ
+			);
+
+			int32 NewId = ResultMesh.AppendVertex(VertexPos);
+			CornerToVertexId.Add(Corner, NewId);
+			return NewId;
+		};
+
 	for (int32 FaceDir = 0; FaceDir < 6; ++FaceDir)
 	{
-		TSet<FIntVector> ExposedFaces;
+		TSet<FIntVector> ExposedFacesSet;
 		FIntVector Normal;
 
 		switch (FaceDir)
 		{
-		case 0: Normal = FIntVector(0, 0, -1); break;
-		case 1: Normal = FIntVector(0, 0, 1); break;
-		case 2: Normal = FIntVector(-1, 0, 0); break;
-		case 3: Normal = FIntVector(1, 0, 0); break;
-		case 4: Normal = FIntVector(0, -1, 0); break;
-		case 5: Normal = FIntVector(0, 1, 0); break;
+		case 0:
+			Normal = FIntVector(0, 0, 1);
+			break;
+		case 1:
+			Normal = FIntVector(0, 0, -1);
+			break;
+		case 2:
+			Normal = FIntVector(0, -1, 0);
+			break;
+		case 3:
+			Normal = FIntVector(0, 1, 0);
+			break;
+		case 4:
+			Normal = FIntVector(1, 0, 0);
+			break;
+		case 5:
+			Normal = FIntVector(-1, 0, 0);
+			break;
+		default:
+			break;
 		}
-
-		for (const FIntVector& Pos : OccupiedCells)
+		
+		// 노출된 면 찾기 
+		for (const FIntVector& Pos : InVoxels)
 		{
-			if (!OccupiedCells.Contains(Pos + Normal))
+			if (!InVoxels.Contains(Pos + Normal))
 			{
-				ExposedFaces.Add(Pos);
+				ExposedFacesSet.Add(Pos);
 			}
 		}
 
-		if (ExposedFaces.Num() == 0) continue;
 
-		TSet<FIntVector> Processed;
-
-		for (const FIntVector& Start : ExposedFaces)
+		if (ExposedFacesSet.Num() == 0)
 		{
-			if (Processed.Contains(Start)) continue;
+			continue;
+		}
+		
+		TArray<FIntVector> SortedFaces = ExposedFacesSet.Array();
+		SortedFaces.Sort([](const FIntVector& A, const FIntVector& B) {
+			if (A.Z != B.Z) return A.Z < B.Z;
+			if (A.Y != B.Y) return A.Y < B.Y;
+			return A.X < B.X;
+			});
+
+		// Voxel 병합 시작  
+		TSet<FIntVector> Processed; 
+		for( const FIntVector& Start: SortedFaces)
+		{
+			if (Processed.Contains(Start))
+			{
+				continue;
+			}
 
 			int32 Width = 1, Height = 1;
-			int32 Axis1, Axis2;
-			if (FaceDir <= 1) { Axis1 = 0; Axis2 = 1; }
-			else if (FaceDir <= 3) { Axis1 = 1; Axis2 = 2; }
-			else { Axis1 = 0; Axis2 = 2; }
+		
+			int32 WidthAxis, HeightAxis;
 
-			auto GetCoord = [](const FIntVector& V, int32 Axis) -> int32 {
-				return Axis == 0 ? V.X : (Axis == 1 ? V.Y : V.Z);
-			};
-			auto SetCoord = [](FIntVector& V, int32 Axis, int32 Val) {
-				if (Axis == 0) V.X = Val;
-				else if (Axis == 1) V.Y = Val;
-				else V.Z = Val;
-			};
+			// 0: X Axis
+			// 1: Y Axis
+			// 2: Z Axis
+			if (FaceDir <= 1) // 상하
+			{
+				WidthAxis = 0;
+				HeightAxis = 1;
+			}
+			else if (FaceDir <= 3) // 좌우
+			{
+				WidthAxis = 0;
+				HeightAxis = 2; 
+			}
+			else // 전후
+			{
+				WidthAxis = 1;
+				HeightAxis = 2;
+			}
 
+			auto GetCoord = [](const FIntVector& V, int32 Axis) 
+				{
+					return Axis == 0 ? V.X : (Axis == 1 ? V.Y : V.Z); 
+				};
+
+			auto SetCoord = [](FIntVector& V, int32 Axis, int Val) 
+				{
+					if (Axis == 0)
+					{
+						V.X = Val;
+					}
+					else if (Axis == 1)
+					{
+						V.Y = Val;
+					}
+					else
+					{
+						V.Z = Val;
+
+					}
+					
+				};
+
+			// Width 확장
 			while (true)
 			{
 				FIntVector Check = Start;
-				SetCoord(Check, Axis1, GetCoord(Start, Axis1) + Width);
-				if (ExposedFaces.Contains(Check) && !Processed.Contains(Check))
+				SetCoord(Check, WidthAxis, GetCoord(Start, WidthAxis) + Width);
+
+				if (ExposedFacesSet.Contains(Check) && !Processed.Contains(Check))
+				{
 					Width++;
+				}
 				else
+				{
 					break;
+				}
 			}
 
+			// Height 확장
 			while (true)
 			{
 				bool CanExpand = true;
-				for (int32 w = 0; w < Width; ++w)
+				for (int32 W = 0; W < Width; ++W)
 				{
 					FIntVector Check = Start;
-					SetCoord(Check, Axis1, GetCoord(Start, Axis1) + w);
-					SetCoord(Check, Axis2, GetCoord(Start, Axis2) + Height);
-					if (!ExposedFaces.Contains(Check) || Processed.Contains(Check))
+					SetCoord( Check, WidthAxis, GetCoord(Start, WidthAxis) + W);
+					SetCoord( Check, HeightAxis, GetCoord(Start, HeightAxis) + Height);
+					
+					// 이미 수집이 되어 있거나, 표면이 아니면 탈락
+					if (!ExposedFacesSet.Contains(Check) || Processed.Contains(Check))
 					{
 						CanExpand = false;
 						break;
 					}
 				}
-				if (CanExpand) Height++;
-				else break;
+
+				if (CanExpand)
+				{
+					Height++;
+				}
+				else
+				{
+					break;
+				}
 			}
 
-			for (int32 h = 0; h < Height; ++h)
+			// 처리된 셀 등록 
+			for (int32 H = 0; H < Height; ++H)
 			{
-				for (int32 w = 0; w < Width; ++w)
+				for (int32 W = 0; W < Width; ++W)
 				{
 					FIntVector Cell = Start;
-					SetCoord(Cell, Axis1, GetCoord(Start, Axis1) + w);
-					SetCoord(Cell, Axis2, GetCoord(Start, Axis2) + h);
+					SetCoord(Cell, WidthAxis, GetCoord(Start, WidthAxis) + W);
+					SetCoord(Cell, HeightAxis, GetCoord(Start, HeightAxis) + H);
 					Processed.Add(Cell);
 				}
 			}
 
+			// 사각형 코너 좌표 계산 
 			FIntVector C0 = Start, C1 = Start, C2 = Start, C3 = Start;
-
+			
+			// C0: Start, C1: Start + Width, C2: Start + Width + Height, C3: Start+ Height
+			SetCoord(C1, WidthAxis, GetCoord(Start, WidthAxis) + Width);
+			SetCoord(C2, WidthAxis, GetCoord(Start, WidthAxis) + Width);
+			SetCoord(C2, HeightAxis, GetCoord(Start, HeightAxis) + Height);
+			SetCoord(C3, HeightAxis, GetCoord(Start, HeightAxis) + Height);
+			
+			// 양의 방향은 해당 축으로 +1만큼 이동시켜야지 큐브의 바깥면이 되고
 			switch (FaceDir)
-			{
-			case 0:
-				C1.X += Width; C2.X += Width; C2.Y += Height; C3.Y += Height;
+			{ 
+			case 0: // Up
+				C0.Z++; C1.Z++; C2.Z++; C3.Z++;
 				break;
-			case 1:
-				C0.Z += 1; C1.Z += 1; C2.Z += 1; C3.Z += 1;
-				C1.X += Width; C2.X += Width; C2.Y += Height; C3.Y += Height;
+
+			case 3: // Right
+				C0.Y++; C1.Y++; C2.Y++; C3.Y++;
 				break;
-			case 2:
-				C1.Y += Width; C2.Y += Width; C2.Z += Height; C3.Z += Height;
+
+			case 4: // Forward
+				C0.X++; C1.X++; C2.X++; C3.X++;
 				break;
-			case 3:
-				C0.X += 1; C1.X += 1; C2.X += 1; C3.X += 1;
-				C1.Y += Width; C2.Y += Width; C2.Z += Height; C3.Z += Height;
-				break;
-			case 4:
-				C1.X += Width; C2.X += Width; C2.Z += Height; C3.Z += Height;
-				break;
-			case 5:
-				C0.Y += 1; C1.Y += 1; C2.Y += 1; C3.Y += 1;
-				C1.X += Width; C2.X += Width; C2.Z += Height; C3.Z += Height;
-				break;
+				
+			// 음의 방향은 start가 면의 위치여서 조정안해도 괜찮다. 
 			}
 
+			// 정점 생성 및 삼각형 추가 
 			int32 I0 = GetOrCreateVertex(C0);
 			int32 I1 = GetOrCreateVertex(C1);
 			int32 I2 = GetOrCreateVertex(C2);
 			int32 I3 = GetOrCreateVertex(C3);
-
-			switch (FaceDir)
+	
+			// 바깥면의 방향에 따라 normal 방향이 다르기 때문에 winding을 다르게 해줘야한다.
+			bool bIsPositiveDir = (FaceDir == 0 || FaceDir == 2 || FaceDir == 4);
+			if (bIsPositiveDir)
+			{  
+				ResultMesh.AppendTriangle(I0, I1, I2);
+				ResultMesh.AppendTriangle(I0, I2, I3);
+			}
+			else
 			{
-			case 0:
-				ToolMesh.AppendTriangle(I0, I2, I1);
-				ToolMesh.AppendTriangle(I0, I3, I2);
-				break;
-			case 1:
-				ToolMesh.AppendTriangle(I0, I1, I2);
-				ToolMesh.AppendTriangle(I0, I2, I3);
-				break;
-			case 2:
-				ToolMesh.AppendTriangle(I0, I3, I2);
-				ToolMesh.AppendTriangle(I0, I2, I1);
-				break;
-			case 3:
-				ToolMesh.AppendTriangle(I0, I1, I2);
-				ToolMesh.AppendTriangle(I0, I2, I3);
-				break;
-			case 4:
-				ToolMesh.AppendTriangle(I0, I1, I2);
-				ToolMesh.AppendTriangle(I0, I2, I3);
-				break;
-			case 5:
-				ToolMesh.AppendTriangle(I0, I3, I2);
-				ToolMesh.AppendTriangle(I0, I2, I1);
-				break;
+				ResultMesh.AppendTriangle(I0, I2, I1);
+				ResultMesh.AppendTriangle(I0, I3, I2);
 			}
 		}
 	}
-
-	UE_LOG(LogTemp, Warning, TEXT("ToolMesh: Tris=%d, Verts=%d"), ToolMesh.TriangleCount(), ToolMesh.VertexCount());
-
-	// Non-manifold인 경우 FillHoles로 닫힌 메시로 만들기 (Intersection 연산에 필요)
-	{
-		FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
-		for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
-		{
-			FSimpleHoleFiller Filler(&ToolMesh, Loop);
-			if (Filler.Fill())
-			{
-				// 생성된 삼각형들의 winding 방향 확인 및 보정
-				// Edge winding order로 판단: manifold mesh에서 공유 edge는 반대 방향이어야 함
-				if (Filler.NewTriangles.Num() > 0)
-				{
-					int32 NewTriId = Filler.NewTriangles[0];
-					FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
-
-					bool bNeedFlip = false;
-
-					// 새 삼각형의 각 edge에 대해 기존 삼각형과 공유하는지 확인
-					for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
-					{
-						int32 Va = NewTri[i];
-						int32 Vb = NewTri[(i + 1) % 3];
-
-						// 이 edge를 공유하는 다른 삼각형 찾기
-						int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
-						if (EdgeId != FDynamicMesh3::InvalidID)
-						{
-							FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
-							int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
-
-							// 다른 삼각형이 새로 생성된 삼각형이 아닌지 확인 (기존 삼각형이어야 함)
-							if (OtherTriId != FDynamicMesh3::InvalidID &&
-								!Filler.NewTriangles.Contains(OtherTriId))
-							{
-								FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
-
-								// 기존 삼각형에서 Va, Vb의 순서 확인
-								for (int32 j = 0; j < 3; ++j)
-								{
-									if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
-									{
-										// 같은 순서 (Va -> Vb) = winding이 잘못됨
-										bNeedFlip = true;
-										break;
-									}
-									else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
-									{
-										// 반대 순서 (Vb -> Va) = 정상
-										break;
-									}
-								}
-								break; // 기존 삼각형 하나만 확인하면 됨
-							}
-						}
-					}
-
-					// winding이 잘못되었으면 새 삼각형들 뒤집기
-					if (bNeedFlip)
-					{
-						for (int32 TriId : Filler.NewTriangles)
-						{
-							ToolMesh.ReverseTriOrientation(TriId);
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Laplacian Smoothing 적용 (계단 현상 완화)
-	ApplyHCLaplacianSmoothing(ToolMesh);
-
-	/*
-	 * deprecated_realdestruction
-	 * 디버깅용으로 남겨두었음
-	 * 로직 검증 끝나면 제거 필요
-	 */
-	// Intersection용 ToolMesh 복사 및 노말 반전
-	// Greedy meshing으로 생성된 ToolMesh의 노말이 셀 볼륨 안쪽을 향할 수 있으므로
-	// Intersection에서도 반전된 노말이 필요할 수 있음
-	FDynamicMesh3 ToolMeshForIntersection = ToolMesh;
-	ToolMeshForIntersection.ReverseOrientation();
-
-	// 노말 방향 반전 (Subtract용)
-	ToolMesh.ReverseOrientation();
-
-	// 디버그: ToolMesh 와이어프레임 그리기 (월드 좌표)
-	if (bDebugMeshIslandRemoval)
-	{
-		if (UWorld* DebugWorld = GetWorld())
-		{
-			FTransform ComponentTransform = GetComponentTransform();
-
-			for (int32 TriId : ToolMeshForIntersection.TriangleIndicesItr())
-			{
-				FIndex3i Tri = ToolMeshForIntersection.GetTriangle(TriId);
-
-				// 로컬 좌표 → 월드 좌표 변환
-				FVector V0 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.A)));
-				FVector V1 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.B)));
-				FVector V2 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.C)));
-
-				// 삼각형 엣지 그리기 (노란색, 4.5초)
-				DrawDebugLine(DebugWorld, V0, V1, FColor::Yellow, false, 4.5f, 0, 1.0f);
-				DrawDebugLine(DebugWorld, V1, V2, FColor::Yellow, false, 4.5f, 0, 1.0f);
-				DrawDebugLine(DebugWorld, V2, V0, FColor::Yellow, false, 4.5f, 0, 1.0f);
-			}
-		}
-	}
-
-	if (ToolMesh.TriangleCount() == 0)
-	{
-		UE_LOG(LogTemp, Error, TEXT("ToolMesh has 0 triangles!"));
-		return false;
-	}
-
-	//// 디버그: 원본 메시 옆에 ToolMesh 스폰 (로컬→월드 변환 적용)
-	//if (UWorld* World = GetWorld())
-	//{
-	//	FActorSpawnParameters SpawnParams;
-	//	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	//	// 원본 메시 Transform 가져오기
-	//	FTransform MeshTransform = GetComponentTransform();
-
-	//	// ToolMesh 바운드 중심을 월드 좌표로 변환
-	//	FAxisAlignedBox3d ToolBounds = ToolMesh.GetBounds();
-	//	FVector ToolCenterLocal = FVector(ToolBounds.Center());
-	//	FVector ToolCenterWorld = MeshTransform.TransformPosition(ToolCenterLocal);
-
-	//	// 오른쪽으로 오프셋 (바운드 크기 기준)
-	//	FVector BoundsSize = FVector(ToolBounds.Extents()) * 2.0f * MeshTransform.GetScale3D();
-	//	FVector RightOffset = MeshTransform.GetRotation().GetRightVector() * (BoundsSize.Y + 100.0f);
-	//	FVector DebugLocation = ToolCenterWorld + RightOffset;
-
-	//	AActor* DebugActor = World->SpawnActor<AActor>(AActor::StaticClass(), DebugLocation, MeshTransform.Rotator(), SpawnParams);
-	//	if (DebugActor)
-	//	{
-	//		DebugActor->SetActorScale3D(MeshTransform.GetScale3D());
-
-	//		UDynamicMeshComponent* DebugComp = NewObject<UDynamicMeshComponent>(DebugActor);
-	//		DebugComp->RegisterComponent();
-	//		DebugActor->AddInstanceComponent(DebugComp);
-	//		DebugActor->SetRootComponent(DebugComp);
-
-	//		// ToolMesh 복사 후 중심을 원점으로 이동
-	//		FDynamicMesh3 CenteredToolMesh = ToolMesh;
-	//		MeshTransforms::Translate(CenteredToolMesh, -ToolBounds.Center());
-	//		*DebugComp->GetMesh() = CenteredToolMesh;
-	//		DebugComp->NotifyMeshUpdated();
-
-	//		// 10초 후 삭제
-	//		DebugActor->SetLifeSpan(10.0f);
-
-	//		UE_LOG(LogTemp, Warning, TEXT("DEBUG: ToolMesh Center Local=%s, World=%s, BoundsSize=%s"),
-	//			*ToolCenterLocal.ToString(), *ToolCenterWorld.ToString(), *BoundsSize.ToString());
-	//	}
-	//}
-
-	// 3. 모든 ChunkMeshComponents에 Boolean Subtract 적용
-	FGeometryScriptMeshBooleanOptions BoolOptions;
-	BoolOptions.bFillHoles = true;
-	BoolOptions.bSimplifyOutput = false;
-
-	int32 TotalChunksProcessed = 0;
-	TSharedPtr<FDynamicMesh3> SharedToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(ToolMesh));
-	FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
-
-	UE_LOG(LogTemp, Warning, TEXT("ToolMesh Bounds: Min=%s, Max=%s"),
-		*FVector(ToolBounds.Min).ToString(), *FVector(ToolBounds.Max).ToString());
-
-	TArray<int32> OverlappingChunks;
-	for (int32 i = 0; i < GetChunkNum(); i++)
-	{
-		if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
-		{
-			if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
-			{
-				OverlappingChunks.Add(i);
-			}
-		}
-		}
-
-	TSharedPtr<FIslandRemovalContext> Context = MakeShared<FIslandRemovalContext>();
-	Context->Owner = this;
-	Context->RemainingTaskCount = OverlappingChunks.Num();
-
-	if (BooleanProcessor.IsValid())
-		{
-		for (int32 ChunkIndex : OverlappingChunks)
-		{
-			UE_LOG(LogTemp, Display, TEXT("DebrisDebug/enqueue"))
-			BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
-		}
-		}
-
-	UE_LOG(LogTemp, Log, TEXT("RemoveTrianglesForDetachedCells: %d cells, %d chunks affected"),
-		DetachedCellIds.Num(), TotalChunksProcessed);
-
-
-	// 디버그: AccumulatedRemovedMesh (OriginalMesh ∩ ToolMesh) 와이어프레임 그리기
-	// if (bDebugMeshIslandRemoval)
-	// {
-	// 	if (UWorld* DebugWorld = GetWorld())
-	// 	{
-	// 		FTransform ComponentTransform = GetComponentTransform();
-	//
-	// 		for (int32 TriId : AccumulatedRemovedMesh.TriangleIndicesItr())
-	// 		{
-	// 			FIndex3i Tri = AccumulatedRemovedMesh.GetTriangle(TriId);
-	//
-	// 			// 로컬 좌표 → 월드 좌표 변환
-	// 			FVector V0 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.A)));
-	// 			FVector V1 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.B)));
-	// 			FVector V2 = ComponentTransform.TransformPosition(FVector(AccumulatedRemovedMesh.GetVertex(Tri.C)));
-	//
-	// 			// 삼각형 엣지 그리기 (시안색, 4.5초)
-	// 			DrawDebugLine(DebugWorld, V0, V1, FColor::Cyan, false, 4.5f, 0, 1.0f);
-	// 			DrawDebugLine(DebugWorld, V1, V2, FColor::Cyan, false, 4.5f, 0, 1.0f);
-	// 			DrawDebugLine(DebugWorld, V2, V0, FColor::Cyan, false, 4.5f, 0, 1.0f);
-	// 		}
-	//
-	// 		UE_LOG(LogTemp, Warning, TEXT("[DEBUG] AccumulatedRemovedMesh wireframe drawn: %d triangles (Cyan, 4.5sec)"),
-	// 			AccumulatedRemovedMesh.TriangleCount());
-	// 	}
-	// }
-
-	return true;
+	return ResultMesh; 
 }
-
+ 
 void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials)
 {
 	using namespace UE::Geometry;
