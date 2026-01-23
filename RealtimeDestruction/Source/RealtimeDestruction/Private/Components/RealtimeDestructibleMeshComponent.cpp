@@ -333,10 +333,6 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE("ExecuteDestructionInternal")
 
-	if (MaxHoleCount > 0 && CurrentHoleCount >= MaxHoleCount)
-	{
-		return false;
-	}
 	// 관통, 비관통 여부 확인, broadphase와 같은 효과
 	float AdjustPenetration;
 	bool bIsPenetration = CheckPenetration(Request, AdjustPenetration);
@@ -3087,11 +3083,7 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 	}
 }
 
-void URealtimeDestructibleMeshComponent::GetDestructionSettings(int32& OutMaxHoleCount, int32& OutMaxBatchSize)
-{
-	OutMaxHoleCount = MaxHoleCount;
-	OutMaxBatchSize = MaxBatchSize;
-}
+
 
 
 bool URealtimeDestructibleMeshComponent::InitializeFromStaticMeshInternal(UStaticMesh* InMesh, bool bForce)
@@ -5863,14 +5855,7 @@ bool URealtimeDestructibleMeshComponent::ValidateDestructionRequest(
 		return true;
 	}
 
-	// 1. 최대 구멍 수 체크
-	if (MaxHoleCount > 0 && CurrentHoleCount >= MaxHoleCount)
-	{
-		OutReason = EDestructionRejectReason::MaxHoleReached;
-		return false;
-	}
-
-	// 2. 사거리 체크
+	// 사거리 체크
 	if (APawn* Pawn = RequestingPlayer->GetPawn())
 	{
 		const float Distance = FVector::Dist(Pawn->GetActorLocation(), Request.ImpactPoint);

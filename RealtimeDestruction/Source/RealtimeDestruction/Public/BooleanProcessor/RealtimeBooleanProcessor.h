@@ -372,11 +372,6 @@ private:
 	bool bEnableMultiWorkers;
 	std::atomic<int32> ActiveChunkCount{ 0 };
 
-	// Destruction settings.
-	// Pulled from the owning component.
-	int32 MaxHoleCount = 0;
-	int32 MaxBatchSize = 0;
-
 	// ===============================================================
 	// Simplification & Adaptive Tuning
 	// ===============================================================

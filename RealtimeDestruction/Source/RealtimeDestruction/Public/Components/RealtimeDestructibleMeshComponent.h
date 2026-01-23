@@ -543,7 +543,6 @@ public:
 	/*
 	 * 에디터에 노출하지 않는 함수
 	 */
-	void GetDestructionSettings(int32& OutMaxHoleCount, int32& OutMaxBatchSize);
 	FGeometryScriptMeshBooleanOptions GetBooleanOptions() const { return BooleanOptions; }
 	FRealtimeBooleanProcessor* GetBooleanProcessor() const { return BooleanProcessor.Get(); }
 
@@ -633,25 +632,9 @@ protected:
 	TArray<FManagedDecal> ActiveDecals;
  
 	/**
-	 * 이 메시가 받을 수 있는 최대 구멍 개수
-	 *
-	 * 성능 최적화를 위한 제한입니다.
-	 * 구멍이 많아질수록 메시 복잡도가 증가하여
-	 * Boolean 연산 시간이 길어집니다.
-	 *
-	 * 권장값:
-	 * - 작은 오브젝트: 20-50
-	 * - 큰 오브젝트: 50-100
-	 * - 성능 우선: 20 이하
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 0, ClampMax = 1000))
-	int32 MaxHoleCount = 1000;
-
-	/**
 	 * 현재까지 생성된 구멍 개수
 	 *
 	 * CreateBulletHole()이 성공할 때마다 1씩 증가합니다.
-	 * MaxHoleCount에 도달하면 더 이상 구멍을 생성할 수 없습니다.
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|Status")
 	int32 CurrentHoleCount = 0;
@@ -670,9 +653,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
 	FGeometryScriptMeshBooleanOptions BooleanOptions;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 1))
-	int32 MaxBatchSize = 8;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
 	bool bAsyncEnabled = true;

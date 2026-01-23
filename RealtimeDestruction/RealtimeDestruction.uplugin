@@ -2,10 +2,11 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
+	"EngineVersion": "5.7.0",
 	"FriendlyName": "Realtime Destruction",
 	"Description": "Realtime procedural mesh destruction system with network replication support",
 	"Category": "Gameplay",
-	"CreatedBy": "Team",
+	"CreatedBy": "LazyDevelopers",
 	"CreatedByURL": "",
 	"DocsURL": "",
 	"MarketplaceURL": "",
@@ -18,12 +19,14 @@
 		{
 			"Name": "RealtimeDestruction",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
 		},
 		{
 			"Name": "RealtimeDestructionEditor",
 			"Type": "Editor",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
 		}
 	],
 	"Plugins": [

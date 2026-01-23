@@ -52,7 +52,6 @@ bool FRealtimeBooleanProcessor::Initialize(URealtimeDestructibleMeshComponent* O
 	}
 
 	OwnerComponent = Owner;
-	OwnerComponent->GetDestructionSettings(MaxHoleCount, MaxBatchSize);
 	OwnerComponent->SettingAsyncOption(bEnableMultiWorkers);
 
 	int32 ChunkNum = OwnerComponent->GetChunkNum();
