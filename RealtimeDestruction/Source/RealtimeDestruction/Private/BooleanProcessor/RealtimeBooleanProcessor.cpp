@@ -620,6 +620,36 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE("ProcessSlotSubtractWork");
 
+	auto HandleFailureAndReturn = [&]()
+	{
+		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+
+		if (UnionResult.IslandContext.IsValid())
+		{
+			if (UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1) == 1)
+			{
+				AsyncTask(ENamedThreads::GameThread, [Context = UnionResult.IslandContext, WeakOwner = OwnerComponent]()
+				{
+					TArray<UMaterialInterface*> Materials;
+					if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(1))
+					{
+						for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
+						{
+							Materials.Add(ChunkMesh->GetMaterial(i));
+						}
+					}
+
+					Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+				});
+			}
+		}
+
+		if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+		{
+			KickSubtractWorker(SlotIndex);
+		}
+	};
+
 	// Validity check.
 	if (!LifeTime.IsValid() || !LifeTime->bAlive.load())
 	{
@@ -649,7 +679,9 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 	// ===== 4. Subtract compute =====
 	FDynamicMesh3 ResultMesh;
 	bool bSuccess = false;
+	bool bOverBudget = false;
 	bool bHasDebris = false;
+	double StartFrameTimeMs = FPlatformTime::Seconds();
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE("SlotSubtract_Compute");
 
@@ -657,31 +689,33 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		FDynamicMesh3 WorkMesh;
 		if (!OwnerComponent->GetChunkMesh(WorkMesh, ChunkIndex))
 		{
-			SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-			if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
-			{
-				KickSubtractWorker(SlotIndex);
-			}
-
-			if (UnionResult.IslandContext.IsValid())
-			{
-				UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
-			}
+			// SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+			// if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+			// {
+			// 	KickSubtractWorker(SlotIndex);
+			// }
+			//
+			// if (UnionResult.IslandContext.IsValid())
+			// {
+			// 	UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
+			// }
+			HandleFailureAndReturn();
 			return;
 		}
 
 		if (WorkMesh.TriangleCount() == 0)
 		{
-			SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-			if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
-			{
-				KickSubtractWorker(SlotIndex);
-			}
-
-			if (UnionResult.IslandContext.IsValid())
-			{
-				UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
-			}
+			// SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+			// if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+			// {
+			// 	KickSubtractWorker(SlotIndex);
+			// }
+			//
+			// if (UnionResult.IslandContext.IsValid())
+			// {
+			// 	UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
+			// }
+			HandleFailureAndReturn();
 			return;
 		}
 
@@ -700,6 +734,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			// Run subtract.
 			FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
 
+			double CurrentDurationMs = FPlatformTime::Seconds();
+
 			bSuccess = ApplyMeshBooleanAsync(
 				&WorkMesh,
 				&UnionResult.PendingCombinedToolMesh,
@@ -707,10 +743,22 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				EGeometryScriptBooleanOperation::Subtract,
 				Options);
 
+			CurrentDurationMs = (FPlatformTime::Seconds() - CurrentDurationMs) * 1000.0;
+
 			if (bSuccess)
 			{
+				AccumulateSubtractDuration(ChunkIndex, CurrentDurationMs);
+				UpdateUnionSize(ChunkIndex, CurrentDurationMs);
 				// Simplify.
 				TrySimplify(ResultMesh, ChunkIndex, UnionResult.UnionCount);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Display, TEXT("Reset Accumulation"));
+				// Reset accumulation on failure.
+				FChunkState& State = ChunkStates.GetState(ChunkIndex);
+				State.SubtractDurationAccum = 0;
+				State.DurationAccumCount = 0;
 			}
 		}
 		else
@@ -721,69 +769,57 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				Ops.bFillHoles = true;
 				Ops.bSimplifyOutput = false;
 
-					//FDynamicMesh3* ToolMesh = UnionResult.SharedToolMesh.Get();
-					//FDynamicMesh3 ToolMeshForIntersection = *ToolMesh;
-					//ToolMeshForIntersection.ReverseOrientation();
-					//ToolMesh->ReverseOrientation();
-					
-					FDynamicMesh3 LocalToolMesh = *UnionResult.SharedToolMesh;
-					//LocalToolMesh.ReverseOrientation();   
-					//FDynamicMesh3 ToolMeshForIntersection = LocalToolMesh;
-					// intersection
-					/*FDynamicMesh3 Debris;
-					bool bSuccessIntersection = ApplyMeshBooleanAsync(
-						&WorkMesh,
-						&ToolMeshForIntersection,
-						&Debris,
-						EGeometryScriptBooleanOperation::Intersection,
-						Ops);
+				FDynamicMesh3 LocalTool = *UnionResult.SharedToolMesh;				
+
+				// intersection
+				FDynamicMesh3 Debris;
+				bool bSuccessIntersection = ApplyMeshBooleanAsync(
+					&WorkMesh,
+					&LocalTool,
+					&Debris,
+					EGeometryScriptBooleanOperation::Intersection,
+					Ops);
 
 				if (bSuccessIntersection && Debris.TriangleCount() > 0)
 				{
-						if (UnionResult.IslandContext.IsValid())
-						{
-							FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
-							FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
-							FMeshIndexMappings Mappings;
-							Editor.AppendMesh(&Debris, Mappings);
-							bHasDebris = true;
-						}
-					}*/
-
 					if (UnionResult.IslandContext.IsValid())
 					{
-						FDynamicMesh3 Debris;
-						bool bSuccessIntersection = ApplyMeshBooleanAsync(
-							&WorkMesh,
-							&LocalToolMesh,
-							&Debris,
-							EGeometryScriptBooleanOperation::Intersection,
-							Ops);
+						FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
 
-						if (bSuccessIntersection && Debris.TriangleCount() > 0)
+						// Initialize attributes
+						if (UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount() == 0)
 						{
-							FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
-							FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
-							FMeshIndexMappings Mappings;
-							Editor.AppendMesh(&Debris, Mappings);
-							bHasDebris = true;
+							UnionResult.IslandContext->AccumulatedDebrisMesh.EnableAttributes();
+							UnionResult.IslandContext->AccumulatedDebrisMesh.Attributes()->EnableMaterialID();
+							if (!UnionResult.IslandContext->AccumulatedDebrisMesh.HasTriangleGroups())
+							{
+								UnionResult.IslandContext->AccumulatedDebrisMesh.EnableTriangleGroups();
+							}
 						}
-
+						
+						FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
+						FMeshIndexMappings Mappings;
+						Editor.AppendMesh(&Debris, Mappings);
+						bHasDebris = true;
 					}
-
-					// subtract
-					bSuccess = ApplyMeshBooleanAsync(
-						&WorkMesh,
-						&LocalToolMesh,
-						&ResultMesh,
-						EGeometryScriptBooleanOperation::Subtract,
-						Ops);
 				}
+
+				// subtract
+				bSuccess = ApplyMeshBooleanAsync(
+					&WorkMesh,
+					&LocalTool,
+					&ResultMesh,
+					EGeometryScriptBooleanOperation::Subtract,
+					Ops);
 			}
 		}
 
+		double FrameDurationMs = (FPlatformTime::Seconds() - StartFrameTimeMs) * 1000.0;
+		bOverBudget = (FrameDurationMs > FrameBudgetMs);
+	}
+
 	// ===== 5. Apply results (GameThread) =====
-	if (bSuccess)
+	if (bSuccess || bHasDebris)
 	{
 		AsyncTask(ENamedThreads::GameThread,
 		          [WeakOwner = OwnerComponent,
@@ -794,6 +830,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          Context = UnionResult.IslandContext,
 			          Decals = MoveTemp(UnionResult.Decals),
 			          UnionCount = UnionResult.UnionCount,
+			          bOverBudget,
+			          bSuccess,
 			          this]() mutable
 		          {
 			          if (!WeakOwner.IsValid())
@@ -812,19 +850,27 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				          return;
 			          }
 
+			          double StartTime = FPlatformTime::Seconds();
+
 			          // Apply mesh.
-			          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
+			          if (bSuccess)
+			          {
+				          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
+			          }
+
+			          double ExecutionDurationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+
+			          Proc->UpdateSimplifyInterval(ExecutionDurationMs);
 
 			          // Spawn debris
 			          if (Context.IsValid())
 			          {
 				          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
-				          {
+				          {					          
 					          if (Context->Owner.IsValid() && Context->AccumulatedDebrisMesh.TriangleCount() > 0)
 					          {
-						          UE_LOG(LogTemp, Display, TEXT("DebrisDebug/spawn"));
 						          TArray<UMaterialInterface*> Materials;
-						          if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(0))
+						          if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(1))
 						          {
 							          for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
 							          {
@@ -833,6 +879,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						          }
 
 						          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+					          	Context->Owner->CleanupSmallFragments();
 					          }
 				          }
 			          }
@@ -848,34 +895,41 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          Proc->ChunkGenerations[ChunkIndex]++;
 			          Proc->ChunkHoleCount[ChunkIndex] += UnionCount;
 
-			          // If queue has work, re-kick.
-			          if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
+			          if (!bOverBudget)
 			          {
-				          Proc->KickSubtractWorker(SlotIndex);
+				          // If queue has work, re-kick.
+				          if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
+				          {
+					          Proc->KickSubtractWorker(SlotIndex);
+				          }
+				          // Next kick.
+				          Proc->KickProcessIfNeededPerChunk();
 			          }
-
-			          // Next kick.
-			          Proc->KickProcessIfNeededPerChunk();
+			          else
+			          {
+				          // Skip kick if over budget
+				          // retry in URealtimeDestructibleMeshComponent::TickComponent
+				          UE_LOG(LogTemp, Display, TEXT("Slot %d yielding"), SlotIndex);
+			          }
 		          });
 	}
 	else
 	{
 		// Even on failure, re-kick if queue has work (GameThread).
-		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex]()
+		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex, bOverBudget]()
 		{
 			if (SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
 			{
 				SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
 			}
 
-			if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+			if (!bOverBudget && !SlotSubtractQueues[SlotIndex]->IsEmpty())
 			{
 				KickSubtractWorker(SlotIndex);
 			}
 		});
 	}
 }
-
 
 void FRealtimeBooleanProcessor::CleanupSlotMapping(int32 SlotIndex)
 {
@@ -921,6 +975,8 @@ void FRealtimeBooleanProcessor::UpdateUnionSize(int32 ChunkIndex, double Duratio
 		 * Clamp to at least 1 to protect the frame even if cost spikes.
 		 */
 		NextCount = FMath::Max(1, NextCount);
+		
+		UE_LOG(LogTemp, Display, TEXT("union size reduce %d to %d"), CurrentUnionCount, NextCount);
 	}
 	else if (DurationMs < (FrameBudgetMs * 0.6))
 	{
@@ -929,11 +985,13 @@ void FRealtimeBooleanProcessor::UpdateUnionSize(int32 ChunkIndex, double Duratio
 		 * 2. Profiling every mesh is unrealistic.
 		 */
 		NextCount = FMath::Min(CurrentUnionCount + 1, 20);
+
+		UE_LOG(LogTemp, Display, TEXT("union size increase %d to %d"), CurrentUnionCount, NextCount);
 	}
 
 	if (NextCount != CurrentUnionCount)
 	{
-		MaxUnionCount[ChunkIndex] = CurrentUnionCount;
+		MaxUnionCount[ChunkIndex] = NextCount;
 	}
 }
 
@@ -1367,9 +1425,9 @@ void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgC
 	 * Tuning constants.
 	 */
 	 // Increase threshold; above this, reduce interval.
-	const double PanicThreshold = 0.1;
+	constexpr double PanicThreshold = 0.1;
 	// Stable threshold; at/above this, increase interval.
-	const double StableThreshold = 0.0;
+	constexpr double StableThreshold = 0.0;
 
 	/*
 	 * AIMD (Additive Increase, Multiplicative Decrease) used in TCP congestion control.
@@ -1379,7 +1437,7 @@ void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgC
 	 // Reduce interval when cost increases by >=10%.
 	if (-ReductionRate > PanicThreshold)
 	{
-		UE_LOG(LogTemp, Display, TEXT("Interval decrease %lld to %d"), FMath::FloorToInt(MaxInterval * 0.7), MaxInterval);
+		UE_LOG(LogTemp, Display, TEXT("Interval decrease %d to %lld"), MaxInterval, FMath::FloorToInt(MaxInterval * 0.7));
 		// Clamp lower bound to 15.
 		MaxInterval = FMath::Max(15, FMath::FloorToInt(MaxInterval * 0.7));
 	}
@@ -1414,18 +1472,20 @@ bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMes
 		State.LastSimplifyTriCount > 1000) ||
 		TriCount - State.LastSimplifyTriCount > 1000)
 	{
+		UE_LOG(LogTemp, Display, TEXT("Simplify/TriCount"));
 		bShouldSimplify = true;
 	}
 	// After 2 accumulations, simplify if average exceeds threshold.
 	else if (State.DurationAccumCount >= 2 &&
 		State.SubtractDurationAccum / State.DurationAccumCount >= SubDurationHighThreshold)
 	{
-		UE_LOG(LogTemp, Display, TEXT("Duration Simplify"));
+		UE_LOG(LogTemp, Display, TEXT("Simplify/Duration"));
 		bShouldSimplify = true;
 	}
 	// Simplify when interval reaches max.
 	else if (State.Interval >= MaxInterval)
-	{		
+	{
+		UE_LOG(LogTemp, Display, TEXT("Simplify/Interval"));
 		bShouldSimplify = true;
 	}
 

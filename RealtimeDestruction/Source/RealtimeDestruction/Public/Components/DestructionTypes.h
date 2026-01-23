@@ -309,3 +309,20 @@ struct FManagedDecal
         return Decal.IsValid() && CoveredCells.Num() > 0;
     }
 };
+struct FVertexKey
+{
+    int32 VertexId = -1;
+    int32 NormalElem = -1;
+    int32 UVElem = -1;
+    bool operator==(const FVertexKey& Other) const
+    {
+        return VertexId == Other.VertexId && NormalElem == Other.NormalElem && UVElem == Other.UVElem;
+    }
+    friend  uint32 GetTypeHash(const FVertexKey& Key)
+    {
+        const uint32 Hash0 = ::GetTypeHash(Key.VertexId);
+        const uint32 Hash1 = ::GetTypeHash(Key.NormalElem);
+        const uint32 Hash2 = ::GetTypeHash(Key.UVElem);
+        return HashCombine(HashCombine(Hash0, Hash1), Hash2);
+    }
+};	

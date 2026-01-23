@@ -386,7 +386,7 @@ private:
 
 	double SetMeshAvgCost = 0.0;
 
-	double FrameBudgetMs = 8.0f;
+	double FrameBudgetMs = 16.0f;
 	double SubtractAvgCostMs = 2.0f;
 	double SubtractCostAccum = 0.0f;
 	int32 SubtractCostSampleCount = 0;

@@ -633,7 +633,7 @@ protected:
 	bool bAsyncEnabled = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options")
-	bool bEnableMultiWorkers = false;
+	bool bEnableMultiWorkers = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 0.001))
 	float AngleThreshold = 0.001f;
