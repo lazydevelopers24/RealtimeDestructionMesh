@@ -753,8 +753,8 @@ void URealtimeDestructibleMeshComponent::BuildServerCellCollision()
 		return;
 	}
 
-	// 서버(데디케이티드/리슨)에서만 실행
-	if (!GetOwner() || !GetOwner()->HasAuthority())
+	// 데디케이티드 서버에서만 실행 (Standalone/ListenServer는 원본 메시 콜리전 사용)
+	if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
 	{
 		return;
 	}
@@ -4671,7 +4671,8 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 	}
 
 	// 서버 Cell Box Collision: 지연 초기화 (BeginPlay에서 GridCellLayout이 유효하지 않았던 경우)
-	if (GetOwner() && GetOwner()->HasAuthority() && !bServerCellCollisionInitialized && bEnableServerCellCollision && GridCellLayout.IsValid())
+	if (GetOwner() && GetOwner()->HasAuthority() && !bServerCellCollisionInitialized && bEnableServerCellCollision && GridCellLayout.IsValid()
+		&& GetWorld() && GetWorld()->GetNetMode() == NM_DedicatedServer)
 	{
 		UE_LOG(LogTemp, Display, TEXT("[ServerCellCollision] Deferred init: GridCellLayout now valid, calling BuildServerCellCollision()"));
 		BuildServerCellCollision();
