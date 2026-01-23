@@ -1,4 +1,11 @@
-// Copyright 2025. All Rights Reserved.
+// Copyright (c) 2026 Lazy Developers <lazydeveloper24@gmail.com>. All rights reserved.
+// This plugin is distributed under the Fab Standard License.
+//
+// This product was independently developed by us while participating in the Epic Project, a developer-support
+// program of the KRAFTON JUNGLE GameTech Lab. All rights, title, and interest in and to the product are exclusively
+// vested in us. Krafton, Inc. was not involved in its development and distribution and disclaims all representations
+// and warranties, express or implied, and assumes no responsibility or liability for any consequences arising from
+// the use of this product.
 
 #pragma once
 
@@ -9,22 +16,22 @@
 struct FRealtimeDestructionRequest;
 
 //=========================================================================
-// SubCell 설정 상수
+// SubCell configuration constants
 //=========================================================================
 
-/** SubCell 분할 수 (각 축당) - 2x2x2 = 8개 subcell */
+/** SubCell divisions per axis - 2x2x2 = 8 subcells */
 inline constexpr int32 SUBCELL_DIVISION = 2;
 
-/** 총 SubCell 개수 */
+/** Total SubCell count */
 inline constexpr int32 SUBCELL_COUNT = SUBCELL_DIVISION * SUBCELL_DIVISION * SUBCELL_DIVISION;  // 8
 
-/** SubCell 3D 좌표 -> SubCell ID */
+/** SubCell 3D coord -> SubCell ID */
 inline constexpr int32 SubCellCoordToId(int32 X, int32 Y, int32 Z)
 {
 	return Z * (SUBCELL_DIVISION * SUBCELL_DIVISION) + Y * SUBCELL_DIVISION + X;
 }
 
-/** SubCell ID -> 3D 좌표 */
+/** SubCell ID -> 3D coord */
 inline FIntVector SubCellIdToCoord(int32 SubCellId)
 {
 	const int32 XY = SUBCELL_DIVISION * SUBCELL_DIVISION;
@@ -35,7 +42,7 @@ inline FIntVector SubCellIdToCoord(int32 SubCellId)
 	return FIntVector(X, Y, Z);
 }
 
-/** 6방향 오프셋 (±X, ±Y, ±Z) */
+/** 6-direction offsets (+/-X, +/-Y, +/-Z) */
 inline constexpr int32 DIRECTION_OFFSETS[6][3] = {
 	{-1, 0, 0},  // -X
 	{+1, 0, 0},  // +X
@@ -45,21 +52,10 @@ inline constexpr int32 DIRECTION_OFFSETS[6][3] = {
 	{0, 0, +1},  // +Z
 };
 
-/**
- * 파괴 형태 타입
- */
-UENUM(BlueprintType)
-enum class ECellDestructionShapeType : uint8
-{
-	Sphere,     // 구체 (폭발)
-	Box,        // 박스 (브리칭)
-	Cylinder,   // 원통
-	Line        // 선형 (총알)
-};
+// =======================================================
+// Low Level Utility
+// =======================================================
 
-/**
- * int32 배열 래퍼 (UPROPERTY 지원용)
- */
 USTRUCT(BlueprintType)
 struct FIntArray
 {
@@ -74,7 +70,7 @@ struct FIntArray
 	int32& operator[](int32 Index) { return Values[Index]; }
 	const int32& operator[](int32 Index) const { return Values[Index]; }
 
-	// Range-based for loop 지원
+	// Range-based for loop support
 	TArray<int32>::RangedForIteratorType begin() { return Values.begin(); }
 	TArray<int32>::RangedForIteratorType end() { return Values.end(); }
 	TArray<int32>::RangedForConstIteratorType begin() const { return Values.begin(); }
@@ -82,19 +78,19 @@ struct FIntArray
 };
 
 /**
- * SubCell용 Oriented Bounding Box (OBB)
- * 월드 공간에서 회전된 직육면체를 표현
- * Note: UE의 FOrientedBox와 이름 충돌 방지를 위해 별도 정의
+ * Oriented Bounding Box (OBB) for subcells.
+ * Represents a rotated box in world space.
+ * Note: defined separately to avoid a name clash with UE's FOrientedBox.
  */
 struct FCellOBB
 {
-	/** 박스 중심 (월드 좌표) */
+	/** Box center (world space) */
 	FVector Center;
 
-	/** 반 크기 (각 로컬 축 방향) */
+	/** Half extents (local axes) */
 	FVector HalfExtents;
 
-	/** 로컬 축 방향 (월드 공간, 정규화된 직교 벡터) */
+	/** Local axes (world space, normalized orthogonal vectors) */
 	FVector AxisX;
 	FVector AxisY;
 	FVector AxisZ;
@@ -116,7 +112,7 @@ struct FCellOBB
 		AxisZ = Rotation.RotateVector(FVector::UpVector);
 	}
 
-	/** 점을 OBB의 로컬 공간으로 변환 */
+	/** Transform a point into OBB local space. */
 	FVector WorldToLocal(const FVector& WorldPoint) const
 	{
 		const FVector Delta = WorldPoint - Center;
@@ -127,13 +123,13 @@ struct FCellOBB
 		);
 	}
 
-	/** OBB 로컬 공간의 점을 월드로 변환 */
+	/** Transform a local OBB point into world space. */
 	FVector LocalToWorld(const FVector& LocalPoint) const
 	{
 		return Center + AxisX * LocalPoint.X + AxisY * LocalPoint.Y + AxisZ * LocalPoint.Z;
 	}
 
-	/** OBB 표면 위 또는 내부에서 주어진 점에 가장 가까운 점 계산 */
+	/** Find the closest point on or inside the OBB to a world-space point. */
 	FVector GetClosestPoint(const FVector& WorldPoint) const
 	{
 		const FVector LocalPoint = WorldToLocal(WorldPoint);
@@ -148,189 +144,190 @@ struct FCellOBB
 };
 
 /**
- * 파괴 형태 정의
- * Note: 원통은 Rotation을 반영해 임의 방향을 지원함.
- * 선형 파괴가 필요하면 Line shape를 사용할 것.
- * 추후 Line과 Cylinder를 통합하거나 Cylinder를 Axis-Aligned용으로 분리 요망.
+ * Shape for cell destruction.
+ * Do not confuse with mesh tool shape types.
  */
+UENUM(BlueprintType)
+enum class ECellDestructionShapeType : uint8
+{
+	Sphere,     // Sphere (explosion)
+	Box,        // Box (breaching)
+	Cylinder,   // Cylinder
+	Line        // Line (bullet)
+};
+
+// =======================================================
+// Destruction Input & Shape
+// =======================================================
+
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FCellDestructionShape
 {
 	GENERATED_BODY()
 
-	/** 형태 타입 */
+	/** Shape type. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	ECellDestructionShapeType Type = ECellDestructionShapeType::Sphere;
 
 	/**
-	 * 중심점
-	 * 구, 박스, 원통 -> 중심
-	 * 라인 -> 시작점
+	 * Center point.
+	 * Sphere/Box/Cylinder -> center
+	 * Line -> start point
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector Center = FVector::ZeroVector;
 
-	/** 구체/원통 반경 */
+	/** Sphere/Cylinder radius. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float Radius = 50.0f;
 
 	/**
-	 * 박스 범위 (박스 타입용)
-	 * 원통은 높이 대신 이 필드의 z값을 사용
+	 * Box extent (box only).
+	 * Cylinder uses the Z value as height.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector BoxExtent = FVector::ZeroVector;
 
-	/** 회전 (박스/원통용) */
+	/** Rotation (box/cylinder). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FRotator Rotation = FRotator::ZeroRotator;
 
-	/** 선형 파괴용 끝점 */
+	/** Line end point. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector EndPoint = FVector::ZeroVector;
 
-	/** 선형 파괴 두께 */
+	/** Line thickness. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float LineThickness = 5.0f;
 
-	/** 점이 파괴 영역 안에 있는지 확인 */
+	/** Check whether a point is inside the destruction shape. */
 	bool ContainsPoint(const FVector& Point) const;
 
 	/**
-	 * FRealtimeDestructionRequest로부터 FCellDestructionShape 생성.
-	 * ToolShape 타입에 따라 Sphere/Line으로 변환하며,
-	 * Cylinder는 ToolForwardVector 방향의 Line으로 매핑한다.
+	 * Build a FCellDestructionShape from a FRealtimeDestructionRequest.
+	 * Converts ToolShape to Sphere/Line and maps Cylinder to a Line along ToolForwardVector.
 	 */
 	static FCellDestructionShape CreateFromRequest(const FRealtimeDestructionRequest& Request);
 };
 
-/**
- * 양자화된 파괴 입력
- * 모든 클라이언트에서 동일한 Boolean 결과를 보장하기 위해 양자화
- */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FQuantizedDestructionInput
 {
 	GENERATED_BODY()
 
-	/** 파괴 형태 타입 */
+	/** Destruction shape type. */
 	UPROPERTY()
 	ECellDestructionShapeType Type = ECellDestructionShapeType::Sphere;
 
-	/** 중심점 (mm 단위, 정수) - cm * 10 */
+	/** Center (mm, integer) - cm * 10. */
 	UPROPERTY()
 	FIntVector CenterMM = FIntVector::ZeroValue;
 
-	/** 반경 (mm 단위, 정수) - cm * 10 */
+	/** Radius (mm, integer) - cm * 10. */
 	UPROPERTY()
 	int32 RadiusMM = 0;
 
-	/** 박스 범위 (mm 단위) */
+	/** Box extent (mm). */
 	UPROPERTY()
 	FIntVector BoxExtentMM = FIntVector::ZeroValue;
 
-	/** 회전 (0.01도 단위, 정수) */
+	/** Rotation (0.01-degree units, integer). */
 	UPROPERTY()
 	FIntVector RotationCentidegrees = FIntVector::ZeroValue;
 
-	/** 선형 파괴 끝점 (mm 단위) */
+	/** Line end point (mm). */
 	UPROPERTY()
 	FIntVector EndPointMM = FIntVector::ZeroValue;
 
-	/** 선형 파괴 두께 (mm 단위) */
+	/** Line thickness (mm). */
 	UPROPERTY()
 	int32 LineThicknessMM = 0;
 
-	/** float 값에서 양자화된 입력 생성 */
+	/** Build quantized input from float values. */
 	static FQuantizedDestructionInput FromDestructionShape(const FCellDestructionShape& Shape);
 
-	/** 양자화된 값을 DestructionShape로 복원 */
+	/** Restore to a FCellDestructionShape. */
 	FCellDestructionShape ToDestructionShape() const;
 
-	/** 점이 파괴 영역 안에 있는지 확인 (양자화된 값 기반) */
+	/** Check whether a point is inside the shape (quantized values). */
 	bool ContainsPoint(const FVector& Point) const;
 
 	/**
-	 * OBB(Oriented Bounding Box)가 파괴 영역과 교차하는지 확인
-	 * 비균일 스케일 메시에서도 정확한 교차 판정을 위해 사용
+	 * Check whether the OBB (Oriented Bounding Box) intersects the destruction shape.
+	 * Used for accurate intersection even on non-uniformly scaled meshes.
 	 *
-	 * @param OBB - 월드 공간의 OBB
-	 * @return 교차 여부
+	 * @param OBB - OBB in world space
+	 * @return Whether they intersect
 	 */
 	bool IntersectsOBB(const FCellOBB& OBB) const;
 };
 
-/**
- * 3D 격자 셀 캐시 (메모리 최적화 버전)
- * 에디터에서 생성되어 저장됨. 런타임에서 변경 없음.
- *
- * 최적화:
- * 1. CellCenters 제거 - IdToLocalCenter()로 런타임 계산
- * 2. CellExists/CellIsAnchor → 비트필드 (1/8 메모리)
- * 3. CellTriangles/CellNeighbors → 희소 배열 (유효 셀만 저장)
- */
+// =======================================================
+// Static Grid Layout
+// =======================================================
+
 USTRUCT(BlueprintType)
-struct REALTIMEDESTRUCTION_API FGridCellCache
+struct REALTIMEDESTRUCTION_API FGridCellLayout
 {
 	GENERATED_BODY()
 
 	//=========================================================================
-	// 격자 정보
+	// Grid information
 	//=========================================================================
 
-	/** 격자 크기 (X, Y, Z 방향 셀 개수) */
+	/** Grid size (cell counts in X, Y, Z). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	FIntVector GridSize = FIntVector::ZeroValue;
 
-	/** 각 셀의 월드 크기 (cm) */
+	/** Cell size in world space (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FVector CellSize = FVector(5.0f, 5.0f, 5.0f);
 
-	/** 격자 원점 (메시 바운드의 Min) */
+	/** Grid origin (mesh bounds min). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	FVector GridOrigin = FVector::ZeroVector;
 
-	/** 메시 스케일 (빌드 시점의 컴포넌트 스케일) */
+	/** Mesh scale (component scale at build time). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	FVector MeshScale = FVector::OneVector;
 
 	//=========================================================================
-	// 비트필드 데이터 (메모리 최적화)
+	// Bitfield data (memory optimization)
 	//=========================================================================
 
-	/** 셀 존재 여부 비트필드 (32개 셀당 1 uint32) */
+	/** Cell existence bitfield (1 uint32 per 32 cells). */
 	UPROPERTY()
 	TArray<uint32> CellExistsBits;
 
-	/** 앵커 셀 여부 비트필드 (32개 셀당 1 uint32) */
+	/** Anchor cell bitfield (1 uint32 per 32 cells). */
 	UPROPERTY()
 	TArray<uint32> CellIsAnchorBits;
 
 	//=========================================================================
-	// 희소 배열 데이터 (유효 셀만 저장)
+	// Sparse array data (valid cells only)
 	//=========================================================================
 
-	/** 유효 셀 ID → 희소 인덱스 매핑 */
+	/** Valid cell ID -> sparse index mapping. */
 	UPROPERTY()
 	TMap<int32, int32> CellIdToSparseIndex;
 
-	/** 희소 인덱스 → 셀 ID 역매핑 */
+	/** Sparse index -> cell ID reverse mapping. */
 	UPROPERTY()
 	TArray<int32> SparseIndexToCellId;
 
-	/** 희소 배열: 셀별 삼각형 인덱스 (유효 셀만) */
+	/** Sparse array: per-cell triangle indices (valid cells only). */
 	UPROPERTY()
 	TArray<FIntArray> SparseCellTriangles;
 
-	/** 희소 배열: 셀별 인접 셀 ID 목록 (유효 셀만) */
+	/** Sparse array: per-cell neighbor IDs (valid cells only). */
 	UPROPERTY()
 	TArray<FIntArray> SparseCellNeighbors;
 
 	//=========================================================================
-	// 비트필드 접근자
+	// Bitfield accessors
 	//=========================================================================
 
-	/** 셀 존재 여부 확인 */
+	/** Check if a cell exists. */
 	FORCEINLINE bool GetCellExists(int32 CellId) const
 	{
 		const int32 WordIndex = CellId >> 5;  // CellId / 32
@@ -338,7 +335,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return CellExistsBits.IsValidIndex(WordIndex) && (CellExistsBits[WordIndex] & BitMask) != 0;
 	}
 
-	/** 셀 존재 여부 설정 */
+	/** Set cell existence. */
 	FORCEINLINE void SetCellExists(int32 CellId, bool bExists)
 	{
 		const int32 WordIndex = CellId >> 5;
@@ -352,7 +349,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		}
 	}
 
-	/** 앵커 셀 여부 확인 */
+	/** Check if a cell is an anchor. */
 	FORCEINLINE bool GetCellIsAnchor(int32 CellId) const
 	{
 		const int32 WordIndex = CellId >> 5;
@@ -360,7 +357,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return CellIsAnchorBits.IsValidIndex(WordIndex) && (CellIsAnchorBits[WordIndex] & BitMask) != 0;
 	}
 
-	/** 앵커 셀 여부 설정 */
+	/** Set anchor flag. */
 	FORCEINLINE void SetCellIsAnchor(int32 CellId, bool bIsAnchor)
 	{
 		const int32 WordIndex = CellId >> 5;
@@ -375,10 +372,10 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 	}
 
 	//=========================================================================
-	// 희소 배열 접근자
+	// Sparse array accessors
 	//=========================================================================
 
-	/** 셀의 삼각형 인덱스 배열 반환 (없으면 빈 배열) */
+	/** Get triangle index array for a cell (empty if none). */
 	const FIntArray& GetCellTriangles(int32 CellId) const
 	{
 		const int32* SparseIdx = CellIdToSparseIndex.Find(CellId);
@@ -390,7 +387,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return EmptyArray;
 	}
 
-	/** 셀의 이웃 배열 반환 (없으면 빈 배열) */
+	/** Get neighbor array for a cell (empty if none). */
 	const FIntArray& GetCellNeighbors(int32 CellId) const
 	{
 		const int32* SparseIdx = CellIdToSparseIndex.Find(CellId);
@@ -402,7 +399,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return EmptyArray;
 	}
 
-	/** 셀의 삼각형 인덱스 배열에 접근 (수정용) */
+	/** Get mutable triangle index array for a cell. */
 	FIntArray* GetCellTrianglesMutable(int32 CellId)
 	{
 		const int32* SparseIdx = CellIdToSparseIndex.Find(CellId);
@@ -413,7 +410,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return nullptr;
 	}
 
-	/** 셀의 이웃 배열에 접근 (수정용) */
+	/** Get mutable neighbor array for a cell. */
 	FIntArray* GetCellNeighborsMutable(int32 CellId)
 	{
 		const int32* SparseIdx = CellIdToSparseIndex.Find(CellId);
@@ -424,7 +421,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return nullptr;
 	}
 
-	/** 유효 셀 등록 (희소 배열에 추가) */
+	/** Register a valid cell (add to sparse arrays). */
 	int32 RegisterValidCell(int32 CellId)
 	{
 		if (CellIdToSparseIndex.Contains(CellId))
@@ -440,13 +437,13 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return SparseIndex;
 	}
 
-	/** 유효 셀 개수 */
+	/** Valid cell count. */
 	int32 GetValidCellCount() const
 	{
 		return SparseIndexToCellId.Num();
 	}
 
-	/** 비트필드 초기화 (GridSize 설정 후 호출) */
+	/** Initialize bitfields (call after GridSize is set). */
 	void InitializeBitfields()
 	{
 		const int32 TotalCells = GetTotalCellCount();
@@ -456,13 +453,13 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		CellIsAnchorBits.SetNumZeroed(RequiredWords);
 	}
 
-	/** 유효 셀 순회용 반복자 (안전하게 빈 배열 반환) */
+	/** Valid cell ID list (safe to return empty array). */
 	const TArray<int32>& GetValidCellIds() const
 	{
 		return SparseIndexToCellId;
 	}
 
-	/** 희소 배열이 유효한지 확인 */
+	/** Check if sparse arrays are valid. */
 	bool HasValidSparseData() const
 	{
 		return SparseIndexToCellId.Num() > 0 &&
@@ -471,19 +468,19 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 	}
 
 	//=========================================================================
-	// 헬퍼 함수
+	// Helper functions
 	//=========================================================================
 
-	/** 총 셀 개수 */
+	/** Total cell count. */
 	int32 GetTotalCellCount() const
 	{
 		return GridSize.X * GridSize.Y * GridSize.Z;
 	}
 
-	/** 앵커 셀 개수 */
+	/** Anchor cell count. */
 	int32 GetAnchorCount() const;
 
-	/** 3D 좌표 -> 셀 ID */
+	/** 3D coord -> cell ID. */
 	int32 CoordToId(int32 X, int32 Y, int32 Z) const
 	{
 		return Z * (GridSize.X * GridSize.Y) + Y * GridSize.X + X;
@@ -494,7 +491,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return CoordToId(Coord.X, Coord.Y, Coord.Z);
 	}
 
-	/** 셀 ID -> 3D 좌표 */
+	/** Cell ID -> 3D coord. */
 	FIntVector IdToCoord(int32 CellId) const
 	{
 		const int32 XY = GridSize.X * GridSize.Y;
@@ -505,7 +502,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return FIntVector(X, Y, Z);
 	}
 
-	/** 좌표가 유효한지 확인 */
+	/** Check if a coord is valid. */
 	FORCEINLINE bool IsValidCoord(const FIntVector& Coord) const
 	{
 		return Coord.X >= 0 && Coord.X < GridSize.X &&
@@ -513,7 +510,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		       Coord.Z >= 0 && Coord.Z < GridSize.Z;
 	}
 
-	/** 좌표가 유효한지 확인 (3개 정수 오버로드) */
+	/** Check if a coord is valid (int overload). */
 	FORCEINLINE bool IsValidCoord(int32 X, int32 Y, int32 Z) const
 	{
 		return X >= 0 && X < GridSize.X &&
@@ -521,47 +518,47 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		       Z >= 0 && Z < GridSize.Z;
 	}
 
-	/** 셀 ID가 유효한지 확인 */
+	/** Check if a cell ID is valid. */
 	bool IsValidCellId(int32 CellId) const
 	{
 		return CellId >= 0 && CellId < GetTotalCellCount();
 	}
 
-	/** 월드 위치 -> 셀 ID (-1 if invalid) */
+	/** World position -> cell ID (INDEX_NONE if invalid). */
 	int32 WorldPosToId(const FVector& WorldPos, const FTransform& MeshTransform) const;
 
-	/** 셀 ID -> 월드 중심점 */
+	/** Cell ID -> world center. */
 	FVector IdToWorldCenter(int32 CellId, const FTransform& MeshTransform) const;
 
-	/** 셀 ID -> 로컬 중심점 */
+	/** Cell ID -> local center. */
 	FVector IdToLocalCenter(int32 CellId) const;
 
-	/** 셀 ID -> 월드 Min 좌표 */
+	/** Cell ID -> world min. */
 	FVector IdToWorldMin(int32 CellId, const FTransform& MeshTransform) const;
 
-	/** 셀 ID -> 로컬 Min 좌표 */
+	/** Cell ID -> local min. */
 	FVector IdToLocalMin(int32 CellId) const;
 
-	/** 셀의 8개 꼭지점 반환 (로컬 좌표) */
+	/** Get the 8 cell vertices (local space). */
 	TArray<FVector> GetCellVertices(int32 CellId) const;
 
-	/** 캐시 초기화 */
+	/** Reset layout. */
 	void Reset();
 
-	/** 유효성 검사 */
+	/** Validate layout. */
 	bool IsValid() const;
 
 	//=========================================================================
-	// SubCell 헬퍼 함수
+	// SubCell helper functions
 	//=========================================================================
 
-	/** SubCell 크기 (로컬 좌표) */
+	/** SubCell size (local space). */
 	FVector GetSubCellSize() const
 	{
 		return CellSize / static_cast<float>(SUBCELL_DIVISION);
 	}
 
-	/** SubCell 로컬 중심점 (Cell 로컬 좌표 기준) */
+	/** SubCell local center (cell-local space). */
 	FVector GetSubCellLocalOffset(int32 SubCellId) const
 	{
 		const FIntVector SubCoord = SubCellIdToCoord(SubCellId);
@@ -573,14 +570,14 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		);
 	}
 
-	/** SubCell 로컬 중심점 (메시 로컬 좌표) */
+	/** SubCell local center (mesh local space). */
 	FVector GetSubCellLocalCenter(int32 CellId, int32 SubCellId) const
 	{
 		const FVector CellMin = IdToLocalMin(CellId);
 		return CellMin + GetSubCellLocalOffset(SubCellId);
 	}
 	
-	/** SubCell 월드 중심점 */
+	/** SubCell world center. */
 	FVector GetSubCellWorldCenter(int32 CellId, int32 SubCellId, const FTransform& MeshTransform) const
 	{
 		const FVector LocalCenter = GetSubCellLocalCenter(CellId, SubCellId);
@@ -588,8 +585,8 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 	}
 
 	/**
-	 * SubCell 월드 OBB (Oriented Bounding Box)
-	 * 메시의 회전과 비균일 스케일을 정확히 반영
+	 * SubCell world OBB (Oriented Bounding Box).
+	 * Accurately accounts for mesh rotation and non-uniform scale.
 	 */
 	FCellOBB GetSubCellWorldOBB(int32 CellId, int32 SubCellId, const FTransform& MeshTransform) const
 	{
@@ -597,7 +594,7 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		const FIntVector SubCoord = SubCellIdToCoord(SubCellId);
 		const FVector SubCellSz = GetSubCellSize();
 
-		// 로컬 공간에서의 SubCell 중심
+		// SubCell center in local space
 		const FVector LocalMin = CellMin + FVector(
 			SubCoord.X * SubCellSz.X,
 			SubCoord.Y * SubCellSz.Y,
@@ -605,14 +602,14 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		);
 		const FVector LocalCenter = LocalMin + SubCellSz * 0.5f;
 
-		// 월드 공간으로 변환
+		// Transform to world space
 		const FVector WorldCenter = MeshTransform.TransformPosition(LocalCenter);
 
-		// 스케일이 적용된 반 크기 (로컬 SubCell 크기 × 트랜스폼 스케일)
+		// Half extents with scale applied (local subcell size x transform scale)
 		const FVector TransformScale = MeshTransform.GetScale3D();
 		const FVector WorldHalfExtents = SubCellSz * 0.5f * TransformScale;
 
-		// OBB 생성 (회전만 적용, 스케일은 HalfExtents에 이미 반영됨)
+		// Create OBB (rotation only; scale is baked into HalfExtents)
 		return FCellOBB(WorldCenter, WorldHalfExtents, MeshTransform.GetRotation());
 	}
 
@@ -627,24 +624,23 @@ struct REALTIMEDESTRUCTION_API FGridCellCache
 		return CellWorldOBB;
 	}
 
-	/** AABB 내에 있는 Cell ID 목록 반환 */
+	/** Get cell IDs inside an AABB. */
 	TArray<int32> GetCellsInAABB(const FBox& WorldAABB, const FTransform& MeshTransform) const;
 };
 
-/** Subcell 비트마스크 (8개 subcell, 2x2x2) */
 USTRUCT()
 struct FSubCell
 {
 	GENERATED_BODY()
 
 	/**
-	 * 비트마스크 (각 비트가 subcell 존재 여부)
+	 * Bitmask (each bit indicates subcell alive state).
 	 * 0 = Dead, 1 = Alive
-	 * 8비트로 8개 SubCell 상태 표현
+	 * 8 bits represent 8 subcells.
 	 * SubCellId = X + Y * 2 + Z * 4
 	 */
 	UPROPERTY()
-	uint8 Bits = 0xFF;  // 모든 SubCell 살아있음
+	uint8 Bits = 0xFF;  // All subcells alive
 
 	bool IsSubCellAlive(int32 SubCellId) const
 	{
@@ -656,112 +652,104 @@ struct FSubCell
 		Bits &= ~(1 << SubCellId);
 	}
 
-	/** 모든 subcell이 파괴되었는지 확인 */
+	/** Check if all subcells are destroyed. */
 	bool IsFullyDestroyed() const
 	{
 		return Bits == 0;
 	}
 
-	/** 초기화 (모든 subcell 존재) */
+	/** Reset (all subcells alive). */
 	void Reset()
 	{
 		Bits = 0xFF;
 	}
 };
 
-/**
- * 파괴 처리 결과
- * ProcessDestruction 또는 ProcessSubCellDestruction 호출 시 반환되는 일회성 리포트
- */
+// =======================================================
+// Destruction Results & State
+// =======================================================
+
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FDestructionResult
 {
 	GENERATED_BODY()
 
-	/** 새로 파괴된 SubCell 개수 */
+	/** Newly destroyed subcell count. */
 	UPROPERTY()
 	int32 DeadSubCellCount = 0;
 
-	/** SubCell이 영향받은 Cell 목록 */
+	/** Cells affected by subcell destruction. */
 	UPROPERTY()
 	TArray<int32> AffectedCells;
 
-	/** 새로 파괴된 SubCell 정보 (CellId -> SubCellId 목록) */
+	/** Newly destroyed subcells (CellId -> SubCellId list). */
 	UPROPERTY()
 	TMap<int32, FIntArray> NewlyDeadSubCells;
 
-	/** Destroyed 상태로 전환된 Cell 목록 (모든 SubCell 파괴됨) */
+	/** Cells that became destroyed (all subcells destroyed). */
 	UPROPERTY()
 	TArray<int32> NewlyDestroyedCells;
 
-	/** 파괴가 발생했는지 */
+	/** Whether any destruction occurred. */
 	bool HasAnyDestruction() const
 	{
 		return DeadSubCellCount > 0 || NewlyDestroyedCells.Num() > 0;
 	}
 };
 
-/**
- * SubCell 기반 Detached Group
- * Cell 단위 분리 판정 후 인접 SubCell까지 포함하는 확장된 그룹
- */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FDetachedGroupWithSubCell
 {
 	GENERATED_BODY()
 
-	/** 완전히 분리된 Cell ID 목록 (Cell 단위 BFS로 판정) */
+	/** Fully detached cell IDs (determined by cell-level BFS). */
 	UPROPERTY()
 	TArray<int32> DetachedCellIds;
 
 	/**
-	 * 추가로 포함된 SubCell 목록 (SubCell Flooding으로 판정)
-	 * Key: CellId, Value: 해당 Cell에서 포함된 SubCellId 목록
-	 * - Detached Cell과 인접한 살아있는 SubCell들
-	 * - Flooding 경계의 죽은 SubCell들
+	 * Additional included subcells (determined by subcell flooding).
+	 * Key: CellId, Value: included SubCellId list for that cell.
+	 * - Alive subcells adjacent to detached cells
+	 * - Dead subcells on the flooding boundary
 	 */
 	UPROPERTY()
 	TMap<int32, FIntArray> IncludedSubCells;
 
-	/** 그룹이 비어있는지 확인 */
+	/** Check if the group is empty. */
 	bool IsEmpty() const
 	{
 		return DetachedCellIds.Num() == 0 && IncludedSubCells.Num() == 0;
 	}
 };
 
-/**
- * 런타임 셀 상태 (Replicated)
- * 파괴된 셀과 분리된 셀 그룹 관리
- */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FCellState
 {
 	GENERATED_BODY()
 
-	/** 완전히 파괴된 셀 ID 집합 */
+	/** Set of fully destroyed cell IDs. */
 	UPROPERTY()
 	TSet<int32> DestroyedCells;
 
-	/** 분리된 셀 그룹 (아직 파편으로 스폰되지 않은 상태) */
+	/** Detached cell groups (not yet spawned as debris). */
 	UPROPERTY()
 	TArray<FDetachedGroupWithSubCell> DetachedGroups;
 
 	/**
-	 * Subcell 상태 관리.
-	 * Destruction Shape와 접촉한 Cell은 죽은 subcell이 발생하며 여기에 추가.
-	 * 여기 추가되지 않은 Cell은 모든 subcell이 다 생존한 상태.
+	 * Subcell state storage.
+	 * Cells touched by a destruction shape gain dead subcells and are added here.
+	 * Cells not added here have all subcells alive.
 	 */
 	UPROPERTY()
 	TMap<int32, FSubCell> SubCellStates;
 
-	/** 셀이 파괴되었는지 확인 */
+	/** Check if a cell is destroyed. */
 	bool IsCellDestroyed(int32 CellId) const
 	{
 		return DestroyedCells.Contains(CellId);
 	}
 
-	/** SubCell이 살아있는지 확인 */
+	/** Check if a subcell is alive. */
 	bool IsSubCellAlive(int32 CellId, int32 SubCellId) const
 	{
 		if (DestroyedCells.Contains(CellId))
@@ -775,11 +763,11 @@ struct REALTIMEDESTRUCTION_API FCellState
 			return SubCellState->IsSubCellAlive(SubCellId);
 		}
 
-		// SubCell 상태가 없으면 모두 살아있음
+		// If no subcell state exists, all subcells are alive
 		return true;
 	}
 
-	/** 셀이 분리 대기 중인지 확인 */
+	/** Check if a cell is pending detachment. */
 	bool IsCellDetached(int32 CellId) const
 	{
 		for (const FDetachedGroupWithSubCell& Group : DetachedGroups)
@@ -792,7 +780,7 @@ struct REALTIMEDESTRUCTION_API FCellState
 		return false;
 	}
 
-	/** 셀 파괴 */
+	/** Mark cells destroyed. */
 	void DestroyCells(const TArray<int32>& CellIds)
 	{
 		for (int32 CellId : CellIds)
@@ -801,7 +789,7 @@ struct REALTIMEDESTRUCTION_API FCellState
 		}
 	}
 
-	/** 분리된 그룹 추가 (Cell ID만, 하위 호환용) */
+	/** Add detached group (cell IDs only, legacy). */
 	void AddDetachedGroup(const TArray<int32>& CellIds)
 	{
 		FDetachedGroupWithSubCell Group;
@@ -809,32 +797,32 @@ struct REALTIMEDESTRUCTION_API FCellState
 		DetachedGroups.Add(MoveTemp(Group));
 	}
 
-	/** 분리된 그룹 추가 (SubCell 정보 포함) */
+	/** Add detached group (with subcell info). */
 	void AddDetachedGroup(const FDetachedGroupWithSubCell& Group)
 	{
 		DetachedGroups.Add(Group);
 	}
 
-	/** 분리된 그룹 추가 (SubCell 정보 포함, Move) */
+	/** Add detached group (with subcell info, move). */
 	void AddDetachedGroup(FDetachedGroupWithSubCell&& Group)
 	{
 		DetachedGroups.Add(MoveTemp(Group));
 	}
 
-	/** 분리된 그룹을 파괴 상태로 전환 (파편 스폰 후 호출) */
+	/** Move detached group to destroyed state (call after debris spawn). */
 	void MoveDetachedToDestroyed(int32 GroupIndex)
 	{
 		if (DetachedGroups.IsValidIndex(GroupIndex))
 		{
 			const FDetachedGroupWithSubCell& Group = DetachedGroups[GroupIndex];
 
-			// DetachedCellIds → DestroyedCells
+			// DetachedCellIds -> DestroyedCells
 			for (int32 CellId : Group.DetachedCellIds)
 			{
 				DestroyedCells.Add(CellId);
 			}
 
-			// IncludedSubCells → SubCellStates에서 Dead 처리
+			// IncludedSubCells -> mark dead in SubCellStates
 			for (const auto& SubCellPair : Group.IncludedSubCells)
 			{
 				const int32 CellId = SubCellPair.Key;
@@ -849,18 +837,18 @@ struct REALTIMEDESTRUCTION_API FCellState
 		}
 	}
 
-	/** 모든 분리 그룹을 파괴 상태로 전환 */
+	/** Move all detached groups to destroyed state. */
 	void MoveAllDetachedToDestroyed()
 	{
 		for (const FDetachedGroupWithSubCell& Group : DetachedGroups)
 		{
-			// DetachedCellIds → DestroyedCells
+			// DetachedCellIds -> DestroyedCells
 			for (int32 CellId : Group.DetachedCellIds)
 			{
 				DestroyedCells.Add(CellId);
 			}
 
-			// IncludedSubCells → SubCellStates에서 Dead 처리
+			// IncludedSubCells -> mark dead in SubCellStates
 			for (const auto& SubCellPair : Group.IncludedSubCells)
 			{
 				const int32 CellId = SubCellPair.Key;
@@ -874,7 +862,7 @@ struct REALTIMEDESTRUCTION_API FCellState
 		DetachedGroups.Empty();
 	}
 
-	/** 상태 초기화 */
+	/** Reset state. */
 	void Reset()
 	{
 		DestroyedCells.Empty();
@@ -882,70 +870,63 @@ struct REALTIMEDESTRUCTION_API FCellState
 	}
 };
 
-/**
- * 분리된 파편 정보
- */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FDetachedDebrisInfo
 {
 	GENERATED_BODY()
 
-	/** 파편 고유 ID */
+	/** Debris unique ID. */
 	UPROPERTY()
 	int32 DebrisId = 0;
 
-	/** 포함된 셀 ID 목록 */
+	/** Included cell IDs. */
 	UPROPERTY()
 	TArray<int32> CellIds;
 
-	/** 초기 위치 */
+	/** Initial location. */
 	UPROPERTY()
 	FVector_NetQuantize InitialLocation;
 
-	/** 초기 속도 */
+	/** Initial velocity. */
 	UPROPERTY()
 	FVector_NetQuantize InitialVelocity;
 };
 
-/**
- * 배칭된 파괴 이벤트 (서버 -> 클라이언트)
- * 16.6ms 동안 쌓인 모든 파괴를 한 번에 전송
- */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FBatchedDestructionEvent
 {
 	GENERATED_BODY()
 
-	/** 양자화된 파괴 입력들 (Boolean 렌더링용) */
+	/** Quantized destruction inputs (for boolean rendering). */
 	UPROPERTY()
 	TArray<FQuantizedDestructionInput> DestructionInputs;
 
-	/** 총 파괴된 셀 ID (중복 제거됨) */
+	/** All destroyed cell IDs (deduplicated). */
 	UPROPERTY()
 	TArray<int16> DestroyedCellIds;
 
-	/** 분리된 파편들 */
+	/** Detached debris. */
 	UPROPERTY()
 	TArray<FDetachedDebrisInfo> DetachedDebris;
 };
 
-//=========================================================================
-// SuperCell 시스템
-//=========================================================================
+// =======================================================
+// BFS & SuperCell
+// =======================================================
 
 /**
- * 2-Level Hierarchical BFS 노드
- * SuperCell 또는 개별 Cell을 표현하는 Union 타입
+ * 2-level hierarchical BFS node.
+ * Union type representing a SuperCell or an individual cell.
  *
- * - bIsSupercell = true: Id는 SuperCell ID
- * - bIsSupercell = false: Id는 Cell ID
+ * - bIsSupercell = true: Id is a SuperCell ID
+ * - bIsSupercell = false: Id is a Cell ID
  */
 struct REALTIMEDESTRUCTION_API FBFSNode
 {
-	/** 노드 ID (SuperCell ID 또는 Cell ID) */
+	/** Node ID (SuperCell ID or Cell ID). */
 	int32 Id = INDEX_NONE;
 
-	/** SuperCell 노드 여부 */
+	/** Whether this is a SuperCell node. */
 	bool bIsSupercell = false;
 
 	FBFSNode() = default;
@@ -954,13 +935,13 @@ struct REALTIMEDESTRUCTION_API FBFSNode
 		: Id(InId), bIsSupercell(bInIsSupercell)
 	{}
 
-	/** SuperCell 노드 생성 */
+	/** Create a SuperCell node. */
 	static FBFSNode MakeSupercell(int32 SupercellId)
 	{
 		return FBFSNode(SupercellId, true);
 	}
 
-	/** Cell 노드 생성 */
+	/** Create a Cell node. */
 	static FBFSNode MakeCell(int32 CellId)
 	{
 		return FBFSNode(CellId, false);
@@ -974,64 +955,57 @@ struct REALTIMEDESTRUCTION_API FBFSNode
 	}
 };
 
-/**
- * SuperCell 캐시 (BFS 최적화용)
- * 여러 Cell을 그룹화하여 BFS 노드 수를 줄임
- * - Intact SuperCell: 내부 Cell이 모두 살아있으면 단일 BFS 노드로 취급
- * - Broken SuperCell: 일부 Cell이 파괴/손상되면 개별 Cell 단위 BFS로 전환
- * - Orphan Cell: SuperCell에 포함되지 않는 Cell (격자 끝단)
- */
 USTRUCT(BlueprintType)
-struct REALTIMEDESTRUCTION_API FSupercellCache
+struct REALTIMEDESTRUCTION_API FSuperCellState
 {
 	GENERATED_BODY()
 
 	//=========================================================================
-	// SuperCell 격자 정보
+	// SuperCell grid info
 	//=========================================================================
 
-	/** SuperCell당 Cell 개수 (각 축, 최대 4x4x4) */
+	/** Cells per SuperCell per axis (max 4x4x4). */
 	UPROPERTY()
 	FIntVector SupercellSize = FIntVector(4, 4, 4);
 
-	/** SuperCell 격자 크기 (X, Y, Z 방향 SuperCell 개수) */
+	/** SuperCell grid size (SuperCell counts in X, Y, Z). */
 	UPROPERTY()
 	FIntVector SupercellCount = FIntVector::ZeroValue;
 
 	//=========================================================================
-	// SuperCell 상태 비트필드
+	// SuperCell state bitfield
 	//=========================================================================
 
 	/**
-	 * Intact 상태 비트필드 (64개 SuperCell당 1 uint64)
-	 * 1 = Intact (모든 SubCell 살아있음), 0 = Broken
+	 * Intact state bitfield (1 uint64 per 64 SuperCells).
+	 * 1 = Intact (all SubCells alive), 0 = Broken
 	 */
 	UPROPERTY()
 	TArray<uint64> IntactBits;
 
 	//=========================================================================
-	// Cell ↔ SuperCell 매핑
+	// Cell <-> SuperCell mapping
 	//=========================================================================
 
 	/**
-	 * Cell ID → SuperCell ID 매핑
-	 * INDEX_NONE(-1)이면 Orphan Cell (SuperCell에 포함되지 않음)
+	 * Cell ID -> SuperCell ID mapping.
+	 * INDEX_NONE (-1) means orphan cell (not included in a SuperCell).
 	 */
 	UPROPERTY()
 	TArray<int32> CellToSupercell;
 
 	/**
-	 * Orphan Cell ID 목록
-	 * SuperCell에 포함되지 않는 Cell (격자 끝단의 잔여 Cell)
+	 * Orphan cell ID list.
+	 * Cells not included in a SuperCell (leftover cells at grid edges).
 	 */
 	UPROPERTY()
 	TArray<int32> OrphanCellIds;
 
 	//=========================================================================
-	// SuperCell 좌표 ↔ ID 변환
+	// SuperCell coord <-> ID conversion
 	//=========================================================================
 
-	/** 3D 좌표 → SuperCell ID */
+	/** 3D coord -> SuperCell ID. */
 	FORCEINLINE int32 SupercellCoordToId(int32 X, int32 Y, int32 Z) const
 	{
 		return Z * (SupercellCount.X * SupercellCount.Y) + Y * SupercellCount.X + X;
@@ -1042,7 +1016,7 @@ struct REALTIMEDESTRUCTION_API FSupercellCache
 		return SupercellCoordToId(Coord.X, Coord.Y, Coord.Z);
 	}
 
-	/** SuperCell ID → 3D 좌표 */
+	/** SuperCell ID -> 3D coord. */
 	FORCEINLINE FIntVector SupercellIdToCoord(int32 SupercellId) const
 	{
 		const int32 XY = SupercellCount.X * SupercellCount.Y;
@@ -1053,13 +1027,13 @@ struct REALTIMEDESTRUCTION_API FSupercellCache
 		return FIntVector(X, Y, Z);
 	}
 
-	/** 총 SuperCell 개수 */
+	/** Total SuperCell count. */
 	FORCEINLINE int32 GetTotalSupercellCount() const
 	{
 		return SupercellCount.X * SupercellCount.Y * SupercellCount.Z;
 	}
 
-	/** SuperCell 좌표가 유효한지 확인 */
+	/** Check if SuperCell coord is valid. */
 	FORCEINLINE bool IsValidSupercellCoord(const FIntVector& Coord) const
 	{
 		return Coord.X >= 0 && Coord.X < SupercellCount.X &&
@@ -1067,17 +1041,17 @@ struct REALTIMEDESTRUCTION_API FSupercellCache
 		       Coord.Z >= 0 && Coord.Z < SupercellCount.Z;
 	}
 
-	/** SuperCell ID가 유효한지 확인 */
+	/** Check if SuperCell ID is valid. */
 	FORCEINLINE bool IsValidSupercellId(int32 SupercellId) const
 	{
 		return SupercellId >= 0 && SupercellId < GetTotalSupercellCount();
 	}
 
 	//=========================================================================
-	// Intact 상태 비트필드 접근자
+	// Intact bitfield accessors
 	//=========================================================================
 
-	/** SuperCell이 Intact 상태인지 확인 */
+	/** Check if a SuperCell is intact. */
 	FORCEINLINE bool IsSupercellIntact(int32 SupercellId) const
 	{
 		const int32 WordIndex = SupercellId >> 6;  // SupercellId / 64
@@ -1085,7 +1059,7 @@ struct REALTIMEDESTRUCTION_API FSupercellCache
 		return IntactBits.IsValidIndex(WordIndex) && (IntactBits[WordIndex] & BitMask) != 0;
 	}
 
-	/** SuperCell Intact 상태 설정 */
+	/** Set SuperCell intact state. */
 	FORCEINLINE void SetSupercellIntact(int32 SupercellId, bool bIntact)
 	{
 		const int32 WordIndex = SupercellId >> 6;
@@ -1099,29 +1073,29 @@ struct REALTIMEDESTRUCTION_API FSupercellCache
 		}
 	}
 
-	/** SuperCell을 Broken 상태로 마킹 */
+	/** Mark SuperCell as broken. */
 	FORCEINLINE void MarkSupercellBroken(int32 SupercellId)
 	{
 		SetSupercellIntact(SupercellId, false);
 	}
 
 	//=========================================================================
-	// Cell ↔ SuperCell 관계
+	// Cell <-> SuperCell relations
 	//=========================================================================
 
-	/** Cell이 속한 SuperCell ID 반환 (Orphan이면 INDEX_NONE) */
+	/** Get SuperCell ID for a cell (INDEX_NONE if orphan). */
 	FORCEINLINE int32 GetSupercellForCell(int32 CellId) const
 	{
 		return CellToSupercell.IsValidIndex(CellId) ? CellToSupercell[CellId] : INDEX_NONE;
 	}
 
-	/** Cell이 Orphan인지 확인 */
+	/** Check if a cell is orphan. */
 	FORCEINLINE bool IsCellOrphan(int32 CellId) const
 	{
 		return GetSupercellForCell(CellId) == INDEX_NONE;
 	}
 
-	/** Cell 좌표 → SuperCell 좌표 변환 */
+	/** Cell coord -> SuperCell coord. */
 	FORCEINLINE FIntVector CellCoordToSupercellCoord(const FIntVector& CellCoord) const
 	{
 		return FIntVector(
@@ -1131,94 +1105,94 @@ struct REALTIMEDESTRUCTION_API FSupercellCache
 		);
 	}
 
-	/** Cell이 특정 SuperCell의 경계에 있는지 확인 (6방향 검사) */
+	/** Check if a cell is on a SuperCell boundary (6-direction check). */
 	bool IsCellOnSupercellBoundary(const FIntVector& CellCoord, const FIntVector& SupercellCoord) const;
 
 	//=========================================================================
-	// SuperCell 내부 Cell 순회
+	// Iterating cells inside a SuperCell
 	//=========================================================================
 
-	/** SuperCell에 속한 Cell ID 목록 생성 */
-	void GetCellsInSupercell(int32 SupercellId, const FGridCellCache& GridCache, TArray<int32>& OutCellIds) const;
+	/** Build list of cell IDs in a SuperCell. */
+	void GetCellsInSupercell(int32 SupercellId, const FGridCellLayout& GridLayout, TArray<int32>& OutCellIds) const;
 
-	/** SuperCell 경계에 있는 Cell ID 목록 생성 (6면의 Cell들) */
-	void GetBoundaryCellsOfSupercell(int32 SupercellId, const FGridCellCache& GridCache, TArray<int32>& OutCellIds) const;
+	/** Build list of cell IDs on the SuperCell boundary (6 faces). */
+	void GetBoundaryCellsOfSupercell(int32 SupercellId, const FGridCellLayout& GridLayout, TArray<int32>& OutCellIds) const;
 
 	//=========================================================================
-	// 빌드 및 초기화
+	// Build and initialization
 	//=========================================================================
 
-	/** SuperCell 캐시 빌드 (GridCellCache 빌드 후 호출) */
-	void BuildFromGridCache(const FGridCellCache& GridCache);
+	/** Build SuperCell state (call after GridCellLayout is built). */
+	void BuildFromGridLayout(const FGridCellLayout& GridLayout);
 
-	/** Intact 비트필드 초기화 (모든 SuperCell을 Intact로 설정) */
+	/** Initialize intact bitfield (set all SuperCells to intact). */
 	void InitializeIntactBits();
 
-	/** 캐시 초기화 */
+	/** Reset state. */
 	void Reset();
 
-	/** 유효성 검사 */
+	/** Validate state. */
 	bool IsValid() const;
 
 	//=========================================================================
-	// Hierarchical BFS 지원 함수
+	// Hierarchical BFS helpers
 	//=========================================================================
 
 	/**
-	 * SuperCell이 진정한 Intact 상태인지 확인 (SubCell 상태 포함)
+	 * Check whether a SuperCell is truly intact (including subcell state).
 	 *
-	 * bEnableSubcell 모드에 따라 다르게 동작:
-	 * - bEnableSubcell = true: 모든 Cell의 모든 SubCell이 살아있어야 Intact
-	 * - bEnableSubcell = false: 모든 Cell이 DestroyedCells에 없어야 Intact
+	 * Behavior depends on bEnableSubcell:
+	 * - bEnableSubcell = true: every subcell of every cell must be alive
+	 * - bEnableSubcell = false: no cell may exist in DestroyedCells
 	 *
-	 * @param SupercellId - 확인할 SuperCell ID
-	 * @param GridCache - 격자 캐시 (Cell 좌표 변환용)
-	 * @param CellState - 셀 상태 (파괴/SubCell 상태)
-	 * @param bEnableSubcell - SubCell 모드 활성화 여부
-	 * @return Intact 여부
+	 * @param SupercellId - SuperCell ID to check
+	 * @param GridLayout - grid layout (for cell coord conversion)
+	 * @param CellState - cell state (destruction/subcell state)
+	 * @param bEnableSubcell - whether subcell mode is enabled
+	 * @return Whether the SuperCell is intact
 	 */
 	bool IsSupercellTrulyIntact(
 		int32 SupercellId,
-		const FGridCellCache& GridCache,
-		const struct FCellState& CellState,
+		const FGridCellLayout& GridLayout,
+		const FCellState& CellState,
 		bool bEnableSubcell) const;
 
 	/**
-	 * 파괴된 Cell/SubCell에 의해 영향받은 SuperCell 상태 업데이트
+	 * Update SuperCell states affected by destroyed cells/subcells.
 	 *
-	 * 파괴 발생 시 호출하여 해당 Cell이 속한 SuperCell을 Broken으로 마킹
+	 * Call on destruction to mark the owning SuperCell as broken.
 	 *
-	 * @param AffectedCellIds - 영향받은 Cell ID 목록
+	 * @param AffectedCellIds - affected cell IDs
 	 */
 	void UpdateSupercellStates(const TArray<int32>& AffectedCellIds);
 
 	/**
-	 * 단일 Cell 파괴에 의한 SuperCell 상태 업데이트
+	 * Update SuperCell state for a single cell destruction.
 	 *
-	 * @param CellId - 파괴된 Cell ID
+	 * @param CellId - destroyed cell ID
 	 */
 	void OnCellDestroyed(int32 CellId);
 
 	/**
-	 * SubCell 파괴에 의한 SuperCell 상태 업데이트
-	 * bEnableSubcell = true일 때만 호출
+	 * Update SuperCell state for a subcell destruction.
+	 * Call only when bEnableSubcell is true.
 	 *
-	 * @param CellId - SubCell이 속한 Cell ID
-	 * @param SubCellId - 파괴된 SubCell ID
+	 * @param CellId - cell ID containing the subcell
+	 * @param SubCellId - destroyed SubCell ID
 	 */
 	void OnSubCellDestroyed(int32 CellId, int32 SubCellId);
 
 	/**
-	 * SuperCell의 특정 방향 경계 Cell ID 목록 반환
+	 * Get boundary cell IDs in a given SuperCell direction.
 	 *
 	 * @param SupercellId - SuperCell ID
-	 * @param Direction - 방향 (0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z)
-	 * @param GridCache - 격자 캐시
-	 * @param OutCellIds - 경계 Cell ID 목록 (출력)
+	 * @param Direction - direction (0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z)
+	 * @param GridLayout - grid layout
+	 * @param OutCellIds - boundary cell IDs (output)
 	 */
 	void GetBoundaryCellsInDirection(
 		int32 SupercellId,
 		int32 Direction,
-		const FGridCellCache& GridCache,
+		const FGridCellLayout& GridLayout,
 		TArray<int32>& OutCellIds) const;
 };

@@ -115,7 +115,7 @@ void UAnchorActionObejct::ApplyAllAnchorPlanes()
 
 		Comp->Modify();
 
-		FGridCellCache& GridCellCache = Comp->GetGridCellCache();
+		FGridCellLayout& GridCellCache = Comp->GetGridCellLayout();
 		if (GridCellCache.GetTotalCellCount() == 0)
 		{
 			Comp->BuildGridCells();
@@ -184,7 +184,7 @@ void UAnchorActionObejct::ApplyAllAnchorVolumes()
 
 		Comp->Modify();
 
-		FGridCellCache& GridCellCache = Comp->GetGridCellCache();
+		FGridCellLayout& GridCellCache = Comp->GetGridCellLayout();
 		if (GridCellCache.GetTotalCellCount() == 0)
 		{
 			Comp->BuildGridCells();
@@ -342,7 +342,7 @@ void UAnchorActionObejct::RemoveAllAnchors()
 
 		Comp->Modify();
 
-		FGridCellCache& GridCellCache = Comp->GetGridCellCache();
+		FGridCellLayout& GridCellCache = Comp->GetGridCellLayout();
 		if (GridCellCache.IsValid())
 		{
 			FGridCellBuilder::ClearAllAnchors(GridCellCache);;
@@ -374,7 +374,7 @@ void UAnchorActionObejct::ApplyAnchors()
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ApplyAnchorsToSelectedComp", "Apply Anchors To Selected"));
 
-	FGridCellCache& GridCellCache = TargetComp->GetGridCellCache();
+	FGridCellLayout& GridCellCache = TargetComp->GetGridCellLayout();
 	if (!GridCellCache.IsValid())
 	{
 		TargetComp->BuildGridCells();
@@ -475,7 +475,7 @@ void UAnchorActionObejct::RemoveAnchors()
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ApplyAnchorsToSelectedComp", "Apply Anchors To Selected"));
 
-	FGridCellCache& GridCellCache = TargetComp->GetGridCellCache();
+	FGridCellLayout& GridCellCache = TargetComp->GetGridCellLayout();
 	if (!GridCellCache.IsValid())
 	{
 		return;
@@ -503,7 +503,7 @@ void UAnchorActionObejct::BuildGridCellsForSelection()
 
 	TargetComp->Modify();
 
-	FGridCellCache& Cache = TargetComp->GetGridCellCache();
+	FGridCellLayout& Cache = TargetComp->GetGridCellLayout();
 
 	if (!Cache.IsValid() || Cache.GetTotalCellCount() == 0)
 	{
@@ -588,7 +588,7 @@ void UAnchorActionObejct::UpdateCellCounts()
 	ValidCellCount = 0;
 	AnchorCellCount = 0;	
 
-	FGridCellCache& Cache = TargetComp->GetGridCellCache();
+	FGridCellLayout& Cache = TargetComp->GetGridCellLayout();
 	if (!Cache.IsValid())
 	{
 		return;

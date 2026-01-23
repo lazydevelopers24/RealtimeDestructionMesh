@@ -717,15 +717,15 @@ protected:
 
 	/** 격자 셀 캐시 (에디터에서 생성, 런타임 변경 없음) */
 	UPROPERTY()
-	FGridCellCache GridCellCache;
+	FGridCellLayout GridCellLayout;
 
 	/** 런타임 셀 상태 */
 	UPROPERTY()
 	FCellState CellState;
 
-	/** SuperCell 캐시 (BFS 최적화용, GridCellCache 빌드 후 생성) */
+	/** SuperCell 상태 (BFS 최적화용, GridCellLayout 빌드 후 생성) */
 	UPROPERTY()
-	FSupercellCache SupercellCache;
+	FSuperCellState SupercellState;
 
 	//=========================================================================
 	// Cell 기반 구조적 무결성 시스템
@@ -811,9 +811,9 @@ public:
 	UFUNCTION(CallInEditor, Category = "RealtimeDestructibleMesh")
 	void EditorBuildGridCells();
 
-	/** 격자 셀 캐시 유효 여부 */
+	/** 격자 셀 레이아웃 유효 여부 */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|GridCell")
-	bool IsGridCellCacheValid() const { return GridCellCache.IsValid(); }
+	bool IsGridCellLayoutValid() const { return GridCellLayout.IsValid(); }
 
 private:
 	/**
@@ -826,10 +826,10 @@ private:
 	void FindChunksAlongLineInternal(const FVector& WorldStart, const FVector& WorldEnd, TArray<int32>& OutChunkIndices);
 
 public:
-	/** GridCellCache 조회 (읽기 전용) */
-	const FGridCellCache& GetGridCellCache() const { return GridCellCache; }
+	/** GridCellLayout 조회 (읽기 전용) */
+	const FGridCellLayout& GetGridCellLayout() const { return GridCellLayout; }
 
-	FGridCellCache& GetGridCellCache() { return GridCellCache; }
+	FGridCellLayout& GetGridCellLayout() { return GridCellLayout; }
 
 	/** CellState 조회 (읽기 전용) */
 	const FCellState& GetCellState() const { return CellState; }

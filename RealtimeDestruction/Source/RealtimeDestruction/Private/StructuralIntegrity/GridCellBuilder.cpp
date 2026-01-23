@@ -19,7 +19,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	const FVector& MeshScale,
 	const FVector& CellSize,
 	float AnchorHeightThreshold,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
 	if (!SourceMesh)
 	{
@@ -27,8 +27,8 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 		return false;
 	}
 
-	OutCache.Reset();
-	OutCache.CellSize = CellSize;
+	OutLayout.Reset();
+	OutLayout.CellSize = CellSize;
 
 	// 1. 바운딩 박스 계산 (로컬 스페이스 유지)
 	const FBox LocalBounds = SourceMesh->GetBoundingBox();
@@ -39,7 +39,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	}
 
 	// 스케일 저장 (Collision 체크 시 사용)
-	OutCache.MeshScale = MeshScale;
+	OutLayout.MeshScale = MeshScale;
 
 	// 스케일 적용된 크기로 격자 차원 계산 (셀 수 결정용)
 	const FVector ScaledSize = LocalBounds.GetSize() * MeshScale;
@@ -57,18 +57,18 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	);
 
 	// 2. 격자 설정 (로컬 스페이스)
-	OutCache.GridOrigin = LocalBounds.Min;
-	OutCache.GridSize = GridDimensions;
-	OutCache.CellSize = LocalCellSize;  // 로컬 스페이스 셀 크기
+	OutLayout.GridOrigin = LocalBounds.Min;
+	OutLayout.GridSize = GridDimensions;
+	OutLayout.CellSize = LocalCellSize;  // 로컬 스페이스 셀 크기
 
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 
 	UE_LOG(LogTemp, Log, TEXT("BuildFromStaticMesh: Scale=(%.2f, %.2f, %.2f), ScaledSize=(%.1f, %.1f, %.1f), WorldCellSize=%.1f, LocalCellSize=(%.2f, %.2f, %.2f), Grid=(%d,%d,%d), Total=%d"),
 		MeshScale.X, MeshScale.Y, MeshScale.Z,
 		ScaledSize.X, ScaledSize.Y, ScaledSize.Z,
 		CellSize.X,
 		LocalCellSize.X, LocalCellSize.Y, LocalCellSize.Z,
-		OutCache.GridSize.X, OutCache.GridSize.Y, OutCache.GridSize.Z,
+		OutLayout.GridSize.X, OutLayout.GridSize.Y, OutLayout.GridSize.Z,
 		TotalCells);
 
 	if (TotalCells <= 0 || TotalCells > 1000000)
@@ -78,13 +78,13 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	}
 
 	// 3. 비트필드 초기화 (0으로 초기화됨)
-	OutCache.InitializeBitfields();
+	OutLayout.InitializeBitfields();
 
 	 // 4. Collision 기반 복셀화 (우선순위: Convex > Box > Sphere > Capsule > BoundingBox)
 	 //UBodySetup* BodySetup = SourceMesh->GetBodySetup();
 	 //if (BodySetup)
 	 //{
-	 //	VoxelizeWithCollision(BodySetup, OutCache);
+	 //	VoxelizeWithCollision(BodySetup, OutLayout);
 	 //}
 	 //else
 	 //{
@@ -92,24 +92,24 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 	 //	UE_LOG(LogTemp, Warning, TEXT("FGridCellBuilder: No BodySetup, filling bounding box"));
 	 //	for (int32 i = 0; i < TotalCells; i++)
 	 //	{
-	 //		OutCache.SetCellExists(i, true);
-	 //		OutCache.RegisterValidCell(i);
+	 //		OutLayout.SetCellExists(i, true);
+	 //		OutLayout.RegisterValidCell(i);
 	 //	}
 	 //}
 	
-	 VoxelizeWithTriangles(SourceMesh, OutCache);
+	 VoxelizeWithTriangles(SourceMesh, OutLayout);
 
-	 FillInsideVoxels(OutCache);
+	 FillInsideVoxels(OutLayout);
 
 	// 6. 인접 관계 계산
-	CalculateNeighbors(OutCache);
+	CalculateNeighbors(OutLayout);
 
 	// 7. 앵커 판정
-	DetermineAnchors(OutCache, AnchorHeightThreshold);
+	DetermineAnchors(OutLayout, AnchorHeightThreshold);
 
 	UE_LOG(LogTemp, Log, TEXT("FGridCellBuilder: Built grid %dx%dx%d, valid cells: %d"),
-		OutCache.GridSize.X, OutCache.GridSize.Y, OutCache.GridSize.Z,
-		OutCache.GetValidCellCount());
+		OutLayout.GridSize.X, OutLayout.GridSize.Y, OutLayout.GridSize.Z,
+		OutLayout.GetValidCellCount());
 
 	return true;
 }
@@ -118,10 +118,10 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 	const FDynamicMesh3& Mesh,
 	const FVector& CellSize,
 	float AnchorHeightThreshold,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
-	OutCache.Reset();
-	OutCache.CellSize = CellSize;
+	OutLayout.Reset();
+	OutLayout.CellSize = CellSize;
 
 	// 1. 바운딩 박스 계산
 	FAxisAlignedBox3d Bounds = Mesh.GetBounds();
@@ -137,9 +137,9 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 	);
 
 	// 2. 격자 크기 계산
-	CalculateGridDimensions(UnrealBounds, CellSize, OutCache);
+	CalculateGridDimensions(UnrealBounds, CellSize, OutLayout);
 
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	if (TotalCells <= 0 || TotalCells > 1000000)  // 100만 셀 제한
 	{
 		UE_LOG(LogTemp, Warning, TEXT("FGridCellBuilder: Invalid cell count: %d"), TotalCells);
@@ -147,20 +147,20 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 	}
 
 	// 3. 비트필드 초기화 (0으로 초기화됨)
-	OutCache.InitializeBitfields();
+	OutLayout.InitializeBitfields();
 
 	// 4. 삼각형 할당
-	AssignTrianglesToCells(Mesh, OutCache);
+	AssignTrianglesToCells(Mesh, OutLayout);
 
 	// 6. 인접 관계 계산
-	CalculateNeighbors(OutCache);
+	CalculateNeighbors(OutLayout);
 
 	// 7. 앵커 판정
-	DetermineAnchors(OutCache, AnchorHeightThreshold);
+	DetermineAnchors(OutLayout, AnchorHeightThreshold);
 
 	UE_LOG(LogTemp, Log, TEXT("FGridCellBuilder: Built grid %dx%dx%d, valid cells: %d"),
-		OutCache.GridSize.X, OutCache.GridSize.Y, OutCache.GridSize.Z,
-		OutCache.GetValidCellCount());
+		OutLayout.GridSize.X, OutLayout.GridSize.Y, OutLayout.GridSize.Z,
+		OutLayout.GetValidCellCount());
 
 	return true;
 }
@@ -168,22 +168,22 @@ bool FGridCellBuilder::BuildFromDynamicMesh(
 void FGridCellBuilder::SetAnchorsByFinitePlane(
 	const FTransform& PlaneTransform,
 	const FTransform& MeshTransform,
-	FGridCellCache& OutCache,
+	FGridCellLayout& OutLayout,
 	bool bIsEraser)
 {
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	int32 AddedAnchors = 0;
 
 	const float CubeExtent = 50.0f;
 
 	for (int32 CellId = 0; CellId < TotalCells; ++CellId)
 	{
-		if (!OutCache.GetCellExists(CellId))
+		if (!OutLayout.GetCellExists(CellId))
 		{
 			continue;
 		}
 
-		FVector LocalPos = OutCache.IdToLocalCenter(CellId);
+		FVector LocalPos = OutLayout.IdToLocalCenter(CellId);
 		FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
 
 		FVector CubeSpacePos = PlaneTransform.InverseTransformPosition(WorldPos);
@@ -197,16 +197,16 @@ void FGridCellBuilder::SetAnchorsByFinitePlane(
 			{
 				if (bIsEraser)
 				{
-					if (OutCache.GetCellExists(CellId))
+					if (OutLayout.GetCellExists(CellId))
 					{
-						OutCache.SetCellIsAnchor(CellId, false);
+						OutLayout.SetCellIsAnchor(CellId, false);
 					}
 				}
 				else
 				{
-					if (!OutCache.GetCellIsAnchor(CellId))
+					if (!OutLayout.GetCellIsAnchor(CellId))
 					{
-						OutCache.SetCellIsAnchor(CellId, true);
+						OutLayout.SetCellIsAnchor(CellId, true);
 						AddedAnchors++;
 					}
 				}
@@ -222,21 +222,21 @@ void FGridCellBuilder::SetAnchorsByFiniteBox(
 	const FTransform& BoxTransform,
 	const FVector& BoxExtent,
 	const FTransform& MeshTransform,
-	FGridCellCache& OutCache,
+	FGridCellLayout& OutLayout,
 	bool bIsEraser)
 {
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	int32 AddedAnchors = 0;
 	int32 RemovedAnchors = 0;
 
 	for (int32 CellId = 0; CellId < TotalCells; ++CellId)
 	{
-		if (!OutCache.GetCellExists(CellId))
+		if (!OutLayout.GetCellExists(CellId))
 		{
 			continue;
 		}
 
-		const FVector LocalPos = OutCache.IdToLocalCenter(CellId);
+		const FVector LocalPos = OutLayout.IdToLocalCenter(CellId);
 		const FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
 
 		// World -> Box Local (회전/스케일 포함)
@@ -254,17 +254,17 @@ void FGridCellBuilder::SetAnchorsByFiniteBox(
 
 		if (bIsEraser)
 		{
-			if (OutCache.GetCellIsAnchor(CellId))
+			if (OutLayout.GetCellIsAnchor(CellId))
 			{
-				OutCache.SetCellIsAnchor(CellId, false);
+				OutLayout.SetCellIsAnchor(CellId, false);
 				RemovedAnchors++;
 			}
 		}
 		else
 		{
-			if (!OutCache.GetCellIsAnchor(CellId))
+			if (!OutLayout.GetCellIsAnchor(CellId))
 			{
-				OutCache.SetCellIsAnchor(CellId, true);
+				OutLayout.SetCellIsAnchor(CellId, true);
 				AddedAnchors++;
 			}
 		}
@@ -277,10 +277,10 @@ void FGridCellBuilder::SetAnchorsByFiniteSphere(
 	const FTransform& SphereTransform,
 	float SphereRadius,
 	const FTransform& MeshTransform,
-	FGridCellCache& OutCache,
+	FGridCellLayout& OutLayout,
 	bool bIsEraser)
 {
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	int32 AddedAnchors = 0;
 	int32 RemovedAnchors = 0;
 
@@ -289,12 +289,12 @@ void FGridCellBuilder::SetAnchorsByFiniteSphere(
 
 	for (int32 CellId = 0; CellId < TotalCells; ++CellId)
 	{
-		if (!OutCache.GetCellExists(CellId))
+		if (!OutLayout.GetCellExists(CellId))
 		{
 			continue;
 		}
 
-		const FVector LocalPos = OutCache.IdToLocalCenter(CellId);
+		const FVector LocalPos = OutLayout.IdToLocalCenter(CellId);
 		const FVector WorldPos = MeshTransform.TransformPosition(LocalPos);
 
 		// World -> Sphere Local (스케일까지 포함해 역변환)
@@ -309,17 +309,17 @@ void FGridCellBuilder::SetAnchorsByFiniteSphere(
 
 		if (bIsEraser)
 		{
-			if (OutCache.GetCellIsAnchor(CellId))
+			if (OutLayout.GetCellIsAnchor(CellId))
 			{
-				OutCache.SetCellIsAnchor(CellId, false);
+				OutLayout.SetCellIsAnchor(CellId, false);
 				RemovedAnchors++;
 			}
 		}
 		else
 		{
-			if (!OutCache.GetCellIsAnchor(CellId))
+			if (!OutLayout.GetCellIsAnchor(CellId))
 			{
-				OutCache.SetCellIsAnchor(CellId, true);
+				OutLayout.SetCellIsAnchor(CellId, true);
 				AddedAnchors++;
 			}
 		}
@@ -329,16 +329,16 @@ void FGridCellBuilder::SetAnchorsByFiniteSphere(
 	       RemovedAnchors, Radius);
 }
 
-void FGridCellBuilder::ClearAllAnchors(FGridCellCache& OutCache)
+void FGridCellBuilder::ClearAllAnchors(FGridCellLayout& OutLayout)
 {
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	int32 ClearedCount = 0;
 
 	for (int32 i = 0; i < TotalCells; ++i)
 	{
-		if (OutCache.GetCellExists(i) && OutCache.GetCellIsAnchor(i))
+		if (OutLayout.GetCellExists(i) && OutLayout.GetCellIsAnchor(i))
 		{
-			OutCache.SetCellIsAnchor(i, false);
+			OutLayout.SetCellIsAnchor(i, false);
 			ClearedCount++;
 		}
 	}
@@ -353,13 +353,13 @@ void FGridCellBuilder::ClearAllAnchors(FGridCellCache& OutCache)
 void FGridCellBuilder::CalculateGridDimensions(
 	const FBox& Bounds,
 	const FVector& CellSize,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
-	OutCache.GridOrigin = Bounds.Min;
+	OutLayout.GridOrigin = Bounds.Min;
 
 	const FVector Size = Bounds.GetSize();
 
-	OutCache.GridSize = FIntVector(
+	OutLayout.GridSize = FIntVector(
 		FMath::Max(1, FMath::CeilToInt(Size.X / CellSize.X)),
 		FMath::Max(1, FMath::CeilToInt(Size.Y / CellSize.Y)),
 		FMath::Max(1, FMath::CeilToInt(Size.Z / CellSize.Z))
@@ -368,10 +368,10 @@ void FGridCellBuilder::CalculateGridDimensions(
 
 void FGridCellBuilder::AssignTrianglesToCells(
 	const FDynamicMesh3& Mesh,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
 	// 1. 먼저 복셀화 수행 (유효 셀 등록)
-	VoxelizeMesh(Mesh, OutCache);
+	VoxelizeMesh(Mesh, OutLayout);
 
 	// 2. 삼각형을 해당 셀에 할당 (희소 배열 사용)
 	for (int32 TriId : Mesh.TriangleIndicesItr())
@@ -383,19 +383,19 @@ void FGridCellBuilder::AssignTrianglesToCells(
 		const FVector3d TriCenter = (V0 + V1 + V2) / 3.0;
 
 		const int32 X = FMath::Clamp(
-			FMath::FloorToInt((TriCenter.X - OutCache.GridOrigin.X) / OutCache.CellSize.X),
-			0, OutCache.GridSize.X - 1);
+			FMath::FloorToInt((TriCenter.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
+			0, OutLayout.GridSize.X - 1);
 		const int32 Y = FMath::Clamp(
-			FMath::FloorToInt((TriCenter.Y - OutCache.GridOrigin.Y) / OutCache.CellSize.Y),
-			0, OutCache.GridSize.Y - 1);
+			FMath::FloorToInt((TriCenter.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
+			0, OutLayout.GridSize.Y - 1);
 		const int32 Z = FMath::Clamp(
-			FMath::FloorToInt((TriCenter.Z - OutCache.GridOrigin.Z) / OutCache.CellSize.Z),
-			0, OutCache.GridSize.Z - 1);
+			FMath::FloorToInt((TriCenter.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
+			0, OutLayout.GridSize.Z - 1);
 
-		const int32 CellId = OutCache.CoordToId(X, Y, Z);
+		const int32 CellId = OutLayout.CoordToId(X, Y, Z);
 
 		// 희소 배열에 삼각형 추가
-		FIntArray* Triangles = OutCache.GetCellTrianglesMutable(CellId);
+		FIntArray* Triangles = OutLayout.GetCellTrianglesMutable(CellId);
 		if (Triangles)
 		{
 			Triangles->Add(TriId);
@@ -405,14 +405,14 @@ void FGridCellBuilder::AssignTrianglesToCells(
 
 void FGridCellBuilder::VoxelizeMesh(
 	const UE::Geometry::FDynamicMesh3& Mesh,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
 	// DynamicMesh 버전 - 바운딩 박스로 채우기 (Convex 정보 없음)
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 	for (int32 CellId = 0; CellId < TotalCells; CellId++)
 	{
-		OutCache.SetCellExists(CellId, true);
-		OutCache.RegisterValidCell(CellId);
+		OutLayout.SetCellExists(CellId, true);
+		OutLayout.RegisterValidCell(CellId);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("VoxelizeMesh: Filled bounding box with %d cells"), TotalCells);
@@ -420,7 +420,7 @@ void FGridCellBuilder::VoxelizeMesh(
 
 void FGridCellBuilder::VoxelizeWithCollision(
 	const UBodySetup* BodySetup,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
 	if (!BodySetup)
 	{
@@ -428,7 +428,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 	}
 
 	const FKAggregateGeom& AggGeom = BodySetup->AggGeom;
-	const int32 TotalCells = OutCache.GetTotalCellCount();
+	const int32 TotalCells = OutLayout.GetTotalCellCount();
 
 	// Collision 타입별 개수 확인
 	const int32 NumConvex = AggGeom.ConvexElems.Num();
@@ -461,8 +461,8 @@ void FGridCellBuilder::VoxelizeWithCollision(
 		UE_LOG(LogTemp, Warning, TEXT("VoxelizeWithCollision: No collision elements, filling bounding box"));
 		for (int32 i = 0; i < TotalCells; i++)
 		{
-			OutCache.SetCellExists(i, true);
-			OutCache.RegisterValidCell(i);
+			OutLayout.SetCellExists(i, true);
+			OutLayout.RegisterValidCell(i);
 		}
 		return;
 	}
@@ -471,7 +471,7 @@ void FGridCellBuilder::VoxelizeWithCollision(
 	// (셀 중심은 런타임 계산, Collision도 로컬 스페이스)
 	for (int32 CellId = 0; CellId < TotalCells; CellId++)
 	{
-		const FVector CellCenterLocal = OutCache.IdToLocalCenter(CellId);
+		const FVector CellCenterLocal = OutLayout.IdToLocalCenter(CellId);
 		bool bCellExists = false;
 
 		// Convex 체크
@@ -526,27 +526,27 @@ void FGridCellBuilder::VoxelizeWithCollision(
 		// 유효 셀 등록
 		if (bCellExists)
 		{
-			OutCache.SetCellExists(CellId, true);
-			OutCache.RegisterValidCell(CellId);
+			OutLayout.SetCellExists(CellId, true);
+			OutLayout.RegisterValidCell(CellId);
 		}
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("VoxelizeWithCollision: Valid cells = %d / %d"),
-		OutCache.GetValidCellCount(), TotalCells);
+		OutLayout.GetValidCellCount(), TotalCells);
 }
 
 void FGridCellBuilder::VoxelizeWithConvex(
 	const UBodySetup* BodySetup,
-	FGridCellCache& OutCache)
+	FGridCellLayout& OutLayout)
 {
 	// 호환성을 위해 유지 - VoxelizeWithCollision으로 위임
-	VoxelizeWithCollision(BodySetup, OutCache);
+	VoxelizeWithCollision(BodySetup, OutLayout);
 }
 
 
   void FGridCellBuilder::VoxelizeWithTriangles(
       const UStaticMesh* SourceMesh,
-      FGridCellCache& OutCache)
+      FGridCellLayout& OutLayout)
   {
       // MeshDescription 가져오기 (Mesh에 대한 자세한 정보가 있음)
       UStaticMeshDescription* StaticMeshDesc = const_cast<UStaticMesh*>(SourceMesh)->GetStaticMeshDescription(0);
@@ -555,11 +555,11 @@ void FGridCellBuilder::VoxelizeWithConvex(
       if (!MeshDesc)
       {
           // MeshDescription 없으면 바운딩 박스로 채우기 (fallback)
-          const int32 TotalCells = OutCache.GetTotalCellCount();
+          const int32 TotalCells = OutLayout.GetTotalCellCount();
           for (int32 i = 0; i < TotalCells; i++)
           {
-              OutCache.SetCellExists(i, true);
-              OutCache.RegisterValidCell(i);
+              OutLayout.SetCellExists(i, true);
+              OutLayout.RegisterValidCell(i);
           }
           return;
       }
@@ -592,24 +592,24 @@ void FGridCellBuilder::VoxelizeWithConvex(
 
           // 삼각형 AABB가 걸치는 셀 범위 계산
           const int32 MinCellX = FMath::Clamp(
-              FMath::FloorToInt((TriMin.X - OutCache.GridOrigin.X) / OutCache.CellSize.X),
-              0, OutCache.GridSize.X - 1);
+              FMath::FloorToInt((TriMin.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
+              0, OutLayout.GridSize.X - 1);
           const int32 MinCellY = FMath::Clamp(
-              FMath::FloorToInt((TriMin.Y - OutCache.GridOrigin.Y) / OutCache.CellSize.Y),
-              0, OutCache.GridSize.Y - 1);
+              FMath::FloorToInt((TriMin.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
+              0, OutLayout.GridSize.Y - 1);
           const int32 MinCellZ = FMath::Clamp(
-              FMath::FloorToInt((TriMin.Z - OutCache.GridOrigin.Z) / OutCache.CellSize.Z),
-              0, OutCache.GridSize.Z - 1);
+              FMath::FloorToInt((TriMin.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
+              0, OutLayout.GridSize.Z - 1);
 
           const int32 MaxCellX = FMath::Clamp(
-              FMath::FloorToInt((TriMax.X - OutCache.GridOrigin.X) / OutCache.CellSize.X),
-              0, OutCache.GridSize.X - 1);
+              FMath::FloorToInt((TriMax.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
+              0, OutLayout.GridSize.X - 1);
           const int32 MaxCellY = FMath::Clamp(
-              FMath::FloorToInt((TriMax.Y - OutCache.GridOrigin.Y) / OutCache.CellSize.Y),
-              0, OutCache.GridSize.Y - 1);
+              FMath::FloorToInt((TriMax.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
+              0, OutLayout.GridSize.Y - 1);
           const int32 MaxCellZ = FMath::Clamp(
-              FMath::FloorToInt((TriMax.Z - OutCache.GridOrigin.Z) / OutCache.CellSize.Z),
-              0, OutCache.GridSize.Z - 1);
+              FMath::FloorToInt((TriMax.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
+              0, OutLayout.GridSize.Z - 1);
 
           // 해당 범위의 모든 셀을 유효하게 설정
           for (int32 Z = MinCellZ; Z <= MaxCellZ; Z++)
@@ -618,26 +618,26 @@ void FGridCellBuilder::VoxelizeWithConvex(
               {
                   for (int32 X = MinCellX; X <= MaxCellX; X++)
                   {
-					  const int32 CellId = OutCache.CoordToId(X, Y, Z);
+					  const int32 CellId = OutLayout.CoordToId(X, Y, Z);
 
 					  // 이미 포함했으면 skip
-					  if (OutCache.GetCellExists(CellId))
+					  if (OutLayout.GetCellExists(CellId))
 					  {
 						  continue;
 					  }
 
 					  // 없을 때만 교차 검사
 					  FVector CellMin(
-						  OutCache.GridOrigin.X + X * OutCache.CellSize.X,
-						  OutCache.GridOrigin.Y + Y * OutCache.CellSize.Y,
-						  OutCache.GridOrigin.Z + Z * OutCache.CellSize.Z
+						  OutLayout.GridOrigin.X + X * OutLayout.CellSize.X,
+						  OutLayout.GridOrigin.Y + Y * OutLayout.CellSize.Y,
+						  OutLayout.GridOrigin.Z + Z * OutLayout.CellSize.Z
 					  );
-					  FVector CellMax = CellMin + OutCache.CellSize;
+					  FVector CellMax = CellMin + OutLayout.CellSize;
 
 					  if (TriangleIntersectsAABB(V0, V1, V2, CellMin, CellMax))
 					  {
-						  OutCache.SetCellExists(CellId, true);
-						  OutCache.RegisterValidCell(CellId);
+						  OutLayout.SetCellExists(CellId, true);
+						  OutLayout.RegisterValidCell(CellId);
 					  }
                   }
               }
@@ -645,7 +645,7 @@ void FGridCellBuilder::VoxelizeWithConvex(
       }
 
       UE_LOG(LogTemp, Log, TEXT("VoxelizeWithTriangles: Valid cells = %d"),
-          OutCache.GetValidCellCount());
+          OutLayout.GetValidCellCount());
 }
 
 bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& V1, const FVector& V2, const FVector& BoxMin, const FVector& BoxMax)
@@ -762,13 +762,13 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 	return true;
 }
 
-void FGridCellBuilder::FillInsideVoxels(FGridCellCache& OutCache)
+void FGridCellBuilder::FillInsideVoxels(FGridCellLayout& OutLayout)
 {
 	// 방문 여부 체크용 (메모리 아끼려면 TBitArray가 좋지만 편의상 TSet 사용)
 	TSet<int32> VisitedOutside;
 	TQueue<int32> Queue;
 
-	const FIntVector GridSize = OutCache.GridSize;
+	const FIntVector GridSize = OutLayout.GridSize;
 
 	// 1. 초기화: 격자의 가장자리(Boundary) 6면을 큐에 넣음 (여기는 무조건 바깥 공기임)
 	for (int32 Z = 0; Z < GridSize.Z; ++Z)
@@ -782,10 +782,10 @@ void FGridCellBuilder::FillInsideVoxels(FGridCellCache& OutCache)
 					Y == 0 || Y == GridSize.Y - 1 ||
 					Z == 0 || Z == GridSize.Z - 1)
 				{
-					int32 CellId = OutCache.CoordToId(X, Y, Z);
+					int32 CellId = OutLayout.CoordToId(X, Y, Z);
 
 					// 테두리인데 껍데기(Mesh)가 없다면 -> 확실한 공기(Air)
-					if (!OutCache.GetCellExists(CellId))
+					if (!OutLayout.GetCellExists(CellId))
 					{
 						Queue.Enqueue(CellId);
 						VisitedOutside.Add(CellId);
@@ -804,19 +804,19 @@ void FGridCellBuilder::FillInsideVoxels(FGridCellCache& OutCache)
 	int32 CurrentId;
 	while (Queue.Dequeue(CurrentId))
 	{
-		FIntVector CurrentCoord = OutCache.IdToCoord(CurrentId);
+		FIntVector CurrentCoord = OutLayout.IdToCoord(CurrentId);
 
 		for (const FIntVector& Dir : Directions)
 		{
 			FIntVector NextCoord = CurrentCoord + Dir;
 
 			// 격자 밖이면 패스
-			if (!OutCache.IsValidCoord(NextCoord)) continue;
+			if (!OutLayout.IsValidCoord(NextCoord)) continue;
 
-			int32 NextId = OutCache.CoordToId(NextCoord);
+			int32 NextId = OutLayout.CoordToId(NextCoord);
 
 			// 이미 방문했거나(공기), 껍데기(벽)라면 더 못 들어감
-			if (VisitedOutside.Contains(NextId) || OutCache.GetCellExists(NextId))
+			if (VisitedOutside.Contains(NextId) || OutLayout.GetCellExists(NextId))
 			{
 				continue;
 			}
@@ -828,18 +828,18 @@ void FGridCellBuilder::FillInsideVoxels(FGridCellCache& OutCache)
 	}
 
 	// 3. 반전 (Invert): 공기가 닿지 못한 곳 = 내부
-	const int32 TotalCells = OutCache.GetTotalCellCount(); 
+	const int32 TotalCells = OutLayout.GetTotalCellCount(); 
 
 	for (int32 i = 0; i < TotalCells; ++i)
 	{
 		// 이미 껍데기면 건너뜀
-		if (OutCache.GetCellExists(i)) continue;
+		if (OutLayout.GetCellExists(i)) continue;
 
 		// 바깥 공기가 도달하지 못한 곳 == 내부
 		if (!VisitedOutside.Contains(i))
 		{
-			OutCache.SetCellExists(i, true); // 채운다!
-			OutCache.RegisterValidCell(i); 
+			OutLayout.SetCellExists(i, true); // 채운다!
+			OutLayout.RegisterValidCell(i); 
 		}
 	}
 	 
@@ -984,7 +984,7 @@ bool FGridCellBuilder::IsPointInsideCapsule(
 	}
 }
 
-void FGridCellBuilder::CalculateNeighbors(FGridCellCache& OutCache)
+void FGridCellBuilder::CalculateNeighbors(FGridCellLayout& OutLayout)
 {
 	// 6방향 (±X, ±Y, ±Z)
 	static const FIntVector Directions[6] = {
@@ -994,10 +994,10 @@ void FGridCellBuilder::CalculateNeighbors(FGridCellCache& OutCache)
 	};
 
 	// 유효 셀만 순회 (희소 배열)
-	for (int32 CellId : OutCache.GetValidCellIds())
+	for (int32 CellId : OutLayout.GetValidCellIds())
 	{
-		const FIntVector Coord = OutCache.IdToCoord(CellId);
-		FIntArray* Neighbors = OutCache.GetCellNeighborsMutable(CellId);
+		const FIntVector Coord = OutLayout.IdToCoord(CellId);
+		FIntArray* Neighbors = OutLayout.GetCellNeighborsMutable(CellId);
 		if (!Neighbors)
 		{
 			continue;
@@ -1008,14 +1008,14 @@ void FGridCellBuilder::CalculateNeighbors(FGridCellCache& OutCache)
 			const FIntVector NeighborCoord = Coord + Dir;
 
 			// 범위 체크
-			if (!OutCache.IsValidCoord(NeighborCoord))
+			if (!OutLayout.IsValidCoord(NeighborCoord))
 			{
 				continue;
 			}
 
-			const int32 NeighborId = OutCache.CoordToId(NeighborCoord);
+			const int32 NeighborId = OutLayout.CoordToId(NeighborCoord);
 
-			if (OutCache.GetCellExists(NeighborId))
+			if (OutLayout.GetCellExists(NeighborId))
 			{
 				Neighbors->Add(NeighborId);
 			}
@@ -1024,21 +1024,21 @@ void FGridCellBuilder::CalculateNeighbors(FGridCellCache& OutCache)
 }
 
 void FGridCellBuilder::DetermineAnchors(
-	FGridCellCache& OutCache,
+	FGridCellLayout& OutLayout,
 	float HeightThreshold)
 {
-	const float FloorZ = OutCache.GridOrigin.Z;
+	const float FloorZ = OutLayout.GridOrigin.Z;
 
 	// 유효 셀만 순회 (희소 배열)
-	for (int32 CellId : OutCache.GetValidCellIds())
+	for (int32 CellId : OutLayout.GetValidCellIds())
 	{
 		// Z=0 레이어이거나 바닥에 가까운 셀은 앵커
-		const FIntVector Coord = OutCache.IdToCoord(CellId);
-		const float CellMinZ = OutCache.GridOrigin.Z + Coord.Z * OutCache.CellSize.Z;
+		const FIntVector Coord = OutLayout.IdToCoord(CellId);
+		const float CellMinZ = OutLayout.GridOrigin.Z + Coord.Z * OutLayout.CellSize.Z;
 
 		if (CellMinZ - FloorZ <= HeightThreshold)
 		{
-			OutCache.SetCellIsAnchor(CellId, true);
+			OutLayout.SetCellIsAnchor(CellId, true);
 		}
 	}
 }

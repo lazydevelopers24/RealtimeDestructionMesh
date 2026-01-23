@@ -27,7 +27,7 @@ public:
 	 * @return 새로 파괴된 셀 ID 목록
 	 */
 	static TArray<int32> CalculateDestroyedCells(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const FQuantizedDestructionInput& Shape,
 		const FTransform& MeshTransform,
 		const TSet<int32>& DestroyedCells);
@@ -43,7 +43,7 @@ public:
 	 * @return NewlyDestroyedCells만 채워진 FDestructionResult
 	 */
 	static FDestructionResult CalculateDestroyedCells(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const FQuantizedDestructionInput& Shape,
 		const FTransform& MeshTransform,
 		FCellState& InOutCellState);
@@ -54,7 +54,7 @@ public:
 	 * Phase 2: 꼭지점 과반수 검사 (경계 케이스)
 	 */
 	static bool IsCellDestroyed(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		int32 CellId,
 		const FQuantizedDestructionInput& Shape,
 		const FTransform& MeshTransform);
@@ -64,7 +64,7 @@ public:
 	 * Destruction shape을 이용해 SubCell 레벨 파괴 수행
 	 */
 	static FDestructionResult ProcessCellDestructionWithSubCells(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const FQuantizedDestructionInput& Shape,
 		const FTransform& MeshTransform,
 		FCellState& InOutCellState);
@@ -82,15 +82,15 @@ public:
 	 * - 둘 다 비활성화: Cell 레벨 BFS
 	 *
 	 * @param Cache - 격자 캐시
-	 * @param SupercellCache - SuperCell 캐시 (bEnableSupercell=true 시 사용)
+	 * @param SupercellState - SuperCell 상태 (bEnableSupercell=true 시 사용)
 	 * @param CellState - 셀 상태
 	 * @param bEnableSupercell - SuperCell BFS 사용 여부
 	 * @param bEnableSubcell - SubCell 연결성 검사 사용 여부
 	 * @return 분리된 셀 ID 집합
 	 */
 	static TSet<int32> FindDisconnectedCells(
-		const FGridCellCache& Cache,
-		FSupercellCache& SupercellCache,
+		const FGridCellLayout& Cache,
+		FSuperCellState& SupercellState,
 		const FCellState& CellState,
 		bool bEnableSupercell,
 		bool bEnableSubcell);
@@ -104,7 +104,7 @@ public:
 	 * @return 분리된 셀 ID 집합
 	 */
 	static TSet<int32> FindDisconnectedCellsCellLevel(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const TSet<int32>& DestroyedCells);
 
 	/**
@@ -119,7 +119,7 @@ public:
 	 * @return 분리된 셀 ID 집합
 	 */
 	static TSet<int32> FindDisconnectedCellsSubCellLevel(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const FCellState& CellState);
 	
 	/**
@@ -131,23 +131,9 @@ public:
 	 * @return 그룹별 셀 ID 목록
 	 */
 	static TArray<TArray<int32>> GroupDetachedCells(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const TSet<int32>& DisconnectedCells,
 		const TSet<int32>& DestroyedCells);
-
-	/**
-	 * <<<SubCell Level API>>>
-	 * 분리된 셀들을 연결된 그룹으로 묶고, SubCell Flooding으로 경계 SubCell 포함
-	 *
-	 * @param Cache - 격자 캐시
-	 * @param DisconnectedCells - 분리된 셀들
-	 * @param CellState - 셀 상태 (SubCell 상태 접근용)
-	 * @return 그룹별 FDetachedGroupWithSubCell 목록
-	 */
-	static TArray<FDetachedGroupWithSubCell> GroupDetachedCellsWithSubCells(
-		const FGridCellCache& Cache,
-		const TSet<int32>& DisconnectedCells,
-		const FCellState& CellState);
 
 	//=========================================================================
 	// Hierarchical BFS (SuperCell 최적화)
@@ -160,14 +146,14 @@ public:
 	 * Cell 수가 많은 경우 (예: 100×100×100) BFS 노드 수를 크게 줄일 수 있음.
 	 *
 	 * @param Cache - 격자 캐시
-	 * @param SupercellCache - SuperCell 캐시
+	 * @param SupercellState - SuperCell 상태
 	 * @param CellState - 셀 상태
 	 * @param bEnableSubcell - SubCell 모드 활성화 여부
 	 * @return 앵커에 연결된 Cell ID 집합
 	 */
 	static TSet<int32> FindConnectedCellsHierarchical(
-		const FGridCellCache& Cache,
-		FSupercellCache& SupercellCache,
+		const FGridCellLayout& Cache,
+		FSuperCellState& SupercellState,
 		const FCellState& CellState,
 		bool bEnableSubcell);
 
@@ -177,14 +163,14 @@ public:
 	 * FindConnectedCellsHierarchical()를 호출한 후, 연결되지 않은 Cell 반환.
 	 *
 	 * @param Cache - 격자 캐시
-	 * @param SupercellCache - SuperCell 캐시
+	 * @param SupercellCache - SuperCell 상태
 	 * @param CellState - 셀 상태
 	 * @param bEnableSubcell - SubCell 모드 활성화 여부
 	 * @return 분리된 Cell ID 집합
 	 */
 	static TSet<int32> FindDisconnectedCellsHierarchicalLevel(
-		const FGridCellCache& Cache,
-		FSupercellCache& SupercellCache,
+		const FGridCellLayout& Cache,
+		FSuperCellState& SupercellState,
 		const FCellState& CellState,
 		bool bEnableSubcell);
 
@@ -196,7 +182,7 @@ public:
 	 * 셀 그룹의 중심점 계산
 	 */
 	static FVector CalculateGroupCenter(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		const TArray<int32>& CellIds,
 		const FTransform& MeshTransform);
 
@@ -212,7 +198,7 @@ public:
 	 * 경계 셀 판정 (파괴된 셀과 인접한 셀)
 	 */
 	static bool IsBoundaryCell(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& Cache,
 		int32 CellId,
 		const TSet<int32>& DestroyedCells);
 };
@@ -263,7 +249,7 @@ public:
 	 * 처리 컨텍스트 설정 (배치 처리 전 호출 필요)
 	 */
 	void SetContext(
-		const FGridCellCache* InCache,
+		const FGridCellLayout* InCache,
 		FCellState* InCellState,
 		const FTransform& InMeshTransform);
 
@@ -281,7 +267,7 @@ private:
 	FBatchedDestructionEvent LastBatchResult;
 
 	/** 처리 컨텍스트 */
-	const FGridCellCache* CachePtr;
+	const FGridCellLayout* LayoutPtr;
 	FCellState* CellStatePtr;
 	FTransform MeshTransform;
 

@@ -9,13 +9,13 @@
 bool FNarrowPhaseConnectivity::AreNarrowConnected(
 	int32 CellA,
 	int32 CellB,
-	const FGridCellCache& Cache,
+	const FGridCellLayout& GridLayout,
 	const FTransform& MeshTransform,
 	const TArray<FQuantizedDestructionInput>& Destructions)
 {
 	// CellA의 서브셀 중 파괴되지 않은 것 찾기
 	TArray<FIntVector> IntactSubCellsA;
-	GetIntactSubCells(CellA, Cache, MeshTransform, Destructions, IntactSubCellsA);
+	GetIntactSubCells(CellA, GridLayout, MeshTransform, Destructions, IntactSubCellsA);
 
 	if (IntactSubCellsA.Num() == 0)
 	{
@@ -24,7 +24,7 @@ bool FNarrowPhaseConnectivity::AreNarrowConnected(
 
 	// CellB의 서브셀 중 파괴되지 않은 것 찾기
 	TArray<FIntVector> IntactSubCellsB;
-	GetIntactSubCells(CellB, Cache, MeshTransform, Destructions, IntactSubCellsB);
+	GetIntactSubCells(CellB, GridLayout, MeshTransform, Destructions, IntactSubCellsB);
 
 	if (IntactSubCellsB.Num() == 0)
 	{
@@ -32,8 +32,8 @@ bool FNarrowPhaseConnectivity::AreNarrowConnected(
 	}
 
 	// 두 셀 사이 경계면에서 인접한 서브셀 쌍이 있는지 확인
-	const FIntVector CoordA = Cache.IdToCoord(CellA);
-	const FIntVector CoordB = Cache.IdToCoord(CellB);
+	const FIntVector CoordA = GridLayout.IdToCoord(CellA);
+	const FIntVector CoordB = GridLayout.IdToCoord(CellB);
 	const FIntVector Direction = CoordB - CoordA;  // 인접 방향
 
 	for (const FIntVector& SubA : IntactSubCellsA)
@@ -52,7 +52,7 @@ bool FNarrowPhaseConnectivity::AreNarrowConnected(
 }
 
 TSet<int32> FNarrowPhaseConnectivity::FindDisconnectedCellsWithNarrowPhase(
-	const FGridCellCache& Cache,
+	const FGridCellLayout& GridLayout,
 	const TSet<int32>& DestroyedCells,
 	const FTransform& MeshTransform,
 	const TArray<FQuantizedDestructionInput>& Destructions)
@@ -61,10 +61,10 @@ TSet<int32> FNarrowPhaseConnectivity::FindDisconnectedCellsWithNarrowPhase(
 	TQueue<int32> Queue;
 
 	// 1. 앵커에서 BFS 시작
-	for (int32 CellId = 0; CellId < Cache.GetTotalCellCount(); CellId++)
+	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); CellId++)
 	{
-		if (Cache.GetCellExists(CellId) &&
-		    Cache.GetCellIsAnchor(CellId) &&
+		if (GridLayout.GetCellExists(CellId) &&
+		    GridLayout.GetCellIsAnchor(CellId) &&
 		    !DestroyedCells.Contains(CellId))
 		{
 			Queue.Enqueue(CellId);
@@ -78,7 +78,7 @@ TSet<int32> FNarrowPhaseConnectivity::FindDisconnectedCellsWithNarrowPhase(
 		int32 Current;
 		Queue.Dequeue(Current);
 
-		for (int32 Neighbor : Cache.GetCellNeighbors(Current))
+		for (int32 Neighbor : GridLayout.GetCellNeighbors(Current))
 		{
 			if (DestroyedCells.Contains(Neighbor) || Connected.Contains(Neighbor))
 			{
@@ -86,14 +86,14 @@ TSet<int32> FNarrowPhaseConnectivity::FindDisconnectedCellsWithNarrowPhase(
 			}
 
 			// 경계 셀인지 확인 (파괴 영역과 인접)
-			const bool bIsBoundaryCell = IsBoundaryCell(Cache, Neighbor, DestroyedCells);
+			const bool bIsBoundaryCell = IsBoundaryCell(GridLayout, Neighbor, DestroyedCells);
 
 			bool bIsConnected = true;
 			if (bIsBoundaryCell)
 			{
 				// Narrow Phase 검사
 				bIsConnected = AreNarrowConnected(
-					Current, Neighbor, Cache, MeshTransform, Destructions);
+					Current, Neighbor, GridLayout, MeshTransform, Destructions);
 			}
 
 			if (bIsConnected)
@@ -106,9 +106,9 @@ TSet<int32> FNarrowPhaseConnectivity::FindDisconnectedCellsWithNarrowPhase(
 
 	// 3. 연결되지 않은 셀 반환
 	TSet<int32> Disconnected;
-	for (int32 CellId = 0; CellId < Cache.GetTotalCellCount(); CellId++)
+	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); CellId++)
 	{
-		if (Cache.GetCellExists(CellId) &&
+		if (GridLayout.GetCellExists(CellId) &&
 		    !DestroyedCells.Contains(CellId) &&
 		    !Connected.Contains(CellId))
 		{
@@ -125,13 +125,13 @@ TSet<int32> FNarrowPhaseConnectivity::FindDisconnectedCellsWithNarrowPhase(
 
 void FNarrowPhaseConnectivity::GetIntactSubCells(
 	int32 CellId,
-	const FGridCellCache& Cache,
+	const FGridCellLayout& GridLayout,
 	const FTransform& MeshTransform,
 	const TArray<FQuantizedDestructionInput>& Destructions,
 	TArray<FIntVector>& OutIntactSubCells)
 {
-	const FVector CellMin = Cache.IdToLocalMin(CellId);
-	const FVector SubCellSize = Cache.CellSize / SubDivision;
+	const FVector CellMin = GridLayout.IdToLocalMin(CellId);
+	const FVector SubCellSize = GridLayout.CellSize / SubDivision;
 
 	for (int32 X = 0; X < SubDivision; X++)
 	{
@@ -213,11 +213,11 @@ bool FNarrowPhaseConnectivity::AreSubCellsAdjacent(
 }
 
 bool FNarrowPhaseConnectivity::IsBoundaryCell(
-	const FGridCellCache& Cache,
+	const FGridCellLayout& GridLayout,
 	int32 CellId,
 	const TSet<int32>& DestroyedCells)
 {
-	for (int32 Neighbor : Cache.GetCellNeighbors(CellId))
+	for (int32 Neighbor : GridLayout.GetCellNeighbors(CellId))
 	{
 		if (DestroyedCells.Contains(Neighbor))
 		{

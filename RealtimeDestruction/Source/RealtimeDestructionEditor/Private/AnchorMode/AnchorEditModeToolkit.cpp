@@ -9,7 +9,7 @@
 #include "AnchorMode/AnchorActionObejct.h"
 
 
-struct FGridCellCache;
+struct FGridCellLayout;
 
 void FAnchorEditModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolkitHost)
 {

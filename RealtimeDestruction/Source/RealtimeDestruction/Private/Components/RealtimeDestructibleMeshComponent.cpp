@@ -384,8 +384,8 @@ void URealtimeDestructibleMeshComponent::UpdateCellStateFromDestruction(const FR
 
 
 	TRACE_CPUPROFILER_EVENT_SCOPE(UpdateCellStateFromDestruction);
-	// 구조적 무결성 비활성화 또는 GridCellCache 미생성 시 스킵
-	if (!bEnableStructuralIntegrity || !GridCellCache.IsValid())
+	// 구조적 무결성 비활성화 또는 GridCellLayout 미생성 시 스킵
+	if (!bEnableStructuralIntegrity || !GridCellLayout.IsValid())
 	{
 		return;
 	}
@@ -419,7 +419,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_ProcessCellDestructionWithSubCells);
 
 		DestructionResult = FCellDestructionSystem::ProcessCellDestructionWithSubCells(
-			GridCellCache,
+			GridCellLayout,
 			QuantizedInput,
 			GetComponentTransform(),
 			CellState);
@@ -427,7 +427,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	else
 	{
 		DestructionResult = FCellDestructionSystem::CalculateDestroyedCells(
-			GridCellCache,
+			GridCellLayout,
 			QuantizedInput,
 			GetComponentTransform(),
 			CellState);
@@ -467,7 +467,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 				}
 
 				// 이웃 셀들의 청크도 dirty (새로 표면이 될 수 있음)
-				const FIntArray& Neighbors = GridCellCache.GetCellNeighbors(CellId);
+				const FIntArray& Neighbors = GridCellLayout.GetCellNeighbors(CellId);
 				for (int32 NeighborId : Neighbors.Values)
 				{
 					int32 NeighborChunkIdx = GetCollisionChunkIndexForCell(NeighborId);
@@ -504,17 +504,17 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 	//=====================================================================
 // Phase 1.5: SuperCell 상태 업데이트 (bEnableSuperCell이 true일 때만)
 	//=====================================================================
-	if (bEnableSupercell && SupercellCache.IsValid())
+	if (bEnableSupercell && SupercellState.IsValid())
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_UpdateSupercellStates);
 
 		// 영향받은 Cell들이 속한 SuperCell을 Broken으로 마킹
-		SupercellCache.UpdateSupercellStates(DestructionResult.AffectedCells);
+		SupercellState.UpdateSupercellStates(DestructionResult.AffectedCells);
 
 		// 파괴된 Cell들이 속한 SuperCell도 Broken으로 마킹
 		for (int32 DestroyedCellId : DestructionResult.NewlyDestroyedCells)
 		{
-			SupercellCache.OnCellDestroyed(DestroyedCellId);
+			SupercellState.OnCellDestroyed(DestroyedCellId);
 		}
 
 		// SubCell 모드에서는 SubCell 파괴도 SuperCell 상태에 반영
@@ -528,7 +528,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 			{
 				for (int32 SubCellId : SubCellPair.Value.Values)
 				{
-					SupercellCache.OnSubCellDestroyed(SubCellPair.Key, SubCellId);
+					SupercellState.OnSubCellDestroyed(SubCellPair.Key, SubCellId);
 				}
 			}
 		}
@@ -570,7 +570,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 	//double BFSStartTime = FPlatformTime::Seconds();
 	//
 	//UE_LOG(LogTemp, Warning, TEXT("[BFS #%d] FindDisconnectedCells START (TotalCells: %d)"),
-	//	BFSCallCount, GridCellCache.GetTotalCellCount()); 
+	//	BFSCallCount, GridCellLayout.GetTotalCellCount()); 
 
 	// ===== 여기에 로그 추가 =====
 	UE_LOG(LogTemp, Warning, TEXT("    [Batch BFS] FindDisconnectedCells called"));
@@ -579,10 +579,10 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCells);
 		const ENetMode NetMode = GetWorld()->GetNetMode();
 		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-			GridCellCache,
-			SupercellCache,
+			GridCellLayout,
+			SupercellState,
 			CellState,
-			bEnableSupercell && SupercellCache.IsValid(),
+			bEnableSupercell && SupercellState.IsValid(),
 			bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
 	}
 	// Standalon용 BFS 성능 LOG
@@ -601,7 +601,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_Phase3); 
 			NewDetachedGroups = FCellDestructionSystem::GroupDetachedCells(
-				GridCellCache,
+				GridCellLayout,
 				DisconnectedCells,
 				CellState.DestroyedCells);
 		}
@@ -640,7 +640,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 					DetachedDirtyChunks.Add(ChunkIdx);
 				}
 				// 이웃 셀 청크도 dirty (새 표면 될 수 있음)
-				const FIntArray& Neighbors = GridCellCache.GetCellNeighbors(CellId);
+				const FIntArray& Neighbors = GridCellLayout.GetCellNeighbors(CellId);
 				for (int32 NeighborId : Neighbors.Values)
 				{
 					int32 NeighborChunkIdx = GetCollisionChunkIndexForCell(NeighborId);
@@ -692,7 +692,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 
 int32 URealtimeDestructibleMeshComponent::GridCellIdToChunkId(int32 GridCellId) const
 {
-	if (!GridCellCache.IsValidCellId(GridCellId))
+	if (!GridCellLayout.IsValidCellId(GridCellId))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("GridCellIdToChunkId: Invalid CellId=%d"), GridCellId);
 		return INDEX_NONE;
@@ -703,8 +703,8 @@ int32 URealtimeDestructibleMeshComponent::GridCellIdToChunkId(int32 GridCellId) 
 		return INDEX_NONE;
 	}
 
-	// GridCellCache에서 로컬 중심점 획득
-	const FVector LocalCenter = GridCellCache.IdToLocalCenter(GridCellId);
+	// GridCellLayout에서 로컬 중심점 획득
+	const FVector LocalCenter = GridCellLayout.IdToLocalCenter(GridCellId);
 
 	// SliceCount 기반 그리드 인덱스 계산
 	int32 GridX = FMath::FloorToInt((LocalCenter.X - CachedMeshBounds.Min.X) / CachedChunkSize.X);
@@ -740,14 +740,14 @@ void URealtimeDestructibleMeshComponent::BuildServerCellCollision()
 		return;
 	}
 
-	if (!GridCellCache.IsValid())
+	if (!GridCellLayout.IsValid())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] GridCellCache is not valid, skipping"));
+		UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] GridCellLayout is not valid, skipping"));
 		return;
 	}
 
 	// 동적 청크 분할 수 계산
-	const int32 TotalCells = GridCellCache.GetValidCellCount();
+	const int32 TotalCells = GridCellLayout.GetValidCellCount();
 	if (TotalCells == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] No valid cells, skipping"));
@@ -787,10 +787,10 @@ void URealtimeDestructibleMeshComponent::BuildServerCellCollision()
 	// 각 유효 셀을 청크에 할당
 	CellToCollisionChunkMap.Empty();
 
-	for (int32 SparseIdx = 0; SparseIdx < GridCellCache.GetValidCellCount(); ++SparseIdx)
+	for (int32 SparseIdx = 0; SparseIdx < GridCellLayout.GetValidCellCount(); ++SparseIdx)
 	{
-		const int32 CellId = GridCellCache.SparseIndexToCellId[SparseIdx];
-		const FVector LocalCenter = GridCellCache.IdToLocalCenter(CellId);
+		const int32 CellId = GridCellLayout.SparseIndexToCellId[SparseIdx];
+		const FVector LocalCenter = GridCellLayout.IdToLocalCenter(CellId);
 
 		// 청크 인덱스 계산 (Division by Zero 보호 포함)
 		int32 ChunkX = (ChunkSize.X > KINDA_SMALL_NUMBER) ? FMath::FloorToInt((LocalCenter.X - MeshBounds.Min.X) / ChunkSize.X) : 0;
@@ -848,7 +848,7 @@ void URealtimeDestructibleMeshComponent::BuildServerCellCollision()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[ServerCellCollision] Initialized: %d chunks (%d non-empty), %d total cells, %d surface cells"),
-		TotalChunks, NonEmptyChunks, GridCellCache.GetValidCellCount(), TotalSurfaceCells);
+		TotalChunks, NonEmptyChunks, GridCellLayout.GetValidCellCount(), TotalSurfaceCells);
 }
 
 void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 ChunkIndex)
@@ -858,10 +858,10 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 		return;
 	}
 
-	// GridCellCache 유효성 검사
-	if (!GridCellCache.IsValid())
+	// GridCellLayout 유효성 검사
+	if (!GridCellLayout.IsValid())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] GridCellCache invalid, skipping chunk %d"), ChunkIndex);
+		UE_LOG(LogTemp, Warning, TEXT("[ServerCellCollision] GridCellLayout invalid, skipping chunk %d"), ChunkIndex);
 		return;
 	}
 
@@ -957,7 +957,7 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 
 		Chunk.SurfaceCellIds.Add(CellId);
 
-		const FVector LocalCenter = GridCellCache.IdToLocalCenter(CellId);
+		const FVector LocalCenter = GridCellLayout.IdToLocalCenter(CellId);
 
 		FKBoxElem BoxElem;
 		BoxElem.Center = LocalCenter;
@@ -1088,7 +1088,7 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 
 bool URealtimeDestructibleMeshComponent::IsCellExposed(int32 CellId) const
 {
-	const FIntArray& Neighbors = GridCellCache.GetCellNeighbors(CellId);
+	const FIntArray& Neighbors = GridCellLayout.GetCellNeighbors(CellId);
 
 	// 이웃이 6개 미만이면 경계 = 표면
 	if (Neighbors.Values.Num() < 6)
@@ -1182,7 +1182,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	UE_LOG(LogTemp, Warning, TEXT("DetachedCellIds.Num()=%d, ChunkMeshComponents.Num()=%d"),
 		DetachedCellIds.Num(), ChunkMeshComponents.Num());
 
-	const FVector CellSizeVec = GridCellCache.CellSize;
+	const FVector CellSizeVec = GridCellLayout.CellSize;
 
 	// 파편 정리용 초기화
 	LastOccupiedCells.Empty();
@@ -1192,7 +1192,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	TSet<FIntVector> BaseCells;
 	for (int32 CellId : DetachedCellIds)
 	{
-		const FVector LocalMin = GridCellCache.IdToLocalMin(CellId);
+		const FVector LocalMin = GridCellLayout.IdToLocalMin(CellId);
 		FIntVector GridPos(
 			FMath::FloorToInt(LocalMin.X / CellSizeVec.X),
 			FMath::FloorToInt(LocalMin.Y / CellSizeVec.Y),
@@ -2126,14 +2126,14 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 	// 통합 API 사용: bEnableSupercell, bEnableSubcell 플래그에 따라 자동 선택
 	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
 	TSet<int32> DisconnectedCells;
-	if (GridCellCache.IsValid())
+	if (GridCellLayout.IsValid())
 	{
 		const ENetMode NetMode = GetWorld()->GetNetMode();
 		DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-			GridCellCache,
-			SupercellCache,
+			GridCellLayout,
+			SupercellState,
 			CellState,
-			bEnableSupercell && SupercellCache.IsValid(),
+			bEnableSupercell && SupercellState.IsValid(),
 			bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
 
 		UE_LOG(LogTemp, Warning, TEXT("CleanupSmallFragments: DisconnectedCells=%d, DestroyedCells=%d"),
@@ -2194,7 +2194,7 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 				int32 TotalCellCount = 0;
 				int32 DestroyedCellCount = 0;
 
-				if (GridCellCache.IsValid())
+				if (GridCellLayout.IsValid())
 				{
 					// 컴포넌트가 속한 고유 셀 ID 수집
 					TSet<int32> ComponentCellIds;
@@ -2202,18 +2202,18 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 					// 헬퍼 람다: 위치 → 셀 ID 추가
 					auto AddCellIdFromPosition = [&](const FVector& Position)
 					{
-						FVector RelativePos = Position - GridCellCache.GridOrigin;
+						FVector RelativePos = Position - GridCellLayout.GridOrigin;
 						FIntVector GridCoord(
-							FMath::FloorToInt(RelativePos.X / GridCellCache.CellSize.X),
-							FMath::FloorToInt(RelativePos.Y / GridCellCache.CellSize.Y),
-							FMath::FloorToInt(RelativePos.Z / GridCellCache.CellSize.Z)
+							FMath::FloorToInt(RelativePos.X / GridCellLayout.CellSize.X),
+							FMath::FloorToInt(RelativePos.Y / GridCellLayout.CellSize.Y),
+							FMath::FloorToInt(RelativePos.Z / GridCellLayout.CellSize.Z)
 						);
 
-						if (GridCoord.X >= 0 && GridCoord.X < GridCellCache.GridSize.X &&
-							GridCoord.Y >= 0 && GridCoord.Y < GridCellCache.GridSize.Y &&
-							GridCoord.Z >= 0 && GridCoord.Z < GridCellCache.GridSize.Z)
+						if (GridCoord.X >= 0 && GridCoord.X < GridCellLayout.GridSize.X &&
+							GridCoord.Y >= 0 && GridCoord.Y < GridCellLayout.GridSize.Y &&
+							GridCoord.Z >= 0 && GridCoord.Z < GridCellLayout.GridSize.Z)
 						{
-							ComponentCellIds.Add(GridCellCache.CoordToId(GridCoord));
+							ComponentCellIds.Add(GridCellLayout.CoordToId(GridCoord));
 						}
 					};
 
@@ -2245,9 +2245,9 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 					//// 디버그: 프래그먼트 좌표 정보
 					//UE_LOG(LogTemp, Warning, TEXT("Fragment: Local=(%.1f,%.1f,%.1f) GridOrigin=(%.1f,%.1f,%.1f) CellSize=(%.1f,%.1f,%.1f) GridSize=(%d,%d,%d)"),
 					//	Centroid.X, Centroid.Y, Centroid.Z,
-					//	GridCellCache.GridOrigin.X, GridCellCache.GridOrigin.Y, GridCellCache.GridOrigin.Z,
-					//	GridCellCache.CellSize.X, GridCellCache.CellSize.Y, GridCellCache.CellSize.Z,
-					//	GridCellCache.GridSize.X, GridCellCache.GridSize.Y, GridCellCache.GridSize.Z);
+					//	GridCellLayout.GridOrigin.X, GridCellLayout.GridOrigin.Y, GridCellLayout.GridOrigin.Z,
+					//	GridCellLayout.CellSize.X, GridCellLayout.CellSize.Y, GridCellLayout.CellSize.Z,
+					//	GridCellLayout.GridSize.X, GridCellLayout.GridSize.Y, GridCellLayout.GridSize.Z);
 
 					// Anchor 연결성 검사: 컴포넌트의 셀 중 하나라도 Anchor에 연결되어 있는지 확인
 					int32 DisconnectedCount = 0;
@@ -2256,7 +2256,7 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 					for (int32 CellId : ComponentCellIds)
 					{
 						// 유효하지 않은 셀은 스킵 (sparse grid)
-						if (!GridCellCache.GetCellExists(CellId))
+						if (!GridCellLayout.GetCellExists(CellId))
 						{
 							InvalidCount++;
 							continue;
@@ -2558,9 +2558,9 @@ void URealtimeDestructibleMeshComponent::MulticastDestroyedCells_Implementation(
 		CellState.DestroyedCells.Add(CellId);
 
 		// SuperCell 상태 업데이트 (Cell 파괴 정보만으로 Server와 동기화)
-		if (bEnableSupercell && SupercellCache.IsValid())
+		if (bEnableSupercell && SupercellState.IsValid())
 		{
-			SupercellCache.OnCellDestroyed(CellId);
+			SupercellState.OnCellDestroyed(CellId);
 	}
 	}
 
@@ -2596,10 +2596,10 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 	// 통합 API 사용: 서버와 동일한 알고리즘으로 일관성 유지
 	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
 	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-		GridCellCache,
-		SupercellCache,
+		GridCellLayout,
+		SupercellState,
 		CellState,
-		bEnableSupercell && SupercellCache.IsValid(),
+		bEnableSupercell && SupercellState.IsValid(),
 		bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용 
 
 	if (DisconnectedCells.Num() == 0)
@@ -2612,7 +2612,7 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 
 	// 분리된 셀 그룹화
 	TArray<TArray<int32>> DetachedGroups = FCellDestructionSystem::GroupDetachedCells(
-		GridCellCache,
+		GridCellLayout,
 		DisconnectedCells,
 		CellState.DestroyedCells);
 
@@ -3356,8 +3356,8 @@ void URealtimeDestructibleMeshComponent::UpdateDebugText()
 		});
 	}
 
-	const int32 CellCount = GridCellCache.GetValidCellCount();
-	const int32 AnchorCount = GridCellCache.GetAnchorCount();
+	const int32 CellCount = GridCellLayout.GetValidCellCount();
+	const int32 AnchorCount = GridCellLayout.GetAnchorCount();
 	const int32 DestroyedCount = CellState.DestroyedCells.Num();
 
 	// 디버그 텍스트 생성
@@ -3401,7 +3401,7 @@ void URealtimeDestructibleMeshComponent::DrawDebugText() const
 
 void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 {
-	if (!GridCellCache.IsValid() || !GridCellCache.HasValidSparseData())
+	if (!GridCellLayout.IsValid() || !GridCellLayout.HasValidSparseData())
 	{
 		return;
 	}
@@ -3419,8 +3419,8 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 	if (bFirstGridDraw)
 	{
 		UE_LOG(LogTemp, Log, TEXT("DrawGridCellDebug: Grid %dx%dx%d, Valid cells: %d, Anchors: %d"),
-			GridCellCache.GridSize.X, GridCellCache.GridSize.Y, GridCellCache.GridSize.Z,
-			GridCellCache.GetValidCellCount(), GridCellCache.GetAnchorCount());
+			GridCellLayout.GridSize.X, GridCellLayout.GridSize.Y, GridCellLayout.GridSize.Z,
+			GridCellLayout.GetValidCellCount(), GridCellLayout.GetAnchorCount());
 		bFirstGridDraw = false;
 	}
 
@@ -3431,7 +3431,7 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 	// {
 	// 	int32 DestroyedCount = 0;
 	// 	int32 DetachedCount = 0;
-	// 	for (int32 CellId : GridCellCache.GetValidCellIds())
+	// 	for (int32 CellId : GridCellLayout.GetValidCellIds())
 	// 	{
 	// 		if (CellState.DestroyedCells.Contains(CellId)) DestroyedCount++;
 	// 		if (CellState.IsCellDetached(CellId)) DetachedCount++;
@@ -3442,7 +3442,7 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 	// }
 
 	// 1. 유효 셀만 그리기 (희소 배열)
-	for (int32 CellId : GridCellCache.GetValidCellIds())
+	for (int32 CellId : GridCellLayout.GetValidCellIds())
 	{
 		const bool bIsDestroyed = CellState.DestroyedCells.Contains(CellId);
 		const bool bIsDetached = CellState.IsCellDetached(CellId);
@@ -3468,7 +3468,7 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 		{
 			CellColor = FColor::Orange;  // 분리 대기 중 (파편 스폰 예정)
 		}
-		else if (GridCellCache.GetCellIsAnchor(CellId))
+		else if (GridCellLayout.GetCellIsAnchor(CellId))
 		{
 			CellColor = FColor(0, 255, 0);  // 밝은 녹색
 		}
@@ -3478,7 +3478,7 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 		}
 
 		// 셀 중심점 그리기 (점으로만 표시 - 성능 최적화)
-		const FVector LocalCenter = GridCellCache.IdToLocalCenter(CellId);
+		const FVector LocalCenter = GridCellLayout.IdToLocalCenter(CellId);
 		const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
 
 		DrawDebugPoint(World, WorldCenter, 5.0f, CellColor, false, 0.0f, SDPG_Foreground);
@@ -3487,7 +3487,7 @@ void URealtimeDestructibleMeshComponent::DrawGridCellDebug()
 
 void URealtimeDestructibleMeshComponent::DrawSupercellDebug()
 {
-	if (!SupercellCache.IsValid())
+	if (!SupercellState.IsValid())
 	{
 		return;
 	}
@@ -3499,22 +3499,22 @@ void URealtimeDestructibleMeshComponent::DrawSupercellDebug()
 	}
 
 	const FTransform& ComponentTransform = GetComponentTransform();
-	const FVector& CellSize = GridCellCache.CellSize;
+	const FVector& CellSize = GridCellLayout.CellSize;
 	const FVector SupercellWorldSize = FVector(
-		CellSize.X * SupercellCache.SupercellSize.X,
-		CellSize.Y * SupercellCache.SupercellSize.Y,
-		CellSize.Z * SupercellCache.SupercellSize.Z
+		CellSize.X * SupercellState.SupercellSize.X,
+		CellSize.Y * SupercellState.SupercellSize.Y,
+		CellSize.Z * SupercellState.SupercellSize.Z
 	);
 
 	// 모든 SuperCell 순회
-	for (int32 SCZ = 0; SCZ < SupercellCache.SupercellCount.Z; ++SCZ)
+	for (int32 SCZ = 0; SCZ < SupercellState.SupercellCount.Z; ++SCZ)
 	{
-		for (int32 SCY = 0; SCY < SupercellCache.SupercellCount.Y; ++SCY)
+		for (int32 SCY = 0; SCY < SupercellState.SupercellCount.Y; ++SCY)
 		{
-			for (int32 SCX = 0; SCX < SupercellCache.SupercellCount.X; ++SCX)
+			for (int32 SCX = 0; SCX < SupercellState.SupercellCount.X; ++SCX)
 			{
-				const int32 SupercellId = SupercellCache.SupercellCoordToId(SCX, SCY, SCZ);
-				const bool bIsIntact = SupercellCache.IsSupercellIntact(SupercellId);
+				const int32 SupercellId = SupercellState.SupercellCoordToId(SCX, SCY, SCZ);
+				const bool bIsIntact = SupercellState.IsSupercellIntact(SupercellId);
 
 				if (!bIsIntact)
 				{
@@ -3524,7 +3524,7 @@ void URealtimeDestructibleMeshComponent::DrawSupercellDebug()
 				//FColor BoxColor = bIsIntact ? FColor::Green : FColor::Red;
 				FColor BoxColor = FColor::Green;
 				// SuperCell 로컬 Min 좌표
-				FVector LocalMin = GridCellCache.GridOrigin + FVector(
+				FVector LocalMin = GridCellLayout.GridOrigin + FVector(
 					SCX * SupercellWorldSize.X,
 					SCY * SupercellWorldSize.Y,
 					SCZ * SupercellWorldSize.Z
@@ -3583,7 +3583,7 @@ void URealtimeDestructibleMeshComponent::DrawServerCollisionDebug()
 				continue;
 			}
 
-			const FVector LocalCenter = GridCellCache.IdToLocalCenter(CellId);
+			const FVector LocalCenter = GridCellLayout.IdToLocalCenter(CellId);
 			const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
 
 			DrawDebugBox(World, WorldCenter, HalfExtent, ComponentTransform.GetRotation(), ChunkColor, false, 0.0f, SDPG_World, 1.0f);
@@ -3705,7 +3705,7 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* D
 		return;
 	}
 
-	if (!GridCellCache.IsValid())
+	if (!GridCellLayout.IsValid())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("RegisterDecalToSubCells : Grid Cell Invalid"));
 		return;
@@ -3742,7 +3742,7 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* D
 	FBox ThinWorldBox = ThinLocalBox.TransformBy(ThinBoxTransform);
 
 	const FTransform& MeshTransform = GetComponentTransform();
-	TArray<int32> CandidateCells = GridCellCache.GetCellsInAABB(ThinWorldBox, MeshTransform);
+	TArray<int32> CandidateCells = GridCellLayout.GetCellsInAABB(ThinWorldBox, MeshTransform);
 	
 	for (int32 CellID : CandidateCells)
 	{
@@ -3751,7 +3751,7 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* D
 			continue;
 		}
 
-		FCellOBB CellWorldOBB = GridCellCache.GetCellWorldOBB(CellID, MeshTransform);
+		FCellOBB CellWorldOBB = GridCellLayout.GetCellWorldOBB(CellID, MeshTransform);
 
 		if (QuantizedDecal.IntersectsOBB(CellWorldOBB))
 		{
@@ -3893,8 +3893,8 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 	ChunkBusyBits.Init(0ULL, NumBits);
 	ChunkSubtractBusyBits.Init(0ULL, NumBits);
 
-	// 런타임 시작 시 GridCellCache가 유효하지 않으면 구축
-	if (SourceStaticMesh && !GridCellCache.IsValid())
+	// 런타임 시작 시 GridCellLayout가 유효하지 않으면 구축
+	if (SourceStaticMesh && !GridCellLayout.IsValid())
 	{
 		BuildGridCells();
 	}
@@ -3923,8 +3923,8 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 	}
 
 	// 런타임 시작 시 GridCell 상태 로그
-	UE_LOG(LogTemp, Log, TEXT("BeginPlay: bCellMeshesValid=%d, GridCellCache.IsValid=%d, CellMeshComponents.Num=%d"),
-		bChunkMeshesValid, GridCellCache.IsValid(), ChunkMeshComponents.Num());
+	UE_LOG(LogTemp, Log, TEXT("BeginPlay: bCellMeshesValid=%d, GridCellLayout.IsValid=%d, CellMeshComponents.Num=%d"),
+		bChunkMeshesValid, GridCellLayout.IsValid(), ChunkMeshComponents.Num());
 
 	/** Culstering 관련 초기화 */
 	if (bEnableClustering && GetOwner()->HasAuthority())
@@ -4729,7 +4729,7 @@ int32 URealtimeDestructibleMeshComponent::BuildChunkMeshesFromGeometryCollection
 		// GridToChunkMap 구축 (그리드 인덱스 -> ChunkId 매핑)
 		BuildGridToChunkMap();
 
-		// GridCellCache 초기화
+		// GridCellLayout 초기화
 		BuildGridCells();
 
 #if WITH_EDITOR
@@ -4853,7 +4853,7 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 	// - GridCellSize: 월드 좌표계 기준 (사용자 설정값)
 	// - WorldScale: 컴포넌트 스케일 (빌더 내부에서 로컬 변환에 사용)
 	// - FloorHeightThreshold: 앵커 판정용 (빌더 내부가 로컬 스페이스이므로 변환 필요)
-	GridCellCache.Reset();
+	GridCellLayout.Reset();
 	CellState.Reset();
 
 	const float LocalFloorThreshold = FloorHeightThreshold / FMath::Max(WorldScale.Z, KINDA_SMALL_NUMBER);
@@ -4863,7 +4863,7 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		WorldScale,           // MeshScale (새 파라미터)
 		GridCellSize,         // 월드 스페이스 셀 크기 (빌더가 내부에서 로컬로 변환)
 		LocalFloorThreshold,  // 앵커 높이 (빌더 내부가 로컬 스페이스이므로 변환 필요)
-		GridCellCache
+		GridCellLayout
 	);
 
 	if (!bSuccess)
@@ -4874,18 +4874,18 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 
 	// 4. 캐시된 정보 저장
 	// CachedMeshBounds = SourceStaticMesh->GetBoundingBox();
-	CachedCellSize = GridCellCache.CellSize;  // 빌더가 저장한 로컬 스페이스 셀 크기
+	CachedCellSize = GridCellLayout.CellSize;  // 빌더가 저장한 로컬 스페이스 셀 크기
 
 	UE_LOG(LogTemp, Log, TEXT("BuildGridCells: WorldCellSize=(%.1f, %.1f, %.1f), Scale=(%.2f, %.2f, %.2f), LocalCellSize=(%.2f, %.2f, %.2f), Grid %dx%dx%d, Valid cells: %d, Anchors: %d"),
 		GridCellSize.X, GridCellSize.Y, GridCellSize.Z,
 		WorldScale.X, WorldScale.Y, WorldScale.Z,
-		GridCellCache.CellSize.X, GridCellCache.CellSize.Y, GridCellCache.CellSize.Z,
-		GridCellCache.GridSize.X, GridCellCache.GridSize.Y, GridCellCache.GridSize.Z,
-		GridCellCache.GetValidCellCount(),
-		GridCellCache.GetAnchorCount());
+		GridCellLayout.CellSize.X, GridCellLayout.CellSize.Y, GridCellLayout.CellSize.Z,
+		GridCellLayout.GridSize.X, GridCellLayout.GridSize.Y, GridCellLayout.GridSize.Z,
+		GridCellLayout.GetValidCellCount(),
+		GridCellLayout.GetAnchorCount());
 	
-	// 5. SuperCell 캐시 빌드 (BFS 최적화용)
-	SupercellCache.BuildFromGridCache(GridCellCache);
+	// 5. SuperCell 상태 빌드 (BFS 최적화용)
+	SupercellState.BuildFromGridLayout(GridCellLayout);
 
 	return true;
 }
@@ -5435,16 +5435,16 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 			// GridToChunkMap은 저장되지 않으므로 재구축
 			DestructComp->BuildGridToChunkMap();
 
-			// GridCellCache는 저장되므로, 유효하지 않을 때만 재구축
-			if (!DestructComp->GridCellCache.IsValid())
+			// GridCellLayout는 저장되므로, 유효하지 않을 때만 재구축
+			if (!DestructComp->GridCellLayout.IsValid())
 			{
-				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellCache is invalid, rebuilding..."));
+				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellLayout is invalid, rebuilding..."));
 			DestructComp->BuildGridCells();
 			}
 			else
 			{
-				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellCache loaded from saved data (ValidCells=%d)"),
-					DestructComp->GridCellCache.GetValidCellCount());
+				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellLayout loaded from saved data (ValidCells=%d)"),
+					DestructComp->GridCellLayout.GetValidCellCount());
 			}
 			return;
 		}
@@ -5670,7 +5670,7 @@ void URealtimeDestructibleMeshComponent::AddEraserPlane()
 
 void URealtimeDestructibleMeshComponent::ApplyAnchorPlane()
 {
-	if (GridCellCache.GetTotalCellCount() == 0)
+	if (GridCellLayout.GetTotalCellCount() == 0)
 	{
 		BuildGridCells();
 	}
@@ -5690,7 +5690,7 @@ void URealtimeDestructibleMeshComponent::ApplyAnchorPlane()
 			FGridCellBuilder::SetAnchorsByFinitePlane(
 				Plane->GetComponentTransform(),
 				MeshTransform,
-				GridCellCache,
+				GridCellLayout,
 				false
 			);
 
@@ -5707,7 +5707,7 @@ void URealtimeDestructibleMeshComponent::ApplyAnchorPlane()
 			FGridCellBuilder::SetAnchorsByFinitePlane(
 				Eraser->GetComponentTransform(),
 				MeshTransform,
-				GridCellCache,
+				GridCellLayout,
 				true // bIsEraser = true (삭제)
 			);
 
@@ -5749,14 +5749,14 @@ void URealtimeDestructibleMeshComponent::ClearAnchorPlanes()
 
 void URealtimeDestructibleMeshComponent::ClearAllAnchorCells()
 {
-	if (GridCellCache.GetTotalCellCount() == 0)
+	if (GridCellLayout.GetTotalCellCount() == 0)
 	{
 		return;
 	}
 
 	GEditor->BeginTransaction(FText::FromString("Clear All Anchor Cells"));
 
-	FGridCellBuilder::ClearAllAnchors(GridCellCache);
+	FGridCellBuilder::ClearAllAnchors(GridCellLayout);
 
 	MarkPackageDirty();
 

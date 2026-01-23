@@ -12,21 +12,21 @@ DEFINE_LOG_CATEGORY_STATIC(LogSubCellDebug, Log, All);
 bool FSubCellProcessor::ProcessSubCellDestruction(
 	const FQuantizedDestructionInput& QuantizedShape,
 	const FTransform& MeshTransform,
-	const FGridCellCache& GridCache,
+	const FGridCellLayout& GridLayout,
 	FCellState& InOutCellState,
 	TArray<int32>& OutAffectedCells,
 	TMap<int32, TArray<int32>>* OutNewlyDeadSubCells)
 {
 	OutAffectedCells.Reset();
 
-	if (!GridCache.IsValid())
+	if (!GridLayout.IsValid())
 	{
 		return false;
 	}
 
 	// 1. Tool shape의 AABB로 후보 cell 필터링 (월드 공간)
 	const FBox ShapeAABB = ComputeShapeAABB(QuantizedShape);
-	const TArray<int32> CandidateCells = GridCache.GetCellsInAABB(ShapeAABB, MeshTransform);
+	const TArray<int32> CandidateCells = GridLayout.GetCellsInAABB(ShapeAABB, MeshTransform);
 
 #if SUBCELL_DEBUG_LOG
 	UE_LOG(LogSubCellDebug, Log, TEXT("=== ProcessSubCellDestruction ==="));
@@ -54,7 +54,7 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 		TArray<int32> NewlyDeadSubCells;
 
 #if SUBCELL_DEBUG_LOG
-		const FIntVector CellCoord = GridCache.IdToCoord(CellId);
+		const FIntVector CellCoord = GridLayout.IdToCoord(CellId);
 		UE_LOG(LogSubCellDebug, Log, TEXT("  Checking CellId=%d (Coord: %d,%d,%d)"), CellId, CellCoord.X, CellCoord.Y, CellCoord.Z);
 #endif
 
@@ -68,7 +68,7 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 			}
 
 			// SubCell의 월드 공간 OBB (메시의 회전과 비균일 스케일 정확히 반영)
-			const FCellOBB SubCellOBB = GridCache.GetSubCellWorldOBB(CellId, SubCellId, MeshTransform);
+			const FCellOBB SubCellOBB = GridLayout.GetSubCellWorldOBB(CellId, SubCellId, MeshTransform);
 
 			// 월드 공간에서 Shape-OBB 교차 검사
 			const bool bIntersects = QuantizedShape.IntersectsOBB(SubCellOBB);

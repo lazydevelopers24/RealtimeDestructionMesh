@@ -20,7 +20,7 @@ public:
 	 *
 	 * @param CellA - 첫 번째 셀 ID
 	 * @param CellB - 두 번째 셀 ID (CellA와 인접해야 함)
-	 * @param Cache - 격자 캐시
+	 * @param GridLayout - 격자 레이아웃
 	 * @param MeshTransform - 메시 트랜스폼
 	 * @param Destructions - 파괴 형상 목록
 	 * @return 연결되어 있으면 true
@@ -28,21 +28,21 @@ public:
 	static bool AreNarrowConnected(
 		int32 CellA,
 		int32 CellB,
-		const FGridCellCache& Cache,
+		const FGridCellLayout& GridLayout,
 		const FTransform& MeshTransform,
 		const TArray<FQuantizedDestructionInput>& Destructions);
 
 	/**
 	 * Narrow Phase를 포함한 BFS 연결 검사
 	 *
-	 * @param Cache - 격자 캐시
+	 * @param GridLayout - 격자 레이아웃
 	 * @param DestroyedCells - 파괴된 셀 집합
 	 * @param MeshTransform - 메시 트랜스폼
 	 * @param Destructions - 파괴 형상 목록
 	 * @return 분리된 셀 ID 집합
 	 */
 	static TSet<int32> FindDisconnectedCellsWithNarrowPhase(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& GridLayout,
 		const TSet<int32>& DestroyedCells,
 		const FTransform& MeshTransform,
 		const TArray<FQuantizedDestructionInput>& Destructions);
@@ -53,7 +53,7 @@ private:
 	 */
 	static void GetIntactSubCells(
 		int32 CellId,
-		const FGridCellCache& Cache,
+		const FGridCellLayout& GridLayout,
 		const FTransform& MeshTransform,
 		const TArray<FQuantizedDestructionInput>& Destructions,
 		TArray<FIntVector>& OutIntactSubCells);
@@ -70,7 +70,7 @@ private:
 	 * 경계 셀 판정 (파괴된 셀과 인접한 셀)
 	 */
 	static bool IsBoundaryCell(
-		const FGridCellCache& Cache,
+		const FGridCellLayout& GridLayout,
 		int32 CellId,
 		const TSet<int32>& DestroyedCells);
 };

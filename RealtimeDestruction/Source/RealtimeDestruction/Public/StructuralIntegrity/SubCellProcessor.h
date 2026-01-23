@@ -18,7 +18,7 @@ public:
 	 *
 	 * @param QuantizedShape - 양자화된 파괴 형태 (네트워크 결정론적)
 	 * @param MeshTransform - 메시의 월드 트랜스폼
-	 * @param GridCache - 격자 셀 캐시 (읽기 전용)
+	 * @param GridLayout - 격자 셀 레이아웃 (읽기 전용)
 	 * @param InOutCellState - 셀 상태 (subcell 상태 업데이트)
 	 * @param OutAffectedCells - 영향받은 cell ID 목록 (출력)
 	 * @param OutNewlyDeadSubCells - 새로 dead된 subcell 정보 (출력, 선택적)
@@ -27,7 +27,7 @@ public:
 	static bool ProcessSubCellDestruction(
 		const FQuantizedDestructionInput& QuantizedShape,
 		const FTransform& MeshTransform,
-		const FGridCellCache& GridCache,
+		const FGridCellLayout& GridLayout,
 		FCellState& InOutCellState,
 		TArray<int32>& OutAffectedCells,
 		TMap<int32, TArray<int32>>* OutNewlyDeadSubCells = nullptr);
