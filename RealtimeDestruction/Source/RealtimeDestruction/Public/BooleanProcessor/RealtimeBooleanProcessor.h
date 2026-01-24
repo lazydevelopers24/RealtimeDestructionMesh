@@ -290,7 +290,9 @@ public:
 	 * Applies planar simplification to clean up the mesh.
 	 * Removes low-importance vertices to prevent triangle count blow-up.
 	 */
-	static void ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options);
+	static void ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh,
+		FGeometryScriptPlanarSimplifyOptions Options,
+		bool bEnableDetail);
 
 private:	
 	// ===============================================================
@@ -307,7 +309,7 @@ private:
 	void AccumulateSubtractDuration(int32 ChunkIndex, double CurrentSubDuration);
 	void UpdateSimplifyInterval(double CurrentSetMeshAvgCost);
 	void UpdateUnionSize(int32 ChunkIndex, double DurationMs);
-	bool TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount);
+	bool TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount, bool bEnableDetail);
 	/** Subtract cost tracker. */
 	void UpdateSubtractAvgCost(double CostMs);
 	
@@ -377,7 +379,8 @@ private:
 	// Simplification & Adaptive Tuning
 	// ===============================================================
 	// Testing from default values.
-	int32 AngleThreshold = 0.001;
+	float AngleThreshold = 0.001;
+	bool bEnableHighDetailMode = true;
 	
 	int32 MaxInterval = 0;
 	int32 InitInterval = 0;

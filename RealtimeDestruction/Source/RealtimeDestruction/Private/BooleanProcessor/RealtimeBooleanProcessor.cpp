@@ -680,8 +680,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 	// ===== 4. Subtract compute =====
 	FDynamicMesh3 ResultMesh;
-	bool bSuccess = false; 
-	bool bHasDebris = false; 
+	bool bSuccess = false;
+	bool bHasDebris = false;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE("SlotSubtract_Compute");
 
@@ -750,7 +750,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				AccumulateSubtractDuration(ChunkIndex, CurrentDurationMs);
 				UpdateUnionSize(ChunkIndex, CurrentDurationMs);
 				// Simplify.
-				TrySimplify(ResultMesh, ChunkIndex, UnionResult.UnionCount);
+				bool bEnableDetailMode = bEnableHighDetailMode;
+				TrySimplify(ResultMesh, ChunkIndex, UnionResult.UnionCount, bEnableDetailMode);
 			}
 			else
 			{
@@ -811,7 +812,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					EGeometryScriptBooleanOperation::Subtract,
 					Ops);
 			}
-		} 
+		}
 	}
 
 	// ===== 5. Apply results (GameThread) =====
@@ -825,7 +826,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          ResultMesh = MoveTemp(ResultMesh),
 			          Context = UnionResult.IslandContext,
 			          Decals = MoveTemp(UnionResult.Decals),
-			          UnionCount = UnionResult.UnionCount, 
+			          UnionCount = UnionResult.UnionCount,
 			          bSuccess,
 			          this]() mutable
 		          {
@@ -877,7 +878,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					          	Context->Owner->CleanupSmallFragments();
 					          }
 				          }
-			          } 
+			          }
 
 			          // ===== Decrement counters (shutdown check) =====
 			          if (LifeTime.IsValid() && LifeTime->bAlive.load() && SlotSubtractWorkerCounts.IsValidIndex(
@@ -891,13 +892,13 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          Proc->ChunkHoleCount[ChunkIndex] += UnionCount;
 
 			         
-				    // If queue has work, re-kick.
-				    if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
-				    {
-					    Proc->KickSubtractWorker(SlotIndex);
-				    }
-				    // Next kick.
-				    Proc->KickProcessIfNeededPerChunk();
+				          // If queue has work, re-kick.
+				          if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
+				          {
+					          Proc->KickSubtractWorker(SlotIndex);
+				          }
+				          // Next kick.
+				          Proc->KickProcessIfNeededPerChunk();
 			          
 			          //else
 			          //{
@@ -911,7 +912,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 	{
 		// Even on failure, re-kick if queue has work (GameThread).
 		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex]()
-		{ 
+		{
 			if (SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
 			{
 				SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
@@ -1290,7 +1291,8 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 					{
 						// Mesh simplification.
 						TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Simplify");
-						bool bIsSimplified = Processor->TrySimplify(WorkMesh, ChunkIndex, UnionCount);
+						bool bEnableDetailMode = Processor->bEnableHighDetailMode;
+						bool bIsSimplified = Processor->TrySimplify(WorkMesh, ChunkIndex, UnionCount, bEnableDetailMode);
 				}
 
 					
@@ -1449,7 +1451,7 @@ void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgC
 	}
 }
 
-bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount)
+bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount, bool bEnableDetail)
 {
 	if (!ChunkStates.States.IsValidIndex(ChunkIndex))
 	{
@@ -1490,7 +1492,7 @@ bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMes
 		// SimplifyOptions.bAutoCompact = true;
 		SimplifyOptions.bAutoCompact = false;
 		SimplifyOptions.AngleThreshold = AngleThreshold;
-		ApplySimplifyToPlanarAsync(&WorkMesh, SimplifyOptions);
+		ApplySimplifyToPlanarAsync(&WorkMesh, SimplifyOptions, bEnableDetail);
 		/*
 		 * As of 12/26, the runtime does not access LastSimplifyTriCount on the GT.
 		 */
@@ -1687,13 +1689,15 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 	return false;
 }
 
-void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options)
+void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options, bool bEnableDetail)
 {
 	if (!TargetMesh)
 	{
 		return;
 	}
 
+	if (bEnableDetail)
+	{
 	if (!TargetMesh->HasAttributes())
 	{
 		TargetMesh->EnableAttributes();
@@ -1799,6 +1803,15 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 	Simplifier.SetExternalConstraints(MoveTemp(ExternalConstraints));
 	
 	Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
+	}
+	else
+	{
+		FQEMSimplification Simplifier(TargetMesh);
+
+		Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::AverageVertexPosition;
+
+		Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
+	}
 
 	if (Options.bAutoCompact)
 	{
