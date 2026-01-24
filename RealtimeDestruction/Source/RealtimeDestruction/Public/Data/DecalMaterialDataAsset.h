@@ -10,8 +10,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"  
-#include "Components/DestructionTypes.h" 
+#include "Engine/DataAsset.h"
+#include "Materials/MaterialInterface.h"
+#include "Components/DestructionTypes.h"
 #include "DecalMaterialDataAsset.generated.h"
  
 USTRUCT(BlueprintType)

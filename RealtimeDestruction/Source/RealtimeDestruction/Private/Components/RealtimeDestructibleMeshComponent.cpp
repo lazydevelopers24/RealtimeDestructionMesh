@@ -8,6 +8,8 @@
 // the use of this product.
 
 #include "Components/RealtimeDestructibleMeshComponent.h"
+#include "TimerManager.h"
+#include "GameFramework/Pawn.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "DynamicMeshEditor.h"

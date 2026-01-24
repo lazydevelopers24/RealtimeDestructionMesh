@@ -10,6 +10,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/DecalComponent.h"
 #include "DestructionTypes.generated.h"
 
 UENUM(BlueprintType)

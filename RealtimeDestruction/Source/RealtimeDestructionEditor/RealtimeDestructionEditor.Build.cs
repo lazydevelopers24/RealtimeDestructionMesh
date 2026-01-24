@@ -7,6 +7,9 @@ public class RealtimeDestructionEditor : ModuleRules
 	public RealtimeDestructionEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		// PCHUsage = PCHUsageMode.NoPCHs;
+		bEnforceIWYU = true;
+		bUseUnity = false;
 
 		PublicIncludePaths.AddRange(
 			new string[] {

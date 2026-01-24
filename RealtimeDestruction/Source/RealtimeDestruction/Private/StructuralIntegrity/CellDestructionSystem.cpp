@@ -8,7 +8,8 @@
 // the use of this product.
 
 #include "StructuralIntegrity/CellDestructionSystem.h"
-#include "StructuralIntegrity/SubCellProcessor.h" 
+#include "Containers/Queue.h"
+#include "StructuralIntegrity/SubCellProcessor.h"
 //=============================================================================
 // FCellDestructionSystem - SubCell level API
 //=============================================================================

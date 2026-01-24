@@ -10,6 +10,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/NetSerialization.h"
 #include "GridCellTypes.generated.h"
 
 // Forward declaration

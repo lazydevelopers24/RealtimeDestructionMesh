@@ -10,6 +10,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/StaticMesh.h"
 #include "StructuralIntegrity/GridCellTypes.h"
 #include "VectorTypes.h"  // UE::Geometry::FVector3d
 

@@ -11,6 +11,8 @@
 
 #include "CoreMinimal.h"
 #include <atomic>
+#include "UObject/WeakObjectPtr.h"
+#include "Containers/Queue.h"
 #include "DynamicMesh/MeshTangents.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "HAL/CriticalSection.h"
@@ -22,6 +24,7 @@ namespace UE::Geometry
 	class FDynamicMesh3;
 }
 class UDynamicMeshComponent;
+class UPrimitiveComponent;
 struct FRealtimeDestructionOp;
 struct FGeometryScriptMeshBooleanOptions;
 struct FGeometryScriptPlanarSimplifyOptions;
