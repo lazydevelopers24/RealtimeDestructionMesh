@@ -284,7 +284,7 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 	FVector Direction = GetToolDirection(Hit, Owner);
 	FVector ToolStart = Hit.ImpactPoint;
 	FVector ToolEnd = ToolStart + (Direction * CylinderHeight);
-	UE_LOG(LogTemp, Display, TEXT("CylinderDebug/Depth %f"), CylinderHeight);
+	
 	TArray<int32> LineAlongChunkIndices;
 	LineAlongChunkIndices.Reserve(DestructComp->GetChunkNum());
 	DestructComp->FindChunksAlongLine(ToolStart, ToolEnd, ToolRadius, LineAlongChunkIndices, false);
@@ -345,7 +345,6 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 	
 		if (NetworkComp)
 		{
-			UE_LOG(LogTemp, Display, TEXT("CylinderDebug/Network"));
 			// NetworkComp가 서버/클라이언트/스탠드얼론 모두 처리
 			NetworkComp->RequestDestruction(DestructComp, Request);
 		}

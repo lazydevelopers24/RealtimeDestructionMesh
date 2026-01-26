@@ -344,7 +344,7 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 
 	FDestructionResult Result = DestructionLogic(Request);
 	PendingDestructionResults.Add(Result);
-	
+
 	UDecalComponent* TempDecal = nullptr;
 	if (Request.bSpawnDecal)
 	{
@@ -352,7 +352,7 @@ bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealt
 	}
 
 	EnqueueRequestLocal(Request, bIsPenetrating, TempDecal);
-	return true;	
+	return true;
 }
 
 //=============================================================================
@@ -532,20 +532,20 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 	//파괴된게 없으면 패스 (bForceRun이면 무조건 BFS 실행)
 	if (!bForceRun)
 	{
-	bool bHasAnyDestruction = false;
-	for (const FDestructionResult& Result : AllResults)
-	{
-		if (Result.HasAnyDestruction())
+		bool bHasAnyDestruction = false;
+		for (const FDestructionResult& Result : AllResults)
 		{
-			bHasAnyDestruction = true;
-			break;
+			if (Result.HasAnyDestruction())
+			{
+				bHasAnyDestruction = true;
+				break;
+			}
 		}
-	} 
-	if (!bHasAnyDestruction)
-	{
+		if (!bHasAnyDestruction)
+		{
 			UE_LOG(LogTemp, Warning, TEXT("[DisconnectedCellStateLogic] EARLY RETURN: No destruction in AllResults"));
-		return;
-	}
+			return;
+		}
 	}
 
 
@@ -659,14 +659,14 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
 		{
 			CleanupSmallFragments();
-	}
+		}
 	}
 
 	// 데칼 정리 (데디서버에서는 불필요)
 	if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
 	{
 		for (const FDestructionResult& Result : AllResults)
-	{
+		{
 			ProcessDecalRemoval(Result);
 		}
 
@@ -1062,7 +1062,7 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 		if (bHasPhysicsBody)
 		{
 			ChunkBodyInstance->UpdatePhysicsFilterData();
-			}
+		}
 
 		UE_LOG(LogTemp, Warning, TEXT("[CellBoxDebug] Chunk %d: Boxes=%d, HasPhysicsBody=%d, CollisionEnabled=%d, BodySetupBoxes=%d"),
 			ChunkIndex, ChunkAggGeom.BoxElems.Num(), bHasPhysicsBody ? 1 : 0,
@@ -1169,7 +1169,7 @@ void URealtimeDestructibleMeshComponent::UpdateDirtyCollisionChunks()
 
 bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_RemoveTrianglesForDetachedCells);
+		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_RemoveTrianglesForDetachedCells);
 	using namespace UE::Geometry;
 
 	if (DetachedCellIds.Num() == 0 || ChunkMeshComponents.Num() == 0)
@@ -1199,7 +1199,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		);
 		BaseCells.Add(GridPos);
 	}
-
+	
 	//// 2. BaseCells를 DebrisSplitCount개로 분할
 	//TArray<TSet<FIntVector>> FinalPieces;
 
@@ -1337,8 +1337,8 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 
 			if (Ranges[LargestIdx].Num() <= 1)
 			{
-				break; 
-		}
+				break;
+			}
 
 			FPieceRange& Range = Ranges[LargestIdx];
 
@@ -1353,7 +1353,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 				MaxBB.X = FMath::Max(MaxBB.X, AllCells[i].X);
 				MaxBB.Y = FMath::Max(MaxBB.Y, AllCells[i].Y);
 				MaxBB.Z = FMath::Max(MaxBB.Z, AllCells[i].Z);
-	}
+			}
 
 			int32 ExtX = MaxBB.X - MinBB.X;
 			int32 ExtY = MaxBB.Y - MinBB.Y;
@@ -1363,36 +1363,36 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			// nth_element로 중앙값 찾기 (O(N), 정렬 불필요)
 			int32 MidIdx = Range.Start + Range.Num() / 2;
 			auto GetAxis = [SplitAxis](const FIntVector& V) -> int32
-	{
+				{
 					return SplitAxis == 0 ? V.X : (SplitAxis == 1 ? V.Y : V.Z);
 				};
 			   
 			TArrayView<FIntVector> SortView(&AllCells[Range.Start], Range.Num());
 			SortView.Sort([&](const FIntVector& A, const FIntVector& B)
-	{
+			{
 				return GetAxis(A) < GetAxis(B);
 			});
 
 
 			// 한쪽이 비면 중단
 			if (MidIdx == Range.Start || MidIdx == Range.End)
-		{
+			{
 				break;
-		}
+			}
 
 			// Range를 둘로 분할 (메모리 할당 없음, 인덱스만 변경)
 			int32 OldEnd = Range.End;
 			Range.End = MidIdx;                          // 기존 Range가 Left
 			Ranges.Add({ MidIdx, OldEnd });                // Right 추가
-			}
+		}
 
 		// 각 범위를 TArray로 복사 (해시 비용 없음)
 		for (const FPieceRange& Range : Ranges)
-	{
+		{
 			TArray<FIntVector> PieceArr(&AllCells[Range.Start], Range.Num());
 			FinalPieces.Add(MoveTemp(PieceArr));
-			}
 		}
+	}
 
 
 	// 3. 각 조각별로 ToolMesh 생성 + Enqueue
@@ -1408,13 +1408,13 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	};
 
 	for (TArray<FIntVector>& Piece : FinalPieces)
-		{
+	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_FinalPieces);
 
 		if (Piece.Num() == 0)
-			{
+		{
 			continue;
-			}
+		}
 
 		UE_LOG(LogTemp, Warning, TEXT("Piece Size: %d"), Piece.Num());
 
@@ -1486,74 +1486,74 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(Piece, CellSizeVec, BoxExpand);
 
 		if (ToolMesh.TriangleCount() == 0)
-			{
+		{
 			continue;
-			}
+		}
 
 		// FillHoles 
-			{
+		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_FillHoles);
 
-		FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
-		for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
-		{
-			FSimpleHoleFiller Filler(&ToolMesh, Loop);
-			if (Filler.Fill())
+			FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
+			for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
 			{
+				FSimpleHoleFiller Filler(&ToolMesh, Loop);
+				if (Filler.Fill())
+				{
 					// normal값 재생성해야될 수도 있음 
 					/*
-				if (Filler.NewTriangles.Num() > 0)
-				{
-					int32 NewTriId = Filler.NewTriangles[0];
-					FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
-					bool bNeedFlip = false;
-
-					for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
+					if (Filler.NewTriangles.Num() > 0)
 					{
-						int32 Va = NewTri[i];
-						int32 Vb = NewTri[(i + 1) % 3];
-						int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
-						if (EdgeId != FDynamicMesh3::InvalidID)
+						int32 NewTriId = Filler.NewTriangles[0];
+						FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
+						bool bNeedFlip = false;
+
+						for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
 						{
-							FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
-							int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
-							if (OtherTriId != FDynamicMesh3::InvalidID &&
-								!Filler.NewTriangles.Contains(OtherTriId))
+							int32 Va = NewTri[i];
+							int32 Vb = NewTri[(i + 1) % 3];
+							int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
+							if (EdgeId != FDynamicMesh3::InvalidID)
 							{
-								FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
-								for (int32 j = 0; j < 3; ++j)
+								FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
+								int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
+								if (OtherTriId != FDynamicMesh3::InvalidID &&
+									!Filler.NewTriangles.Contains(OtherTriId))
 								{
-									if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
+									FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
+									for (int32 j = 0; j < 3; ++j)
 									{
-										bNeedFlip = true;
-										break;
+										if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
+										{
+											bNeedFlip = true;
+											break;
+										}
+										else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
+										{
+											break;
+										}
 									}
-									else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
-									{
-										break;
-									}
-								}
 									break;
+								}
+							}
+						}
+
+						if (bNeedFlip)
+						{
+							for (int32 TriId : Filler.NewTriangles)
+							{
+								ToolMesh.ReverseTriOrientation(TriId);
 							}
 						}
 					}
-
-					if (bNeedFlip)
-					{
-						for (int32 TriId : Filler.NewTriangles)
-						{
-							ToolMesh.ReverseTriOrientation(TriId);
-						}
-					}
-				}
 						*/
+				}
 			}
 		}
-	}
 
 		// Smoothing 
 		{
-			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth); 
 			ApplyHCLaplacianSmoothing(ToolMesh); 
 		}
 
@@ -1570,62 +1570,62 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			{
 				Centroid += ToolMesh.GetVertex(Vid);
 				VertexCount++;
-		}
+			}
 			if (VertexCount > 0)
-	{
+			{
 				Centroid /= (double)VertexCount;
 			}
 			double ScaleFactor = 1.2;
 			for (int32 Vid : ToolMesh.VertexIndicesItr())
-		{
+			{
 				FVector3d Pos = ToolMesh.GetVertex(Vid);
 				ToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * ScaleFactor);
-		}
-	}
+			}
+		} 
 		ToolMesh.ReverseOrientation();
 
 		// Debug 그리기
-	if (bDebugMeshIslandRemoval)
-	{
-			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_DebugMeshIslandRemoval);
-		if (UWorld* DebugWorld = GetWorld())
+		if (bDebugMeshIslandRemoval)
 		{
-			FTransform ComponentTransform = GetComponentTransform();
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_DebugMeshIslandRemoval);
+			if (UWorld* DebugWorld = GetWorld())
+			{
+				FTransform ComponentTransform = GetComponentTransform();
 				FDynamicMesh3 DebugMesh = ToolMesh;
 				DebugMesh.ReverseOrientation(); // 시각화용 원래 방향
 
 				for (int32 TriId : DebugMesh.TriangleIndicesItr())
-			{
+				{
 					FIndex3i Tri = DebugMesh.GetTriangle(TriId);
 					FVector V0 = ComponentTransform.TransformPosition(FVector(DebugMesh.GetVertex(Tri.A)));
 					FVector V1 = ComponentTransform.TransformPosition(FVector(DebugMesh.GetVertex(Tri.B)));
 					FVector V2 = ComponentTransform.TransformPosition(FVector(DebugMesh.GetVertex(Tri.C)));
-				DrawDebugLine(DebugWorld, V0, V1, FColor::Yellow, false, 4.5f, 0, 1.0f);
-				DrawDebugLine(DebugWorld, V1, V2, FColor::Yellow, false, 4.5f, 0, 1.0f);
-				DrawDebugLine(DebugWorld, V2, V0, FColor::Yellow, false, 4.5f, 0, 1.0f);
+					DrawDebugLine(DebugWorld, V0, V1, FColor::Yellow, false, 4.5f, 0, 1.0f);
+					DrawDebugLine(DebugWorld, V1, V2, FColor::Yellow, false, 4.5f, 0, 1.0f);
+					DrawDebugLine(DebugWorld, V2, V0, FColor::Yellow, false, 4.5f, 0, 1.0f);
+				}
 			}
 		}
-	}
-
+		
 		TSharedPtr<FDynamicMesh3> SharedToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(ToolMesh));
 		TSharedPtr<FDynamicMesh3> SharedDebrisToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(DebrisToolMesh));
 
 		// Detect chunks to be subtracted
-	FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
+		FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
 
-	TArray<int32> OverlappingChunks;
+		TArray<int32> OverlappingChunks;
 
-	for (int32 i = 0; i < GetChunkNum(); i++)
-	{
-		if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
-		{
-			if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
+	 	for (int32 i = 0; i < GetChunkNum(); i++)
 			{
-				OverlappingChunks.Add(i);
+				if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
+				{
+					if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
+					{
+						OverlappingChunks.Add(i);
+					}
+				}
 			}
-		}
-	}
-
+		 
 		if (OverlappingChunks.Num() == 0)
 		{
 			continue;
@@ -1636,19 +1636,19 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		if (Piece.Num() >= MinCellsForDebris)
 		{
 			Context = MakeShared<FIslandRemovalContext>();
-	Context->Owner = this;
-	Context->RemainingTaskCount = OverlappingChunks.Num();
+			Context->Owner = this;
+			Context->RemainingTaskCount = OverlappingChunks.Num();
 		}
 
-	if (BooleanProcessor.IsValid())
-	{
-		for (int32 ChunkIndex : OverlappingChunks)
+		if (BooleanProcessor.IsValid())
 		{
+			for (int32 ChunkIndex : OverlappingChunks)
+			{
 				TRACE_CPUPROFILER_EVENT_SCOPE(Debris_EnqueueIslandRemoval);
 				//BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
 				BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, SharedDebrisToolMesh, Context);
+			}
 		}
-	}
 	}
 	return true;
 	
@@ -1743,7 +1743,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	//				if (bNeedFlip)
 	//				{
 	//					for (int32 TriId : Filler.NewTriangles)
-	// {
+	//					{
 	//						ToolMesh.ReverseTriOrientation(TriId);
 	//					}
 	//				}
@@ -1772,15 +1772,15 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	//// 디버그: ToolMesh 와이어프레임 그리기 (월드 좌표)
 	//if (bDebugMeshIslandRemoval)
 	//{
-	// 	if (UWorld* DebugWorld = GetWorld())
-	// 	{
-	// 		FTransform ComponentTransform = GetComponentTransform();
+	//	if (UWorld* DebugWorld = GetWorld())
+	//	{
+	//		FTransform ComponentTransform = GetComponentTransform();
 
 	//		for (int32 TriId : ToolMeshForIntersection.TriangleIndicesItr())
-	// 		{
+	//		{
 	//			FIndex3i Tri = ToolMeshForIntersection.GetTriangle(TriId);
 
-	// 			// 로컬 좌표 → 월드 좌표 변환
+	//			// 로컬 좌표 → 월드 좌표 변환
 	//			FVector V0 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.A)));
 	//			FVector V1 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.B)));
 	//			FVector V2 = ComponentTransform.TransformPosition(FVector(ToolMeshForIntersection.GetVertex(Tri.C)));
@@ -1864,7 +1864,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	//			OverlappingChunks.Add(i);
 	//		}
 	//	}
-	// 		}
+	//	}
 
 	//TSharedPtr<FIslandRemovalContext> Context = MakeShared<FIslandRemovalContext>();
 	//Context->Owner = this;
@@ -1876,9 +1876,9 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	//	{
 	//		UE_LOG(LogTemp, Display, TEXT("DebrisDebug/enqueue"))
 	//		BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
-	// 	}
-	// }
-	
+	//	}
+	//	}
+
 	//UE_LOG(LogTemp, Log, TEXT("RemoveTrianglesForDetachedCells: %d cells, %d chunks affected"),
 	//	DetachedCellIds.Num(), TotalChunksProcessed);
 
@@ -1911,7 +1911,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	//// }
 
 	//return true;
-}
+} 
 
 FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellSize, double InBoxExpand)
 {
@@ -1956,7 +1956,7 @@ FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(c
 		GridMax.Y = FMath::Max(GridMax.Y, Pos.Y + 1);
 		GridMax.Z = FMath::Max(GridMax.Z, Pos.Z + 1);
 	}
-
+	 
 	// 정점 캐싱 및 생성 람다
 	TMap<FIntVector, int32> CornerToVertexId;
 	auto GetOrCreateVertex = [&](const FIntVector& Corner) -> int32 
@@ -2182,7 +2182,7 @@ FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(c
 			
 			// 양의 방향은 해당 축으로 +1만큼 이동시켜야지 큐브의 바깥면이 되고
 			switch (FaceDir)
-			{ 
+			{
 			case 0: // Z+
 				C0.Z++; C1.Z++; C2.Z++; C3.Z++;
 				break;
@@ -3618,7 +3618,7 @@ bool URealtimeDestructibleMeshComponent::IsChunkPenetrated(const FRealtimeDestru
 	if (!ChunkComp)
 	{
 		return false;
-			}
+	}
 
 	const FVector ImpactEndPoint = Request.ImpactPoint + Request.ToolForwardVector * Request.Depth;
 
@@ -4236,29 +4236,29 @@ void URealtimeDestructibleMeshComponent::DrawActivePhysicsBoxesDebug()
 	// 서버 경로: CollisionChunks 기반 디버그 (Cell Box Collision이 초기화된 경우)
 	if (bServerCellCollisionInitialized && CollisionChunks.Num() > 0)
 	{
-	for (int32 ChunkIdx = 0; ChunkIdx < CollisionChunks.Num(); ++ChunkIdx)
-	{
-		const FCollisionChunkData& Chunk = CollisionChunks[ChunkIdx];
-
-		// BodySetup이 없으면 스킵
-		if (!Chunk.BodySetup)
+		for (int32 ChunkIdx = 0; ChunkIdx < CollisionChunks.Num(); ++ChunkIdx)
 		{
-			continue;
-		}
+			const FCollisionChunkData& Chunk = CollisionChunks[ChunkIdx];
 
-		// 콜리전 컴포넌트 상태 확인
-		UStaticMeshComponent* ChunkComp = Cast<UStaticMeshComponent>(Chunk.ChunkComponent);
-		if (!ChunkComp || ChunkComp->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
-		{
-			++DisabledChunks;
-			continue;
-		}
+			// BodySetup이 없으면 스킵
+			if (!Chunk.BodySetup)
+			{
+				continue;
+			}
+
+			// 콜리전 컴포넌트 상태 확인
+			UStaticMeshComponent* ChunkComp = Cast<UStaticMeshComponent>(Chunk.ChunkComponent);
+			if (!ChunkComp || ChunkComp->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+			{
+				++DisabledChunks;
+				continue;
+			}
 
 			// 실제 BodySetup의 BoxElems에서 박스 그리기
-		const FKAggregateGeom& DebugAggGeom = Chunk.BodySetup->AggGeom;
-		for (const FKBoxElem& BoxElem : DebugAggGeom.BoxElems)
-		{
-			const FVector WorldCenter = ComponentTransform.TransformPosition(BoxElem.Center);
+			const FKAggregateGeom& DebugAggGeom = Chunk.BodySetup->AggGeom;
+			for (const FKBoxElem& BoxElem : DebugAggGeom.BoxElems)
+			{
+				const FVector WorldCenter = ComponentTransform.TransformPosition(BoxElem.Center);
 				const FVector HalfExtent = FVector(BoxElem.X, BoxElem.Y, BoxElem.Z) * 0.5f * ComponentTransform.GetScale3D();
 				DrawDebugBox(World, WorldCenter, HalfExtent, ComponentTransform.GetRotation(), DebugColor, false, 0.0f, SDPG_Foreground, 1.0f);
 				++TotalActiveBoxes;
@@ -4344,8 +4344,7 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* D
 		return;
 	}
 
-	FManagedDecal NewDecal;
-	NewDecal.Decal = TWeakObjectPtr(Decal);
+	TRACE_CPUPROFILER_EVENT_SCOPE("Decal_Register");
 
 	// 데칼의 로컬 x축으로의 탐색 깊이 설정
 	// 셀 사이즈보다 살짝 작게 탐색
@@ -4377,6 +4376,9 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* D
 	const FTransform& MeshTransform = GetComponentTransform();
 	TArray<int32> CandidateCells = GridCellLayout.GetCellsInAABB(ThinWorldBox, MeshTransform);
 	
+	TSet<int32> ValidCells;
+	ValidCells.Reserve(CandidateCells.Num());
+	
 	for (int32 CellID : CandidateCells)
 	{
 		if (CellState.DestroyedCells.Contains(CellID))
@@ -4388,13 +4390,24 @@ void URealtimeDestructibleMeshComponent::RegisterDecalToCells(UDecalComponent* D
 
 		if (QuantizedDecal.IntersectsOBB(CellWorldOBB))
 		{
-			NewDecal.CoveredCells.Add(CellID);
+			ValidCells.Add(CellID);
 		}
 	}
 
-	if (NewDecal.CoveredCells.Num() > 0)
+	if (ValidCells.Num() > 0)
 	{
-		ActiveDecals.Add(NewDecal);
+		int32 NewHandle = ++NextDecalHandle;
+
+		FManagedDecal NewDecal;
+		NewDecal.Decal = Decal;
+		NewDecal.RemainingCellCount = ValidCells.Num();
+
+		ActiveDecals.Add(NewHandle, NewDecal);
+
+		for (int32 CellId : ValidCells)
+		{
+			CellToDecalMap.FindOrAdd(CellId).Add(NewHandle);
+	}
 	}
 }
 
@@ -4410,33 +4423,41 @@ void URealtimeDestructibleMeshComponent::ProcessDecalRemoval(const FDestructionR
 		return;
 	}
 
-	for (int32 DecalIndex = ActiveDecals.Num() - 1; DecalIndex >= 0; DecalIndex--)
+	TRACE_CPUPROFILER_EVENT_SCOPE("Decal_Removal")
+
+	TSet<int32> DecalsToRemove;
+
+	for (int32 DestroyedCellId : Result.NewlyDestroyedCells)
 	{
-		FManagedDecal& Decal = ActiveDecals[DecalIndex];
-
-		if (!Decal.Decal.IsValid())
+		if (TArray<int32>* DecalHandle = CellToDecalMap.Find(DestroyedCellId))
 		{
-			ActiveDecals.RemoveAtSwap(DecalIndex);
-			continue;
+			for (int32 Handle : *DecalHandle)
+			{
+				if (FManagedDecal* Decal = ActiveDecals.Find(Handle))
+	{
+					Decal->RemainingCellCount--;
+
+					if (Decal->RemainingCellCount <= 0)
+		{
+						DecalsToRemove.Add(Handle);
+					}
+				}
 		}
 
-		for (int32 CoverageIndex = Decal.CoveredCells.Num() - 1; CoverageIndex >= 0; CoverageIndex--)
-		{
-			int32 CellID = Decal.CoveredCells[CoverageIndex];
-
-			if (Result.NewlyDestroyedCells.Contains(CellID))
-			{
-				Decal.CoveredCells.RemoveAtSwap(CoverageIndex);
+			CellToDecalMap.Remove(DestroyedCellId);
 			}
 		}
 
-		if (Decal.CoveredCells.Num() == 0)
+	for (int32 Handle : DecalsToRemove)
 		{
-			if (UDecalComponent* DecalToRemove = Decal.Decal.Get())
+		if (FManagedDecal* Decal = ActiveDecals.Find(Handle))
 			{
-				DecalToRemove->DestroyComponent();
+			if (auto DecalComp = Decal->Decal.Get())
+			{
+				DecalComp->DestroyComponent();
 			}
-			ActiveDecals.RemoveAtSwap(DecalIndex);
+
+			ActiveDecals.Remove(Handle);
 		}
 	}
 }
@@ -4453,7 +4474,7 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 	if (SourceStaticMesh && !bIsInitialized)
 	{
 		InitializeFromStaticMeshInternal(SourceStaticMesh, false);
-	} 
+	}
 
 #if WITH_EDITOR
 	// 에디터 로드 시 GridCellSize와 GridCellLayout.CellSize 불일치 검증
@@ -4843,7 +4864,7 @@ void URealtimeDestructibleMeshComponent::FlushServerBatch()
 			TArray<FDestructionResult> AllResults;
 			DisconnectedCellStateLogic(AllResults, true);
 
-			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########")); 
+			UE_LOG(LogTemp, Warning, TEXT("########## [BATCH END] ##########"));
 		}
 
 		// 압축된 데이터로 전파
@@ -5176,9 +5197,9 @@ int32 URealtimeDestructibleMeshComponent::BuildChunksFromGC(UGeometryCollection*
 		}
 		else
 		{
-		CellComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		CellComp->SetCollisionProfileName(TEXT("BlockAll"));
-		CellComp->SetComplexAsSimpleCollisionEnabled(true);
+			CellComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			CellComp->SetCollisionProfileName(TEXT("BlockAll"));
+			CellComp->SetComplexAsSimpleCollisionEnabled(true);
 		}
 
 
@@ -5707,7 +5728,7 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 	FName PropertyName = (PropertyChangedEvent.Property != nullptr)
 		? PropertyChangedEvent.Property->GetFName()
 		: NAME_None;
-
+	
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, SourceStaticMesh))
 	{
 		UE_LOG(LogTemp, Log, TEXT("PostEditChangeProperty Mesh Name: %s"), *SourceStaticMesh.GetName());
@@ -5736,7 +5757,7 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 
 	// bShowGridCellDebug가 변경되면 처리
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(URealtimeDestructibleMeshComponent, bShowGridCellDebug))
-	{  
+	{
 		if (bShowGridCellDebug)
 		{
 			// 디버그 켜기: 그리드 셀 그리기
@@ -5815,8 +5836,8 @@ TObjectPtr<UGeometryCollection> URealtimeDestructibleMeshComponent::CreateFractu
 	{
 		return nullptr;
 	}
-	
-	// 에셋 이름, 패키징 경로 설정 
+
+	// 에셋 이름, 패키징 경로 설정
 	FString ActorLabel = GetOwner() ? GetOwner()->GetActorLabel() : TEXT("Unknown");
 
 	ActorLabel = ActorLabel.Replace(TEXT(" "), TEXT("_"));
@@ -5833,25 +5854,25 @@ TObjectPtr<UGeometryCollection> URealtimeDestructibleMeshComponent::CreateFractu
 		return nullptr;
 	}
 	Package->FullyLoad();
-	
+
 	UGeometryCollection* GeometryCollection = NewObject<UGeometryCollection>(
 		Package,
 		*AssetName,
 		RF_Public | RF_Standalone
-	); 
+	);
 	if (!GeometryCollection)
 	{
 		UE_LOG(LogTemp, Error, TEXT("CreateFracturedGC: Failed to create GeometryCollection"));
 		return nullptr;
 	}
-	
+
 	TSharedPtr<FGeometryCollection, ESPMode::ThreadSafe> GCPtr = GeometryCollection->GetGeometryCollection();
 	if (!GCPtr.IsValid())
 	{
 		GCPtr = MakeShared<FGeometryCollection>();
 		GeometryCollection->SetGeometryCollection(GCPtr);
 	}
-	 
+
 	// Source Static Mesh를 GC에 추가 (단일 조각으로 시작)
 	TArray<UMaterialInterface*> Materials;
 	for (const FStaticMaterial& StaticMat : InSourceMesh->GetStaticMaterials())
@@ -5882,22 +5903,22 @@ TObjectPtr<UGeometryCollection> URealtimeDestructibleMeshComponent::CreateFractu
 		*GCPtr.Get(),           // 레퍼런스로 전달 (&InOutCollection)
 		TransformSelection,     // 선택 영역
 		BoundingBox,            // 자를 범위
-		SliceCount.X - 1,           // X축 몇번 자를 지
-		SliceCount.Y - 1,           // Y축 몇번 자를 지
-		SliceCount.Z - 1,           // Z축 몇번 자를 지
-		0.0f,					// 0 이면 수직, 수평
+		SliceCount.X - 1,       // X축 몇번 자를 지
+		SliceCount.Y - 1,       // Y축 몇번 자를 지
+		SliceCount.Z - 1,       // Z축 몇번 자를 지
+		0.0f,                   // 0 이면 수직, 수평
 		0.0f,                   // 0 이면 정간격
 		0,                      // Deterministic해야 하므로 Random seed는 상수 0 고정
 		1.0f,                   // 파괴 확률 (ChanceToFracture) - 1.0f = 100%
 		false,                  // 섬 분리 여부 (SplitIslands)
-		0.0f,                   // Grout (틈새 벌리기) 
-		0.0f,                   // Amplitude (노이즈 진폭) 
+		0.0f,                   // Grout (틈새 벌리기)
+		0.0f,                   // Amplitude (노이즈 진폭)
 		0.0f,                   // Frequency (노이즈 빈도)
 		0.0f,                   // Persistence
 		0.0f,                   // Lacunarity
 		0,                      // OctaveNumber
 		0.0f,                   // PointSpacing
-		false,                   // AddSamplesForCollision
+		false,                  // AddSamplesForCollision
 		0.0f
 	);
 	if (NumCreated <= 0)

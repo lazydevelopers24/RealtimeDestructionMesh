@@ -92,7 +92,7 @@ bool FRealtimeBooleanProcessor::Initialize(URealtimeDestructibleMeshComponent* O
 	LifeTime->Init(Owner->GetBooleanProcessorShared());	
 
 	AngleThreshold = OwnerComponent->GetAngleThreshold();
-	SubDurationHighThreshold = OwnerComponent->GetSubtractDurationLimit();
+	SubDurationHighThreshold = OwnerComponent->GetSubtractDurationLimit();	
 
 	InitializeSlots();
 
@@ -463,7 +463,7 @@ void FRealtimeBooleanProcessor::KickUnionWorker(int32 SlotIndex)
 			}			
 		},
 		OwnerComponent.Get()
-	);
+	);	
 }
 
 void FRealtimeBooleanProcessor::KickSubtractWorker(int32 SlotIndex)
@@ -502,9 +502,9 @@ void FRealtimeBooleanProcessor::KickSubtractWorker(int32 SlotIndex)
 	TSharedPtr<FProcessorLifeTime, ESPMode::ThreadSafe> LifeTimeToken = LifeTime;
 	if (OwnerComponent.IsValid() && !OwnerComponent->CheckAndSetChunkBusy(UnionResult.ChunkIndex))
 	{
-	ThreadManager->RequestWork(
+		ThreadManager->RequestWork(
 		   [LifeTimeToken, SlotIndex, UnionResult = MoveTemp(UnionResult)]() mutable
-		{
+		   {
 		   	if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 		   	{
 		   		return;
@@ -513,9 +513,9 @@ void FRealtimeBooleanProcessor::KickSubtractWorker(int32 SlotIndex)
 		   	{
 		   		Processor->ProcessSlotSubtractWork(SlotIndex, MoveTemp(UnionResult));
 		   	}
-		},
-		OwnerComponent.Get()
-	);
+		   },
+		   OwnerComponent.Get()
+	   );
 	}
 	else
 	{
@@ -551,83 +551,82 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 	FDynamicMesh3 CombinedToolMesh;
 	TArray<TWeakObjectPtr<UDecalComponent>> Decals;
 	int32 UnionCount = 0;
-	
+
 	int32 BatchCount = Batch.Num();
 	TArray<FTransform> ToolTransforms = MoveTemp(Batch.ToolTransforms);
 	TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = MoveTemp(Batch.TemporaryDecals);
 	TArray<TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = MoveTemp(
 		Batch.ToolMeshPtrs);
-	
-	bool bIsFirst = true;  
+
+	bool bIsFirst = true;
 	for (int32 i = 0; i < BatchCount; ++i)
 	{
-	 	if (!ToolMeshPtrs[i].IsValid())
-	 	{
-	 		continue;
-	 	}
+		if (!ToolMeshPtrs[i].IsValid())
+		{
+			continue;
+		}
 
-	 	FTransform ToolTransform = MoveTemp(ToolTransforms[i]);
-	 	TWeakObjectPtr<UDecalComponent> TemporaryDecal = MoveTemp(TemporaryDecals[i]);
+		FTransform ToolTransform = MoveTemp(ToolTransforms[i]);
+		TWeakObjectPtr<UDecalComponent> TemporaryDecal = MoveTemp(TemporaryDecals[i]);
 
-	 	// Skip empty meshes (avoid crash).
-	 	FDynamicMesh3 CurrentTool = *(ToolMeshPtrs[i]);
-	 	if (CurrentTool.TriangleCount() == 0)
-	 	{
-	 		UE_LOG(LogTemp, Warning,
-					TEXT(
-						"[UnionWorkerForChunk] Skipping empty ToolMesh at ChunkIndex %d, item %d"
-					), ChunkIndex, i);
-	 		continue;
-	 	}
+		// Skip empty meshes (avoid crash).
+		FDynamicMesh3 CurrentTool = *(ToolMeshPtrs[i]);
+		if (CurrentTool.TriangleCount() == 0)
+		{
+			UE_LOG(LogTemp, Warning,
+			       TEXT(
+				       "[UnionWorkerForChunk] Skipping empty ToolMesh at ChunkIndex %d, item %d"
+			       ), ChunkIndex, i);
+			continue;
+		}
 
-	 	//FDynamicMesh3 CurrentTool = MoveTemp(*(ToolMeshPtrs[i]));
-	 	MeshTransforms::ApplyTransform(CurrentTool, (FTransformSRT3d)ToolTransform, true);
+		//FDynamicMesh3 CurrentTool = MoveTemp(*(ToolMeshPtrs[i]));
+		MeshTransforms::ApplyTransform(CurrentTool, (FTransformSRT3d)ToolTransform, true);
 
-	 	if (TemporaryDecal.IsValid())
-	 	{
-	 		Decals.Add(TemporaryDecal);
-	 	}
+		if (TemporaryDecal.IsValid())
+		{
+			Decals.Add(TemporaryDecal);
+		}
 
-	 	if (bIsFirst)
-	 	{
-	 		CombinedToolMesh = MoveTemp(CurrentTool);
-	 		bIsFirst = false;
-	 		UnionCount++;
-	 	}
-	 	else
-	 	{
-	 		FDynamicMesh3 UnionResult;
-	 		FMeshBoolean MeshUnion(
-				 &CombinedToolMesh, FTransform::Identity,
-				 &CurrentTool, FTransform::Identity,
-				 &UnionResult, FMeshBoolean::EBooleanOp::Union
-			 );
+		if (bIsFirst)
+		{
+			CombinedToolMesh = MoveTemp(CurrentTool);
+			bIsFirst = false;
+			UnionCount++;
+		}
+		else
+		{
+			FDynamicMesh3 UnionResult;
+			FMeshBoolean MeshUnion(
+				&CombinedToolMesh, FTransform::Identity,
+				&CurrentTool, FTransform::Identity,
+				&UnionResult, FMeshBoolean::EBooleanOp::Union
+			);
 
 			bool bUnionSuccess = false;
-	 		{
+			{
 #if !UE_BUILD_SHIPPING
-				FString EventName = FString::Printf(TEXT("SlotWorkerUnion_Union_%d"), MaxSubtractWorkerPerSlot);
-				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*EventName);				
+				TRACE_CPUPROFILER_EVENT_SCOPE("SlotWorkerUnion_Union");
 #endif
 				bUnionSuccess = MeshUnion.Compute();
 			}
 
 			if (bUnionSuccess)
 			{
-	 			CombinedToolMesh = MoveTemp(UnionResult);
-	 			UnionCount++;
+				CombinedToolMesh = MoveTemp(UnionResult);
+				UnionCount++;
 
 				UE_LOG(LogTemp, Display, TEXT("ToolMeshTri %d"), CombinedToolMesh.TriangleCount());
 				
-	 		}
-	 		else
-	 		{
-	 			UE_LOG(LogTemp, Warning,
-						TEXT("[UnionWorkerForChunk] Union failed at ChunkIndex %d, item %d"),
-						ChunkIndex, i);
-	 		}
-	 	}
-	}  
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning,
+				       TEXT("[UnionWorkerForChunk] Union failed at ChunkIndex %d, item %d"),
+				       ChunkIndex, i);
+			}
+		}
+	}
 
 	if (UnionCount > 0 && CombinedToolMesh.TriangleCount() > 0)
 	{
@@ -639,7 +638,7 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 		Result.ChunkIndex = ChunkIndex;
 
 		// Enqueue into subtract queue.
-		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(Result)); 
+		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(Result));
 	}
 
 	SlotUnionWorkerCounts[SlotIndex]->fetch_sub(1);
@@ -648,18 +647,18 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 	AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime, SlotIndex]()
 	{
 		if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
-	{
+		{
 			return;
 		}
 
 		if (auto Processor = LifeTimeToken->Processor.Pin())
 		{
-		// If queue has work, kick again.
+			// If queue has work, kick again.
 			if (!Processor->SlotUnionQueues[SlotIndex]->IsEmpty())
-		{
+			{
 				Processor->KickUnionWorker(SlotIndex);
-		}
-		// Kick subtract worker too.
+			}
+			// Kick subtract worker too.
 			Processor->KickSubtractWorker(SlotIndex);
 		}
 	});
@@ -676,9 +675,9 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          SlotIndex = SlotIndex,
 			          ChunkIndex = ChunkIndex,
 			          Context = UnionResult.IslandContext]()
-		{
+		          {
 			          if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
-			{
+			          {
 				          return;
 			          }
 
@@ -690,7 +689,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 			          URealtimeDestructibleMeshComponent* Owner = Processor->OwnerComponent.Get();
 			          if (!Owner)
-				{
+			          {
 				          return;
 			          }
 
@@ -701,22 +700,22 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          {
 				          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
 				          {
-					TArray<UMaterialInterface*> Materials;
+					          TArray<UMaterialInterface*> Materials;
 					          if (auto ChunkMesh = Owner->GetChunkMeshComponent(ChunkIndex))
-					{
-						for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
-						{
-							Materials.Add(ChunkMesh->GetMaterial(i));
-						}
-					}
-					Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
-			}
-		}
+					          {
+						          for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
+						          {
+							          Materials.Add(ChunkMesh->GetMaterial(i));
+						          }
+					          }
+					          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+				          }
+			          }
 
 			          if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
-		{
+			          {
 				          Processor->KickSubtractWorker(SlotIndex);
-		}
+			          }
 		          });
 	};
 
@@ -750,7 +749,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 	FDynamicMesh3 ResultMesh;
 	bool bSuccess = false; 
 	bool bHasDebris = false; 
-	{
+	{	
 		// Fetch chunk mesh.
 		FDynamicMesh3 WorkMesh;
 		TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CachedMesh = CachedChunkMeshes[ChunkIndex];
@@ -788,16 +787,15 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 			{
 #if !UE_BUILD_SHIPPING
-				FString EventName = FString::Printf(TEXT("SlotWorkerSubtract_Subtract_%d"), MaxSubtractWorkerPerSlot);
-				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*EventName);
+				TRACE_CPUPROFILER_EVENT_SCOPE("SlotWorkerUnion_Subtract");
 #endif
 				
-			bSuccess = ApplyMeshBooleanAsync(
-				&WorkMesh,
-				&UnionResult.PendingCombinedToolMesh,
-				&ResultMesh,
-				EGeometryScriptBooleanOperation::Subtract,
-				Options);
+				bSuccess = ApplyMeshBooleanAsync(
+				   &WorkMesh,
+				   &UnionResult.PendingCombinedToolMesh,
+				   &ResultMesh,
+				   EGeometryScriptBooleanOperation::Subtract,
+				   Options);
 			}
 
 			CurrentSubtractDurationMs = (FPlatformTime::Seconds() - CurrentSubtractDurationMs) * 1000.0;
@@ -826,7 +824,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				FGeometryScriptMeshBooleanOptions Ops;
 				Ops.bFillHoles = true;
 				Ops.bSimplifyOutput = false;
-
+			
 				FDynamicMesh3 LocalTool = *UnionResult.SharedToolMesh;				
 				// intersection
 				FDynamicMesh3 Debris;
@@ -836,13 +834,13 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					&Debris,
 					EGeometryScriptBooleanOperation::Intersection,
 					Ops);
-
+			
 				if (bSuccessIntersection && Debris.TriangleCount() > 0)
 				{
 					if (UnionResult.IslandContext.IsValid())
 					{
 						FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
-
+			
 						// Initialize attributes
 						if (UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount() == 0)
 						{
@@ -860,7 +858,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						bHasDebris = true;
 					}
 				}
-
+			
 				// subtract
 				bSuccess = ApplyMeshBooleanAsync(
 					&WorkMesh,
@@ -898,9 +896,9 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 		          	TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = LifeTimeToken->Processor.Pin();
 					  if (!Processor.IsValid())
-			          {
-				          return;
-			          }
+					  {
+						  return;
+					  }
 
 		          	URealtimeDestructibleMeshComponent* WeakOwner = Processor->OwnerComponent.Get();
 			          if (!WeakOwner)
@@ -939,10 +937,10 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          if (bSuccess)
 			          {
 #if !UE_BUILD_SHIPPING
-				          FString EventName = FString::Printf( TEXT("SlotWorkerSubtract_ApplyGT_%d"), Processor->MaxSubtractWorkerPerSlot);
-				          TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*EventName);
+				          TRACE_CPUPROFILER_EVENT_SCOPE("SlotWorkerUnion_ApplyGT");
 #endif
-			          	Processor->CachedChunkMeshes[ChunkIndex] = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(ResultMesh);
+				          Processor->CachedChunkMeshes[ChunkIndex] = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(
+					          ResultMesh);
 				          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
 			          }
 
@@ -965,7 +963,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 								          Materials.Add(ChunkMesh->GetMaterial(i));
 							          }
 						          }
-
+			          
 						          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
 					          	Context->Owner->CleanupSmallFragments();
 					          }
@@ -996,7 +994,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 	{
 		// Even on failure, re-kick if queue has work (GameThread).
 		AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime, SlotIndex, ChunkIndex = ChunkIndex]()
-		{ 
+		{
 			if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 			{
 				return;
@@ -1050,7 +1048,7 @@ void FRealtimeBooleanProcessor::CleanupSlotMapping(int32 SlotIndex)
 		{
 			ChunksToRemove.Add(Pair.Key);
 		}
-	}
+	}	
 
 	for (int32 ChunkIdx : ChunksToRemove)
 	{
@@ -1198,13 +1196,13 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 
 			if (FBulletHoleBatch* Batch = OpMap.Find(TargetMesh))
 			{
-				Batch->ChunkIndex = ChunkIndex;  
+				Batch->ChunkIndex = ChunkIndex;
 				UE_LOG(LogTemp, Display, TEXT("ToolMeshTri/lamda %d/ %d"), Batch->Num(), Batch->ToolMeshPtrs[0].Get()->TriangleCount());
 				 if (bEnableMultiWorkers)
 				 {
 				 	// Decide slot for this chunk.
 				 	int32 TargetSlot = RouteToSlot(ChunkIndex);
-
+				 	
 				 	// Enqueue into union queue.
 				  	SlotUnionQueues[TargetSlot]->Enqueue(MoveTemp(*Batch));
 				 	// Wake union worker.

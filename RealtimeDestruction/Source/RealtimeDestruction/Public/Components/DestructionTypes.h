@@ -303,11 +303,11 @@ struct FManagedDecal
     GENERATED_BODY()
 
     TWeakObjectPtr<UDecalComponent> Decal;
-    TArray<int32> CoveredCells;
+    int32 RemainingCellCount = 0;
 
     bool IsValid() const
     {
-        return Decal.IsValid() && CoveredCells.Num() > 0;
+        return Decal.IsValid() && RemainingCellCount > 0;
     }
 };
 struct FVertexKey

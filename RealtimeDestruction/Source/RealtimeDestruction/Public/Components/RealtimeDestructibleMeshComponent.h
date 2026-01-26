@@ -27,6 +27,7 @@ class FRealtimeBooleanProcessor;
 class UBulletClusterComponent;
 class UDecalMaterialDataAsset;
 
+
 //////////////////////////////////////////////////////////////////////////
 // Destruction Types
 //////////////////////////////////////////////////////////////////////////
@@ -608,8 +609,11 @@ protected:
 
 	void ProcessDecalRemoval(const FDestructionResult& Result);
 
-	UPROPERTY()
-	TArray<FManagedDecal> ActiveDecals;
+	int32 NextDecalHandle = 0;
+	
+	TMap<int32, FManagedDecal> ActiveDecals;
+
+	TMap<int32, TArray<int32>> CellToDecalMap;
  
 	/**
 	 * 현재까지 생성된 구멍 개수
