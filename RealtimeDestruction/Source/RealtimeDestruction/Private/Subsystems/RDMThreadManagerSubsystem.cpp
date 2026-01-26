@@ -116,14 +116,19 @@ void URDMThreadManagerSubsystem::LaunchWork(TFunction<void()>&& WorkFunc)
 			// 작업 실행
 			Func();
 
-			// 완료 처리 (GameThread에서)
-			AsyncTask(ENamedThreads::GameThread, [WeakThis]()
-			{
 				if (URDMThreadManagerSubsystem* Manager = WeakThis.Get())
 				{
 					Manager->OnWorkComplete();
 				}
-			});
+
+			// 완료 처리 (GameThread에서)
+			// AsyncTask(ENamedThreads::GameThread, [WeakThis]()
+			// {
+			// 	if (URDMThreadManagerSubsystem* Manager = WeakThis.Get())
+			// 	{
+			// 		Manager->OnWorkComplete();
+			// 	}
+			// });
 		});
 }
 

@@ -523,6 +523,7 @@ public:
 	 */
 	FGeometryScriptMeshBooleanOptions GetBooleanOptions() const { return BooleanOptions; }
 	FRealtimeBooleanProcessor* GetBooleanProcessor() const { return BooleanProcessor.Get(); }
+	TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> GetBooleanProcessorShared() { return BooleanProcessor; }
 
 	/** ShapeParams로 ToolMeshPtr 재생성 (네트워크 수신 시 사용) */
 	TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CreateToolMeshPtrFromShapeParams(
@@ -648,8 +649,8 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 0.0))
 	double SubtractDurationLimit = 15.0;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 0))
-	int32 InitInterval = 50;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Options", meta = (ClampMin = 0, ClampMax = 255))
+	uint8 InitInterval = 50;	
 
 	//////////////////////////////////////////////////////////////////////////
 	// Chunk Mesh Parallel Processing
@@ -1034,7 +1035,7 @@ private:
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastSyncDebrisPhysics(int32 DebrisId, FVector Location, FRotator Rotation, FVector LinearVelocity, FVector AngularVelocity);
 
-	TUniquePtr<FRealtimeBooleanProcessor> BooleanProcessor;
+	TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> BooleanProcessor;
 
 	bool InitializeFromStaticMeshInternal(UStaticMesh* InMesh, bool bForce);
 

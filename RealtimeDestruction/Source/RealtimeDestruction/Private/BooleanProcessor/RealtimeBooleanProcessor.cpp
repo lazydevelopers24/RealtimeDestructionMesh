@@ -54,18 +54,25 @@ bool FRealtimeBooleanProcessor::Initialize(URealtimeDestructibleMeshComponent* O
 	OwnerComponent = Owner;
 	OwnerComponent->SettingAsyncOption(bEnableMultiWorkers);
 
+	InitInterval = OwnerComponent->GetInitInterval();
+
 	int32 ChunkNum = OwnerComponent->GetChunkNum();
 	if (ChunkNum > 0)
 	{
 		ChunkGenerations.SetNumZeroed(ChunkNum);
 		ChunkStates.Initialize(ChunkNum);
 		ChunkHoleCount.SetNumZeroed(ChunkNum);
+		MaxInterval.Init(InitInterval, ChunkNum);
+		SetMeshAvgCost.SetNumZeroed(ChunkNum);
 
 		// Start with an initial value of 10
 		MaxUnionCount.Init(10, ChunkNum);
 
 		// Initialize chunk multi-worker state
 		ChunkUnionResultsQueues.SetNum(ChunkNum);
+
+		CachedChunkMeshes.SetNum(ChunkNum);
+		
 		for (int32 i = 0; i < ChunkNum; ++i)
 		{
 			ChunkUnionResultsQueues[i] = MakeUnique<TQueue<FUnionResult, EQueueMode::Mpsc>>();
@@ -74,19 +81,18 @@ bool FRealtimeBooleanProcessor::Initialize(URealtimeDestructibleMeshComponent* O
 			FDynamicMesh3 ChunkMesh;
 			OwnerComponent->GetChunkMesh(ChunkMesh, i);
 			ChunkStates.States[i].LastSimplifyTriCount = ChunkMesh.TriangleCount();
+
+			CachedChunkMeshes[i] = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(ChunkMesh);
 		}
 
 		ChunkNextBatchIDs.SetNumZeroed(ChunkNum); 
 	}
 
 	LifeTime = MakeShared<FProcessorLifeTime, ESPMode::ThreadSafe>();
-	LifeTime->bAlive.store(true);
-	LifeTime->Processor.store(this);
+	LifeTime->Init(Owner->GetBooleanProcessorShared());	
 
 	AngleThreshold = OwnerComponent->GetAngleThreshold();
 	SubDurationHighThreshold = OwnerComponent->GetSubtractDurationLimit();
-	InitInterval = OwnerComponent->GetInitInterval();
-	MaxInterval = InitInterval;
 
 	InitializeSlots();
 
@@ -445,9 +451,16 @@ void FRealtimeBooleanProcessor::KickUnionWorker(int32 SlotIndex)
 
 	TSharedPtr<FProcessorLifeTime, ESPMode::ThreadSafe> LifeTimeToken = LifeTime;
 	ThreadManager->RequestWork(
-		[LifeTimeToken, SlotIndex, Batch = MoveTemp(Batch), this]() mutable
+		[LifeTimeToken, SlotIndex, Batch = MoveTemp(Batch)]() mutable
 		{
-			ProcessSlotUnionWork(SlotIndex, MoveTemp(Batch));
+			if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
+			{
+				return;
+			}
+			if (auto Processor = LifeTimeToken->Processor.Pin())
+			{
+				Processor->ProcessSlotUnionWork(SlotIndex, MoveTemp(Batch));
+			}			
 		},
 		OwnerComponent.Get()
 	);
@@ -461,6 +474,7 @@ void FRealtimeBooleanProcessor::KickSubtractWorker(int32 SlotIndex)
 	{
 		return;  // Queue is empty.
 	}
+
 
 	// Reserve per-slot worker thread.
 	int32 Current = SlotSubtractWorkerCounts[SlotIndex]->fetch_add(1);
@@ -486,31 +500,44 @@ void FRealtimeBooleanProcessor::KickSubtractWorker(int32 SlotIndex)
 		SlotIndex, SlotSubtractWorkerCounts[SlotIndex]->load(), MaxSubtractWorkerPerSlot);
 
 	TSharedPtr<FProcessorLifeTime, ESPMode::ThreadSafe> LifeTimeToken = LifeTime;
+	if (OwnerComponent.IsValid() && !OwnerComponent->CheckAndSetChunkBusy(UnionResult.ChunkIndex))
+	{
 	ThreadManager->RequestWork(
-		[LifeTimeToken, SlotIndex, UnionResult = MoveTemp(UnionResult), this]() mutable
+		   [LifeTimeToken, SlotIndex, UnionResult = MoveTemp(UnionResult)]() mutable
 		{
-			ProcessSlotSubtractWork(SlotIndex, MoveTemp(UnionResult));
+		   	if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
+		   	{
+		   		return;
+		   	}
+		   	if (auto Processor = LifeTimeToken->Processor.Pin())
+		   	{
+		   		Processor->ProcessSlotSubtractWork(SlotIndex, MoveTemp(UnionResult));
+		   	}
 		},
 		OwnerComponent.Get()
 	);
+	}
+	else
+	{
+		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(UnionResult));
+	}
 }
 
 void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHoleBatch&& Batch)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE("ProcessSlotUnionWork");
-
 	// Validity check.
-	if (!LifeTime.IsValid() || !LifeTime->bAlive.load())
-	{
-		SlotUnionWorkerCounts[SlotIndex]->fetch_sub(1);
-		return;
-	}
-
-	if (!OwnerComponent.IsValid())
-	{
-		SlotUnionWorkerCounts[SlotIndex]->fetch_sub(1);
-		return;
-	}
+	// if (!LifeTime.IsValid() || !LifeTime->bAlive.load())
+	// {
+	// 	SlotUnionWorkerCounts[SlotIndex]->fetch_sub(1);
+	// 	return;
+	// }
+	//
+	// if (!OwnerComponent.IsValid())
+	// {
+	// 	SlotUnionWorkerCounts[SlotIndex]->fetch_sub(1);
+	// 	return;
+	// }
 
 	// Batch is passed as a parameter (no dequeue).
 	int32 ChunkIndex = Batch.ChunkIndex;
@@ -576,10 +603,22 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 				 &UnionResult, FMeshBoolean::EBooleanOp::Union
 			 );
 
-	 		if (MeshUnion.Compute())
+			bool bUnionSuccess = false;
 	 		{
+#if !UE_BUILD_SHIPPING
+				FString EventName = FString::Printf(TEXT("SlotWorkerUnion_Union_%d"), MaxSubtractWorkerPerSlot);
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*EventName);				
+#endif
+				bUnionSuccess = MeshUnion.Compute();
+			}
+
+			if (bUnionSuccess)
+			{
 	 			CombinedToolMesh = MoveTemp(UnionResult);
 	 			UnionCount++;
+
+				UE_LOG(LogTemp, Display, TEXT("ToolMeshTri %d"), CombinedToolMesh.TriangleCount());
+				
 	 		}
 	 		else
 	 		{
@@ -606,64 +645,91 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 	SlotUnionWorkerCounts[SlotIndex]->fetch_sub(1);
 
 	// Kick subtract (on GameThread).
-	AsyncTask(ENamedThreads::GameThread, [this, SlotIndex]()
+	AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime, SlotIndex]()
 	{
-		// If queue has work, kick again.
-		if (!SlotUnionQueues[SlotIndex]->IsEmpty())
+		if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
+	{
+			return;
+		}
+
+		if (auto Processor = LifeTimeToken->Processor.Pin())
 		{
-			KickUnionWorker(SlotIndex);
+		// If queue has work, kick again.
+			if (!Processor->SlotUnionQueues[SlotIndex]->IsEmpty())
+		{
+				Processor->KickUnionWorker(SlotIndex);
 		}
 		// Kick subtract worker too.
-		KickSubtractWorker(SlotIndex);
+			Processor->KickSubtractWorker(SlotIndex);
+		}
 	});
 }
 
 void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionResult&& UnionResult)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE("ProcessSlotSubtractWork");
-
 	auto HandleFailureAndReturn = [&]()
 	{
+		int32 ChunkIndex = UnionResult.ChunkIndex;
 		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
 
-		if (UnionResult.IslandContext.IsValid())
+		AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime,
+			          SlotIndex = SlotIndex,
+			          ChunkIndex = ChunkIndex,
+			          Context = UnionResult.IslandContext]()
 		{
-			if (UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1) == 1)
+			          if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 			{
-				AsyncTask(ENamedThreads::GameThread, [Context = UnionResult.IslandContext, WeakOwner = OwnerComponent]()
+				          return;
+			          }
+
+			          TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = LifeTimeToken->Processor.Pin();
+			          if (!Processor.IsValid())
+			          {
+				          return;
+			          }
+
+			          URealtimeDestructibleMeshComponent* Owner = Processor->OwnerComponent.Get();
+			          if (!Owner)
 				{
+				          return;
+			          }
+
+			          // Release chunk busy bit
+			          Owner->ClearChunkBusy(ChunkIndex);
+
+			          if (Context.IsValid())
+			          {
+				          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
+				          {
 					TArray<UMaterialInterface*> Materials;
-					if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(1))
+					          if (auto ChunkMesh = Owner->GetChunkMeshComponent(ChunkIndex))
 					{
 						for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
 						{
 							Materials.Add(ChunkMesh->GetMaterial(i));
 						}
 					}
-
 					Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
-				});
 			}
 		}
 
-		if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+			          if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
 		{
-			KickSubtractWorker(SlotIndex);
+				          Processor->KickSubtractWorker(SlotIndex);
 		}
+		          });
 	};
 
 	// Validity check.
-	if (!LifeTime.IsValid() || !LifeTime->bAlive.load())
-	{
-		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-		return;
-	}
-
-	if (!OwnerComponent.IsValid())
-	{
-		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-		return;
-	}
+	// if (!LifeTime.IsValid() || !LifeTime->bAlive.load())
+	// {
+	// 	return;
+	// }
+	//
+	// if (!OwnerComponent.IsValid())
+	// {
+	// 	return;
+	// }
 
 	// UnionResult passed as parameter (no dequeue).
 	int32 ChunkIndex = UnionResult.ChunkIndex;
@@ -678,43 +744,25 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		return;
 	}
 
+	const int32 ReadGeneration = ChunkGenerations[ChunkIndex].load();
+
 	// ===== 4. Subtract compute =====
 	FDynamicMesh3 ResultMesh;
-	bool bSuccess = false;
-	bool bHasDebris = false;
+	bool bSuccess = false; 
+	bool bHasDebris = false; 
 	{
-		TRACE_CPUPROFILER_EVENT_SCOPE("SlotSubtract_Compute");
-
 		// Fetch chunk mesh.
 		FDynamicMesh3 WorkMesh;
-		if (!OwnerComponent->GetChunkMesh(WorkMesh, ChunkIndex))
+		TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CachedMesh = CachedChunkMeshes[ChunkIndex];
+		if (!CachedMesh.IsValid())
 		{
-			// SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-			// if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
-			// {
-			// 	KickSubtractWorker(SlotIndex);
-			// }
-			//
-			// if (UnionResult.IslandContext.IsValid())
-			// {
-			// 	UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
-			// }
 			HandleFailureAndReturn();
 			return;
 		}
+		WorkMesh = *(CachedMesh.Get());
 
 		if (WorkMesh.TriangleCount() == 0)
 		{
-			// SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-			// if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
-			// {
-			// 	KickSubtractWorker(SlotIndex);
-			// }
-			//
-			// if (UnionResult.IslandContext.IsValid())
-			// {
-			// 	UnionResult.IslandContext->RemainingTaskCount.fetch_sub(1);
-			// }
 			HandleFailureAndReturn();
 			return;
 		}
@@ -723,32 +771,41 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		{
 			if (UnionResult.PendingCombinedToolMesh.TriangleCount() == 0)
 			{
-				SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-				if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
-				{
-					KickSubtractWorker(SlotIndex);
-				}
+				// SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+				// if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+				// {
+				// 	KickSubtractWorker(SlotIndex);
+				// }
+
+				HandleFailureAndReturn();
 				return;
 			}
 
 			// Run subtract.
 			FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
 
-			double CurrentDurationMs = FPlatformTime::Seconds();
+			double CurrentSubtractDurationMs = FPlatformTime::Seconds();
 
+			{
+#if !UE_BUILD_SHIPPING
+				FString EventName = FString::Printf(TEXT("SlotWorkerSubtract_Subtract_%d"), MaxSubtractWorkerPerSlot);
+				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*EventName);
+#endif
+				
 			bSuccess = ApplyMeshBooleanAsync(
 				&WorkMesh,
 				&UnionResult.PendingCombinedToolMesh,
 				&ResultMesh,
 				EGeometryScriptBooleanOperation::Subtract,
 				Options);
+			}
 
-			CurrentDurationMs = (FPlatformTime::Seconds() - CurrentDurationMs) * 1000.0;
+			CurrentSubtractDurationMs = (FPlatformTime::Seconds() - CurrentSubtractDurationMs) * 1000.0;
 
 			if (bSuccess)
 			{
-				AccumulateSubtractDuration(ChunkIndex, CurrentDurationMs);
-				UpdateUnionSize(ChunkIndex, CurrentDurationMs);
+				AccumulateSubtractDuration(ChunkIndex, CurrentSubtractDurationMs);     
+				UpdateUnionSize(ChunkIndex, CurrentSubtractDurationMs);
 				// Simplify.
 				bool bEnableDetailMode = bEnableHighDetailMode;
 				TrySimplify(ResultMesh, ChunkIndex, UnionResult.UnionCount, bEnableDetailMode);
@@ -812,38 +869,68 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					EGeometryScriptBooleanOperation::Subtract,
 					Ops);
 			}
-		}
+		} 
 	}
 
+	if (SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
+	{
+	 SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+	}
+	
 	// ===== 5. Apply results (GameThread) =====
 	if (bSuccess || bHasDebris)
 	{
 		AsyncTask(ENamedThreads::GameThread,
-		          [WeakOwner = OwnerComponent,
-			          LifeTimeToken = LifeTime,
+		          [LifeTimeToken = LifeTime,
 			          ChunkIndex,
 			          SlotIndex,
+			          ReadGeneration,
 			          ResultMesh = MoveTemp(ResultMesh),
 			          Context = UnionResult.IslandContext,
 			          Decals = MoveTemp(UnionResult.Decals),
-			          UnionCount = UnionResult.UnionCount,
-			          bSuccess,
-			          this]() mutable
+			          UnionCount = UnionResult.UnionCount, 
+			          bSuccess]() mutable
 		          {
-			          if (!WeakOwner.IsValid())
-			          {
-				          return;
-			          }
-
 			          if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 			          {
 				          return;
 			          }
 
-			          FRealtimeBooleanProcessor* Proc = LifeTimeToken->Processor.load();
-			          if (!Proc)
+		          	TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = LifeTimeToken->Processor.Pin();
+					  if (!Processor.IsValid())
 			          {
 				          return;
+			          }
+
+		          	URealtimeDestructibleMeshComponent* WeakOwner = Processor->OwnerComponent.Get();
+			          if (!WeakOwner)
+			          {
+				          return;
+			          }
+		          	const int32 CurrentGen = Processor->ChunkGenerations[ChunkIndex].load();
+		          	const bool bIsStale = (CurrentGen != ReadGeneration);
+
+			          if (bIsStale)
+			          {
+				          if (Context.IsValid())
+				          {
+					          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
+					          {
+						          if (Context->Owner.IsValid() && Context->AccumulatedDebrisMesh.TriangleCount() > 0)
+						          {
+							          TArray<UMaterialInterface*> Materials;
+							          if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(ChunkIndex))
+							          {
+								          for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
+								          {
+									          Materials.Add(ChunkMesh->GetMaterial(i));
+								          }
+							          }
+							          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+							          Context->Owner->CleanupSmallFragments();
+						          }
+					          }
+				          }
 			          }
 
 			          double StartTime = FPlatformTime::Seconds();
@@ -851,12 +938,17 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          // Apply mesh.
 			          if (bSuccess)
 			          {
+#if !UE_BUILD_SHIPPING
+				          FString EventName = FString::Printf( TEXT("SlotWorkerSubtract_ApplyGT_%d"), Processor->MaxSubtractWorkerPerSlot);
+				          TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*EventName);
+#endif
+			          	Processor->CachedChunkMeshes[ChunkIndex] = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(ResultMesh);
 				          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
 			          }
 
 			          double ExecutionDurationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
 
-			          Proc->UpdateSimplifyInterval(ExecutionDurationMs);
+			          Processor->UpdateSimplifyInterval(ExecutionDurationMs, ChunkIndex);
 
 			          // Spawn debris
 			          if (Context.IsValid())
@@ -878,49 +970,59 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					          	Context->Owner->CleanupSmallFragments();
 					          }
 				          }
-			          }
+			          } 
 
 			          // ===== Decrement counters (shutdown check) =====
-			          if (LifeTime.IsValid() && LifeTime->bAlive.load() && SlotSubtractWorkerCounts.IsValidIndex(
-				          SlotIndex))
-			          {
-				          SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
-			          }
+			          // if (Processor->SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
+			          // {
+				         //  Processor->SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+			          // }
 
 			          // Update counters.
-			          Proc->ChunkGenerations[ChunkIndex]++;
-			          Proc->ChunkHoleCount[ChunkIndex] += UnionCount;
+			          Processor->ChunkGenerations[ChunkIndex].fetch_add(1);
+			          Processor->ChunkHoleCount[ChunkIndex] += UnionCount;
 
-			         
-				          // If queue has work, re-kick.
-				          if (!Proc->SlotSubtractQueues[SlotIndex]->IsEmpty())
-				          {
-					          Proc->KickSubtractWorker(SlotIndex);
-				          }
-				          // Next kick.
-				          Proc->KickProcessIfNeededPerChunk();
-			          
-			          //else
-			          //{
-				      //    // Skip kick if over budget
-				      //    // retry in URealtimeDestructibleMeshComponent::TickComponent
-				      //    UE_LOG(LogTemp, Display, TEXT("Slot %d yielding"), SlotIndex);
-			          //}
+		          	WeakOwner->ClearChunkBusy(ChunkIndex);
+				    // If queue has work, re-kick.
+				    if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
+				    {
+					    Processor->KickSubtractWorker(SlotIndex);
+				    }
+				    // Next kick.
+				    // Processor->KickProcessIfNeededPerChunk();
 		          });
 	}
 	else
 	{
 		// Even on failure, re-kick if queue has work (GameThread).
-		AsyncTask(ENamedThreads::GameThread, [this, SlotIndex]()
-		{
-			if (SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
+		AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime, SlotIndex, ChunkIndex = ChunkIndex]()
+		{ 
+			if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 			{
-				SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+				return;
 			}
 
-			if (!SlotSubtractQueues[SlotIndex]->IsEmpty())
+			TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = LifeTimeToken->Processor.Pin();
+			if (!Processor.IsValid())
 			{
-				KickSubtractWorker(SlotIndex);
+				return;
+			}
+
+			URealtimeDestructibleMeshComponent* WeakOwner = Processor->OwnerComponent.Get();
+			if (!WeakOwner)
+			{
+				return;
+			}
+			WeakOwner->ClearChunkBusy(ChunkIndex);
+			
+			// if (Processor->SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
+			// {
+			// 	Processor->SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+			// }
+
+			if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
+			{
+				Processor->KickSubtractWorker(SlotIndex);
 			}
 		});
 	}
@@ -1069,7 +1171,9 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 	};
 
 	{
+#if !UE_BUILD_SHIPPING
 		TRACE_CPUPROFILER_EVENT_SCOPE("GatherOps");
+#endif
 		GatherOps(HighPriorityQueue, HighPriorityMap, HighPriorityOrder, DebugHighQueueCount);
 		GatherOps(NormalPriorityQueue, NormalPriorityMap, NormalPriorityOrder, DebugNormalQueueCount);
 	}
@@ -1095,6 +1199,7 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 			if (FBulletHoleBatch* Batch = OpMap.Find(TargetMesh))
 			{
 				Batch->ChunkIndex = ChunkIndex;  
+				UE_LOG(LogTemp, Display, TEXT("ToolMeshTri/lamda %d/ %d"), Batch->Num(), Batch->ToolMeshPtrs[0].Get()->TriangleCount());
 				 if (bEnableMultiWorkers)
 				 {
 				 	// Decide slot for this chunk.
@@ -1102,7 +1207,6 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 
 				 	// Enqueue into union queue.
 				  	SlotUnionQueues[TargetSlot]->Enqueue(MoveTemp(*Batch));
-				   
 				 	// Wake union worker.
 				 	KickUnionWorker(TargetSlot);
 				 }
@@ -1163,9 +1267,11 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 				return;
 			}
 
+#if !UE_BUILD_SHIPPING
 			TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync");
-			FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-			if (!Processor)
+#endif
+			TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = LifeTimeToken->Processor.Pin();
+			if (!Processor.IsValid())
 			{
 				SafeClearBusyBit();
 				return;
@@ -1201,7 +1307,9 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			bool bCombinedValid = false;
 			FDynamicMesh3 CombinedToolMesh;
 			{
+#if !UE_BUILD_SHIPPING
 				TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Union");
+#endif
 				for (int32 i = 0; i < BatchCount; i++)
 				{
 
@@ -1251,7 +1359,9 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 
 				FDynamicMesh3 ResultMesh;
 				{
+#if !UE_BUILD_SHIPPING
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Subtract");
+#endif
 					if (CombinedToolMesh.TriangleCount() > 0)
 					{
 						FAxisAlignedBox3d ToolBounds = CombinedToolMesh.GetBounds();
@@ -1266,12 +1376,12 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 						// 	*FVector(TargetBounds.Center()).ToString(),
 						// 	*FVector(TargetBounds.Extents()).ToString());
 					}
+
 					bSubtractSuccess = ApplyMeshBooleanAsync(&WorkMesh, &CombinedToolMesh, &ResultMesh,
 					                                         EGeometryScriptBooleanOperation::Subtract, Options);
 				}
 				// Re-check processor validity (may be destroyed during async).
-				Processor = LifeTimeToken->Processor.load();
-				if (!Processor)
+				if (!Processor.IsValid())
 				{
 					SafeClearBusyBit();
 					return;
@@ -1290,7 +1400,9 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 
 					{
 						// Mesh simplification.
+#if !UE_BUILD_SHIPPING
 						TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_Simplify");
+#endif
 						bool bEnableDetailMode = Processor->bEnableHighDetailMode;
 						bool bIsSimplified = Processor->TrySimplify(WorkMesh, ChunkIndex, UnionCount, bEnableDetailMode);
 				}
@@ -1321,29 +1433,33 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 						return;
 					}
 
-					FRealtimeBooleanProcessor* Processor = LifeTimeToken->Processor.load();
-					if (!Processor)
+					TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = LifeTimeToken->Processor.Pin();
+					if (!Processor.IsValid())
 					{
 						return;
 					}
 
-					if (OwnerComponent->GetBooleanProcessor() != Processor)
+					if (OwnerComponent->GetBooleanProcessor() != Processor.Get())
 					{
 						return;
 					}
 
+#if !UE_BUILD_SHIPPING
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_ApplyGT");
+#endif
 					
 					if (AppliedCount > 0)
 					{
 						double CurrentSetMeshAvgCost = FPlatformTime::Seconds();
 						{
+#if !UE_BUILD_SHIPPING
 							TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_SetMesh");
+#endif
 							OwnerComponent->ApplyBooleanOperationResult(MoveTemp(Result), ChunkIndex, false);
 						}
 						CurrentSetMeshAvgCost = CurrentSetMeshAvgCost - FPlatformTime::Seconds();
 
-						Processor->UpdateSimplifyInterval(CurrentSetMeshAvgCost);
+						Processor->UpdateSimplifyInterval(CurrentSetMeshAvgCost, ChunkIndex);
 
 						for (const TWeakObjectPtr<UDecalComponent>& Decal : DecalsToRemove)
 						{
@@ -1362,7 +1478,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 
 void FRealtimeBooleanProcessor::CancelAllOperations()
 {
-	SetMeshAvgCost = 0.0;
+	SetMeshAvgCost.Reset();
 
 	InitInterval = 0;
 
@@ -1379,6 +1495,20 @@ void FRealtimeBooleanProcessor::CancelAllOperations()
 	ChunkStates.Reset();
 
 	ChunkHoleCount.Init(OwnerComponent->GetChunkNum(), 0);
+
+	if (OwnerComponent.IsValid())
+	{
+		int32 ChunkNum = OwnerComponent->GetChunkNum();
+		for (int32 i = 0 ; i < ChunkNum ; i++)
+		{
+			FDynamicMesh3 ChunkMesh;
+			if (OwnerComponent->GetChunkMesh(ChunkMesh, i))
+			{
+				CachedChunkMeshes[i] = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(ChunkMesh);
+			}
+			ChunkGenerations[i].fetch_add(1);
+		}
+	}
 }
 
 void FRealtimeBooleanProcessor::AccumulateSubtractDuration(int32 ChunkIndex, double CurrentSubDuration)
@@ -1400,19 +1530,19 @@ void FRealtimeBooleanProcessor::AccumulateSubtractDuration(int32 ChunkIndex, dou
 	}
 }
 
-void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgCost)
+void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgCost, int32 ChunkIndex)
 {
-	if (FMath::IsNearlyZero(SetMeshAvgCost))
+	if (FMath::IsNearlyZero(SetMeshAvgCost[ChunkIndex]))
 	{
-		SetMeshAvgCost = CurrentSetMeshAvgCost;
+		SetMeshAvgCost[ChunkIndex] = CurrentSetMeshAvgCost;
 		return;
 	}
 
-	const double OldAvgCost = SetMeshAvgCost;
+	const double OldAvgCost = SetMeshAvgCost[ChunkIndex];
 
 	// Compute exponential moving average (EMA, like linear interpolation).
-	const double NewAvgCost = FMath::Lerp(SetMeshAvgCost, CurrentSetMeshAvgCost, 0.1);
-	SetMeshAvgCost = NewAvgCost;
+	const double NewAvgCost = FMath::Lerp(SetMeshAvgCost[ChunkIndex], CurrentSetMeshAvgCost, 0.1);
+	SetMeshAvgCost[ChunkIndex] = NewAvgCost;
 
 	// Reduction rate: (old - new) / old.
 	const double ReductionRate = (OldAvgCost - NewAvgCost) / OldAvgCost;
@@ -1433,15 +1563,15 @@ void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgC
 	 // Reduce interval when cost increases by >=10%.
 	if (-ReductionRate > PanicThreshold)
 	{
-		UE_LOG(LogTemp, Display, TEXT("Interval decrease %d to %lld"), MaxInterval, FMath::FloorToInt(MaxInterval * 0.7));
+		UE_LOG(LogTemp, Display, TEXT("Interval decrease %d to %lld"), MaxInterval[ChunkIndex], FMath::FloorToInt(MaxInterval[ChunkIndex] * 0.7));
 		// Clamp lower bound to 15.
-		MaxInterval = FMath::Max(15, FMath::FloorToInt(MaxInterval * 0.7));
+		MaxInterval[ChunkIndex] = FMath::Max(15, FMath::FloorToInt(MaxInterval[ChunkIndex] * 0.7));
 	}
 	// If cost decreased or flat, increase slowly.
 	else if (ReductionRate >= StableThreshold)
 	{
-		UE_LOG(LogTemp, Display, TEXT("Interval increase %d to %d"), MaxInterval, MaxInterval + 1);
-		MaxInterval = FMath::Min(InitInterval * 2, MaxInterval + 1);
+		UE_LOG(LogTemp, Display, TEXT("Interval increase %d to %d"), MaxInterval[ChunkIndex], MaxInterval[ChunkIndex] + 1);
+		MaxInterval[ChunkIndex] = FMath::Min(InitInterval * 2, MaxInterval[ChunkIndex] + 1);
 	}
 	// Watch and hold for 0-10% increase.
 	// Keep else branch for logging.
@@ -1479,7 +1609,7 @@ bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMes
 		bShouldSimplify = true;
 	}
 	// Simplify when interval reaches max.
-	else if (State.Interval >= MaxInterval)
+	else if (State.Interval >= MaxInterval[ChunkIndex])
 	{
 		UE_LOG(LogTemp, Display, TEXT("Simplify/Interval"));
 		bShouldSimplify = true;
@@ -1557,13 +1687,13 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 
 	// Empty mesh check to avoid AABB tree build crash.
 	if (TargetMesh->TriangleCount() == 0 || ToolMesh->TriangleCount() == 0)
-	{ 
+	{
 		return false;
 	}
 
-	using namespace UE::Geometry; 
+	using namespace UE::Geometry;
 
-		// Expand to other operations if needed.
+	// Expand to other operations if needed.
 	FMeshBoolean::EBooleanOp Op = FMeshBoolean::EBooleanOp::Difference;
 	switch (Operation)
 	{
@@ -1600,12 +1730,12 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 				FMath::FRandRange(-JitterAmount, JitterAmount));
 
 			FQuat RandomRot(FVector::UpVector, FMath::DegreesToRadians(
-				FMath::FRandRange(-JitterAngle, JitterAngle)));
+				                FMath::FRandRange(-JitterAngle, JitterAngle)));
 
 			CurrentToolTransform.AddToTranslation(RandomOffset);
 			CurrentToolTransform.SetRotation(CurrentToolTransform.GetRotation() * RandomRot);
 
-			UE_LOG(LogTemp, Log, TEXT("[Boolean] Attempt %d: Retrying with Jitter"), Attempt); 
+			UE_LOG(LogTemp, Log, TEXT("[Boolean] Attempt %d: Retrying with Jitter"), Attempt);
 		}
 
 		const int32 InternalMaterialID = 1;
@@ -1615,51 +1745,51 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 			TargetMesh, (FTransformSRT3d)TargetTransform,
 			ToolMesh, (FTransformSRT3d)CurrentToolTransform,
 			OutputMesh, Op);
-	
+
 		MeshBoolean.bPutResultInInputSpace = true;
 		MeshBoolean.bSimplifyAlongNewEdges = Options.bSimplifyOutput;
 		MeshBoolean.bWeldSharedEdges = false;
 
-		bool bSuccess = MeshBoolean.Compute(); 
-	if (bSuccess)
-	{
-		// Enable attributes/material IDs on OutputMesh.
-		if (!OutputMesh->HasAttributes())
+		bool bSuccess = MeshBoolean.Compute();
+		if (bSuccess)
 		{
-			OutputMesh->EnableAttributes();
-		}
-		if (!OutputMesh->Attributes()->HasMaterialID())
-		{
-			OutputMesh->Attributes()->EnableMaterialID();
-		}
-
-		// Enable PolyGroup layer if missing (preserve groups from boolean).
-		if (!OutputMesh->HasTriangleGroups())
-		{
-			OutputMesh->EnableTriangleGroups();
-		}
-
-		FDynamicMeshMaterialAttribute* MaterialIDAttr = OutputMesh->Attributes()->GetMaterialID();
-		 
-		// Assign using PolyGroup IDs.
-		int32 ToolGroupID = 1; // Must match the ID set on the ToolMesh.
-		for (int32 TriID : OutputMesh->TriangleIndicesItr())
-		{
-			if (OutputMesh->GetTriangleGroup(TriID) == ToolGroupID)
+			// Enable attributes/material IDs on OutputMesh.
+			if (!OutputMesh->HasAttributes())
 			{
-				MaterialIDAttr->SetValue(TriID, InternalMaterialID);
+				OutputMesh->EnableAttributes();
 			}
-		}
+			if (!OutputMesh->Attributes()->HasMaterialID())
+			{
+				OutputMesh->Attributes()->EnableMaterialID();
+			}
 
-		/*
-			 * Weld open edges.
-			*/
+			// Enable PolyGroup layer if missing (preserve groups from boolean).
+			if (!OutputMesh->HasTriangleGroups())
+			{
+				OutputMesh->EnableTriangleGroups();
+			}
+
+			FDynamicMeshMaterialAttribute* MaterialIDAttr = OutputMesh->Attributes()->GetMaterialID();
+
+			// Assign using PolyGroup IDs.
+			int32 ToolGroupID = 1; // Must match the ID set on the ToolMesh.
+			for (int32 TriID : OutputMesh->TriangleIndicesItr())
+			{
+				if (OutputMesh->GetTriangleGroup(TriID) == ToolGroupID)
+				{
+					MaterialIDAttr->SetValue(TriID, InternalMaterialID);
+				}
+			}
+
+			/*
+				 * Weld open edges.
+				*/
 			if (MeshBoolean.CreatedBoundaryEdges.Num() > 0)
 			{
 				// Select open edges.
 				TSet<int32> EdgeSet(MeshBoolean.CreatedBoundaryEdges);
-				
-		FMergeCoincidentMeshEdges Welder(OutputMesh);
+
+				FMergeCoincidentMeshEdges Welder(OutputMesh);
 				// Edges to weld.
 				Welder.EdgesToMerge = &EdgeSet;
 				/*
@@ -1674,16 +1804,16 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 				// Tolerance for matching vertices.
 				Welder.MergeVertexTolerance = 0.001;
 				// Search tolerance for merge candidates.
-		Welder.MergeSearchTolerance = 0.001;
+				Welder.MergeSearchTolerance = 0.001;
 
-		Welder.Apply();
-		}
+				Welder.Apply();
+			}
 
-		return true;
+			return true;
 		}
 		// Clear and retry on failure.
 		OutputMesh->Clear();
-	}	
+	}
 
 	UE_LOG(LogTemp, Warning, TEXT("[Boolean] All attempts failed."));
 	return false;
@@ -1698,111 +1828,111 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 
 	if (bEnableDetail)
 	{
-	if (!TargetMesh->HasAttributes())
-	{
-		TargetMesh->EnableAttributes();
-	}
-	
-	FDynamicMeshAttributeSet* Attributes = TargetMesh->Attributes();
-	const bool bHasMaterialID = Attributes && Attributes->HasMaterialID();
-	
-	const FDynamicMeshMaterialAttribute* MaterialID = bHasMaterialID ? Attributes->GetMaterialID() : nullptr;
-	const FDynamicMeshUVOverlay* PrimaryUV = (Attributes) ? Attributes->PrimaryUV() : nullptr;
-	
-	// Flag to protect seam/material boundaries on the surface (MaterialID = 0).
-	// Disabled when no material IDs exist (surface detection not possible).
-	const bool bSurfaceOnlyProtection = bHasMaterialID;
-	const int32 SurfacematerialID = 0;
-	
-	// Lambda to check whether an edge belongs to surface (MatID = 0) triangles.
-	// Assumes it is only called when bSurfaceOnlyProtection is true.
-	auto EdgeTouchesSurface = [&](int32 EdgeID) -> bool
-	{
-		const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-		if (EdgeTris.A >= 0 && MaterialID->GetValue(EdgeTris.A) == SurfacematerialID)
+		if (!TargetMesh->HasAttributes())
 		{
-			return true;
+			TargetMesh->EnableAttributes();
 		}
 	
-		if (EdgeTris.B >= 0 && MaterialID->GetValue(EdgeTris.B) == SurfacematerialID)
+		FDynamicMeshAttributeSet* Attributes = TargetMesh->Attributes();
+		const bool bHasMaterialID = Attributes && Attributes->HasMaterialID();
+	
+		const FDynamicMeshMaterialAttribute* MaterialID = bHasMaterialID ? Attributes->GetMaterialID() : nullptr;
+		const FDynamicMeshUVOverlay* PrimaryUV = (Attributes) ? Attributes->PrimaryUV() : nullptr;
+	
+		// Flag to protect seam/material boundaries on the surface (MaterialID = 0).
+		// Disabled when no material IDs exist (surface detection not possible).
+		const bool bSurfaceOnlyProtection = bHasMaterialID;
+		const int32 SurfacematerialID = 0;
+	
+		// Lambda to check whether an edge belongs to surface (MatID = 0) triangles.
+		// Assumes it is only called when bSurfaceOnlyProtection is true.
+		auto EdgeTouchesSurface = [&](int32 EdgeID) -> bool
 		{
-			return true;
-		}
-	
-		return false;
-	};
-
-	/*
-	 * Constraint setup: protect the following edges on surface (MatID = 0).
-	 * - UV Seam Edge (Primary UV Seam)
-	 * - MaterialID Boundary Edge
-	 * - Boundary edges (open edges) are protected by the global Simplifier.MeshBoundaryConstraint flag
-	 * - Interior (MatID = 1) allows seam collapse
-	 */
-	TOptional<FMeshConstraints> ExternalConstraints;
-	ExternalConstraints.Emplace();
-	FMeshConstraints& Constraints = ExternalConstraints.GetValue();
-	const FEdgeConstraint NoCollapseEdge(EEdgeRefineFlags::NoCollapse);
-	
-	// Surface protection logic runs only when MatID exists.
-	if (bSurfaceOnlyProtection)
-	{
-		// Iterate all edges and select protected ones.
-		for (int32 EdgeID : TargetMesh->EdgeIndicesItr())
-		{
-			// Skip boundary edges; protected by global flag.
-			if (TargetMesh->IsBoundaryEdge(EdgeID))
-			{
-				continue;
-			}
-	
-			// Skip non-surface edges.
-			if (!EdgeTouchesSurface(EdgeID))
-			{
-				continue;
-			}
-	
-			// Protect UV seam edges.
-			if (PrimaryUV && PrimaryUV->IsSeamEdge(EdgeID))
-			{
-				Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
-				continue;
-			}
-	
-			// Protect edges with different materials (material boundary).
 			const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-			if (EdgeTris.A >= 0 && EdgeTris.B >= 0)
+			if (EdgeTris.A >= 0 && MaterialID->GetValue(EdgeTris.A) == SurfacematerialID)
 			{
-				const int32 MatA = MaterialID->GetValue(EdgeTris.A);
-				const int32 MatB = MaterialID->GetValue(EdgeTris.B);
-				if (MatA != MatB)
+				return true;
+			}
+	
+			if (EdgeTris.B >= 0 && MaterialID->GetValue(EdgeTris.B) == SurfacematerialID)
+			{
+				return true;
+			}
+	
+			return false;
+		};
+
+		/*
+		 * Constraint setup: protect the following edges on surface (MatID = 0).
+		 * - UV Seam Edge (Primary UV Seam)
+		 * - MaterialID Boundary Edge
+		 * - Boundary edges (open edges) are protected by the global Simplifier.MeshBoundaryConstraint flag
+		 * - Interior (MatID = 1) allows seam collapse
+		 */
+		TOptional<FMeshConstraints> ExternalConstraints;
+		ExternalConstraints.Emplace();
+		FMeshConstraints& Constraints = ExternalConstraints.GetValue();
+		const FEdgeConstraint NoCollapseEdge(EEdgeRefineFlags::NoCollapse);
+	
+		// Surface protection logic runs only when MatID exists.
+		if (bSurfaceOnlyProtection)
+		{
+			// Iterate all edges and select protected ones.
+			for (int32 EdgeID : TargetMesh->EdgeIndicesItr())
+			{
+				// Skip boundary edges; protected by global flag.
+				if (TargetMesh->IsBoundaryEdge(EdgeID))
+				{
+					continue;
+				}
+	
+				// Skip non-surface edges.
+				if (!EdgeTouchesSurface(EdgeID))
+				{
+					continue;
+				}
+	
+				// Protect UV seam edges.
+				if (PrimaryUV && PrimaryUV->IsSeamEdge(EdgeID))
 				{
 					Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
+					continue;
+				}
+	
+				// Protect edges with different materials (material boundary).
+				const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
+				if (EdgeTris.A >= 0 && EdgeTris.B >= 0)
+				{
+					const int32 MatA = MaterialID->GetValue(EdgeTris.A);
+					const int32 MatB = MaterialID->GetValue(EdgeTris.B);
+					if (MatA != MatB)
+					{
+						Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
+					}
 				}
 			}
-		}
-	}	
+		}	
 	
-	FQEMSimplification Simplifier(TargetMesh);
+		FQEMSimplification Simplifier(TargetMesh);
 
-	// Protect boundary edges.
-	// Boundary edge: edge with only one adjacent triangle.
-	Simplifier.MeshBoundaryConstraint = EEdgeRefineFlags::NoCollapse;
+		// Protect boundary edges.
+		// Boundary edge: edge with only one adjacent triangle.
+		Simplifier.MeshBoundaryConstraint = EEdgeRefineFlags::NoCollapse;
 	
-	// Allow global seam collapse for interior simplification; surface seams are constrained externally.
-	Simplifier.bAllowSeamCollapse = true;
+		// Allow global seam collapse for interior simplification; surface seams are constrained externally.
+		Simplifier.bAllowSeamCollapse = true;
 	
-	/*	 
-	 * Simplify merges two vertices and must choose a new vertex position.
-	 * MinimalExistingVertexError picks an existing vertex as the merged position.
-	 * Other modes create new positions; repeated use can drift away from the surface.
-	 * This drift is called positional drift.
-	 */
-	Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::MinimalExistingVertexError;
+		/*	 
+		 * Simplify merges two vertices and must choose a new vertex position.
+		 * MinimalExistingVertexError picks an existing vertex as the merged position.
+		 * Other modes create new positions; repeated use can drift away from the surface.
+		 * This drift is called positional drift.
+		 */
+		Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::MinimalExistingVertexError;
 	
-	Simplifier.SetExternalConstraints(MoveTemp(ExternalConstraints));
+		Simplifier.SetExternalConstraints(MoveTemp(ExternalConstraints));
 	
-	Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
+		Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
 	}
 	else
 	{

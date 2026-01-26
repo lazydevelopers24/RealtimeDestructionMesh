@@ -237,11 +237,23 @@ public:
 	struct FProcessorLifeTime
 	{
 		std::atomic<bool> bAlive{ true };
-		std::atomic<FRealtimeBooleanProcessor*> Processor{ nullptr };
+		TWeakPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> Processor = nullptr;
+
+		FProcessorLifeTime() = default;
+		~FProcessorLifeTime()
+		{
+			Clear();
+		}
+
+		void Init(const TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe>& Owner)
+		{
+			Processor = Owner;
+			bAlive.store(true);
+		}
 		void Clear()
 		{
 			bAlive = false;
-			Processor = nullptr;
+			Processor.Reset();
 		}
 	};
 
@@ -310,7 +322,7 @@ private:
 	// Simplification & Adaptive Tuning
 	// ===============================================================
 	void AccumulateSubtractDuration(int32 ChunkIndex, double CurrentSubDuration);
-	void UpdateSimplifyInterval(double CurrentSetMeshAvgCost);
+	void UpdateSimplifyInterval(double CurrentSetMeshAvgCost, int32 ChunkIndex);
 	void UpdateUnionSize(int32 ChunkIndex, double DurationMs);
 	bool TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount, bool bEnableDetail);
 	/** Subtract cost tracker. */
@@ -378,6 +390,8 @@ private:
 	bool bEnableMultiWorkers;
 	std::atomic<int32> ActiveChunkCount{ 0 };
 
+	TArray<TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe>> CachedChunkMeshes;
+
 	// ===============================================================
 	// Simplification & Adaptive Tuning
 	// ===============================================================
@@ -385,13 +399,13 @@ private:
 	float AngleThreshold = 0.001;
 	bool bEnableHighDetailMode = true;
 	
-	int32 MaxInterval = 0;
-	int32 InitInterval = 0;
+	TArray<uint16> MaxInterval = {};
+	uint8 InitInterval = 0;
 
 	double SubDurationHighThreshold = 0.0;
 	double SubDurationLowThreshold = 5.0;
 
-	double SetMeshAvgCost = 0.0;
+	TArray<double> SetMeshAvgCost = {};
 
 	double FrameBudgetMs = 16.0f;
 	double SubtractAvgCostMs = 2.0f;
@@ -404,8 +418,8 @@ private:
 	// Slot count (worker management slots).
 	int32 NumSlots = 1;
 	
-	int32 MaxUnionWorkerPerSlot = 2;
-	int32 MaxSubtractWorkerPerSlot = 1;
+	int32 MaxUnionWorkerPerSlot = 1;
+	int32 MaxSubtractWorkerPerSlot = 3;
 
 	// Debug/statistics only.
 	TArray<TUniquePtr<std::atomic<int32>>>SlotUnionWorkerCounts; 
@@ -424,7 +438,6 @@ private:
 	// Per-slot worker active flags.
 	TArray<TUniquePtr<std::atomic<bool>>> SlotUnionActiveFlags;
 	TArray<TUniquePtr<std::atomic<bool>>> SlotSubtractActiveFlags;
-	 
 };
 
 
