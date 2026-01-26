@@ -23,6 +23,8 @@
 #include "DynamicMesh/Operations/MergeCoincidentMeshEdges.h"
 #include "HAL/CriticalSection.h"
 #include "Subsystems/RDMThreadManagerSubsystem.h"
+#include "Remesher.h"
+#include "MeshConstraintsUtil.h"
 
 TRACE_DECLARE_INT_COUNTER(Counter_ThreadCount, TEXT("RealtimeDestruction/ThreadCount"));
 TRACE_DECLARE_INT_COUNTER(Counter_UnionThreadCount, TEXT("RealtimeDestruction/UnionThreadCount"));
@@ -824,23 +826,20 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				FGeometryScriptMeshBooleanOptions Ops;
 				Ops.bFillHoles = true;
 				Ops.bSimplifyOutput = false;
-			
-				FDynamicMesh3 LocalTool = *UnionResult.SharedToolMesh;				
-				// intersection
-				FDynamicMesh3 Debris;
-				bool bSuccessIntersection = ApplyMeshBooleanAsync(
-					&WorkMesh,
-					&LocalTool,
-					&Debris,
-					EGeometryScriptBooleanOperation::Intersection,
-					Ops);
-			
-				if (bSuccessIntersection && Debris.TriangleCount() > 0)
+				// Intersection (Debris): 원본 크기 DebrisToolMesh 사용
+				if (UnionResult.DebrisSharedToolMesh.IsValid() && UnionResult.IslandContext.IsValid())
 				{
-					if (UnionResult.IslandContext.IsValid())
+					FDynamicMesh3 DebrisTool = *UnionResult.DebrisSharedToolMesh;
+					FDynamicMesh3 Debris;
+					bool bSuccessIntersection = ApplyMeshBooleanAsync(
+						&WorkMesh,
+						&DebrisTool,
+						&Debris,
+						EGeometryScriptBooleanOperation::Intersection,
+						Ops);
+					if (bSuccessIntersection && Debris.TriangleCount() > 0)
 					{
 						FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
-			
 						// Initialize attributes
 						if (UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount() == 0)
 						{
@@ -851,7 +850,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 								UnionResult.IslandContext->AccumulatedDebrisMesh.EnableTriangleGroups();
 							}
 						}
-						
+
 						FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
 						FMeshIndexMappings Mappings;
 						Editor.AppendMesh(&Debris, Mappings);
@@ -859,7 +858,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					}
 				}
 			
-				// subtract
+				// Subtract (구멍): 스케일된 SharedToolMesh 사용
+				FDynamicMesh3 LocalTool = *UnionResult.SharedToolMesh;
 				bSuccess = ApplyMeshBooleanAsync(
 					&WorkMesh,
 					&LocalTool,
@@ -925,7 +925,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 								          }
 							          }
 							          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
-							          Context->Owner->CleanupSmallFragments();
+							          ///Context->Owner->CleanupSmallFragments();
 						          }
 					          }
 				          }
@@ -941,7 +941,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 #endif
 				          Processor->CachedChunkMeshes[ChunkIndex] = MakeShared<FDynamicMesh3, ESPMode::ThreadSafe>(
 					          ResultMesh);
-				          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, false);
+				          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, true);
 			          }
 
 			          double ExecutionDurationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
@@ -965,7 +965,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						          }
 			          
 						          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
-					          	Context->Owner->CleanupSmallFragments();
+					          	//Context->Owner->CleanupSmallFragments();
 					          }
 				          }
 			          } 
@@ -987,7 +987,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					    Processor->KickSubtractWorker(SlotIndex);
 				    }
 				    // Next kick.
-				    // Processor->KickProcessIfNeededPerChunk();
+					Processor->KickProcessIfNeededPerChunk();
 		          });
 	}
 	else
@@ -1513,7 +1513,7 @@ void FRealtimeBooleanProcessor::AccumulateSubtractDuration(int32 ChunkIndex, dou
 {
 	FChunkState& State = ChunkStates.GetState(ChunkIndex);
 	// Accumulate time if above threshold.
-	if (CurrentSubDuration >= SubDurationHighThreshold)
+	if (CurrentSubDuration >= SubDurationHighThreshold) 
 	{
 		State.SubtractDurationAccum += CurrentSubDuration;
 		State.DurationAccumCount++;
@@ -1945,4 +1945,42 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 	{
 		TargetMesh->CompactInPlace();
 	}
+}
+
+void FRealtimeBooleanProcessor::ApplyUniformRemesh(FDynamicMesh3* TargetMesh, double TargetEdgeLength, int32 NumPasses)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_ApplyUniformRemesh)
+
+	if (!TargetMesh || TargetMesh->TriangleCount() == 0)
+	{
+		return;
+	}
+
+	FRemesher Remesher(TargetMesh);
+	Remesher.SetTargetEdgeLength(TargetEdgeLength);
+
+	// Constrain boundary edges to preserve mesh silhouette.
+	TOptional<FMeshConstraints> ExternalConstraints;
+	ExternalConstraints.Emplace();
+
+	FMeshConstraintsUtil::ConstrainAllBoundariesAndSeams(
+		ExternalConstraints.GetValue(),
+		*TargetMesh,
+		EEdgeRefineFlags::FullyConstrained,   // MeshBoundaryConstraint
+		EEdgeRefineFlags::NoConstraint,        // GroupBoundaryConstraint
+		EEdgeRefineFlags::NoConstraint,        // MaterialBoundaryConstraint
+		true,   // bAllowSeamSplits
+		true,   // bAllowSeamSmoothing
+		false,  // bAllowSeamCollapse
+		true    // bParallel
+	);
+
+	Remesher.SetExternalConstraints(MoveTemp(ExternalConstraints));
+
+	for (int32 i = 0; i < NumPasses; ++i)
+	{
+		Remesher.BasicRemeshPass();
+	}
+
+	TargetMesh->CompactInPlace();
 }

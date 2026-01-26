@@ -1002,6 +1002,14 @@ struct REALTIMEDESTRUCTION_API FSuperCellState
 	UPROPERTY()
 	TArray<int32> OrphanCellIds;
 
+	// initial valid number of cells in each Supercell (excluding intact=false cells)
+	UPROPERTY()
+	TArray<int32> InitialValidCellCounts;
+
+	// Current number of destroyed cells in each Supercell 
+	UPROPERTY()
+	TArray<int32> DestroyedCellCounts;
+
 	//=========================================================================
 	// SuperCell coord <-> ID conversion
 	//=========================================================================

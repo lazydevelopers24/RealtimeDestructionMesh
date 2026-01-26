@@ -158,7 +158,7 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 		int32 ChunkNum = DestructComp->GetChunkNum();
 		if (ChunkNum == 0)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("%s : No chunk. Make chunk"), *DestructComp->GetName());
+			//UE_LOG(LogTemp, Warning, TEXT("%s : No chunk. Make chunk"), *DestructComp->GetName());
 			if (bDestroyOnHit)
 			{
 				GetOwner()->Destroy();
@@ -166,7 +166,7 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequestForCell %d"), ChunkNum);
+			//UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequestForCell %d"), ChunkNum);
 			ProcessDestructionRequestForChunk(DestructComp, Hit);
 		}
 	}

@@ -309,6 +309,15 @@ public:
 		FGeometryScriptPlanarSimplifyOptions Options,
 		bool bEnableDetail);
 
+	/**
+	 * Applies uniform remeshing to reduce accumulated vertex count.
+	 * Boundary edges are fully constrained to preserve mesh silhouette.
+	 * @param TargetMesh The mesh to remesh in-place.
+	 * @param TargetEdgeLength Desired edge length after remeshing.
+	 * @param NumPasses Number of remesh iterations (more passes = better convergence).
+	 */
+	static void ApplyUniformRemesh(UE::Geometry::FDynamicMesh3* TargetMesh, double TargetEdgeLength, int32 NumPasses = 5);
+
 private:	
 	// ===============================================================
 	// Processing Pipeline

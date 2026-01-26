@@ -359,6 +359,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|Replication")
 	void ApplyOpsDeterministic(const TArray<FRealtimeDestructionOp>& Ops);
 
+
 	/**
 	 * 서버 배칭: 요청을 대기열에 추가
 	 * 서버에서만 호출됨
@@ -610,7 +611,7 @@ protected:
 	void ProcessDecalRemoval(const FDestructionResult& Result);
 
 	int32 NextDecalHandle = 0;
-	
+
 	TMap<int32, FManagedDecal> ActiveDecals;
 
 	TMap<int32, TArray<int32>> CellToDecalMap;
@@ -815,6 +816,15 @@ public:
 	void UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request);
 	FDestructionResult DestructionLogic(const FRealtimeDestructionRequest& Request);
 	void DisconnectedCellStateLogic(const TArray< FDestructionResult>& AllResults, bool bForceRun = false);
+
+	/**
+	 * 임의적으로 파괴를 할 때 사용하는 함수 ( Supercell에서 총알 수 카운트 한 것을 기반으로 호출 중 ) 
+	 */
+	void ForceRemoveSupercell(int32 SuperCellId);
+	
+	UFUNCTION(NetMulticast, Reliable)  
+	void MulticastForceRemoveSupercell(int32 SuperCellId);
+
 	/**
 	 * GridCellId를 ChunkId로 변환
 	 * @param GridCellId - 격자 셀 ID
@@ -830,7 +840,14 @@ public:
 	 */
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellSize, double InBoxExpand = 1.0f );
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity")
+	bool bOnSmooth = false;;
 
+
+	/** Supercell 이 임계치 비율이상 파괴 됐을 때*/
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float DestroyRatioThresholdForDebris = 0.5f;
 
 	//TODO: 적절한 값들을 찾고 없앨 예정
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "1", ClampMax = "8"))
@@ -841,12 +858,15 @@ public:
 	int32 MinCellsForDebris = 1;
 	//TODO: 적절한 값들을 찾고 없앨 예정
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
-	float DebrisExpandOffset = 2;
+	float DebrisExpandOffset = 1.2f;
+	//TODO: 적절한 값들을 찾고 없앨 예정
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
+	float DebrisSpawnOffset = 0.7f;
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
 
 	/** 작은 파편(고립된 Connected Component) 정리 */
-	void CleanupSmallFragments();
+	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells); 
 
 	/**
 	 * 분리된 셀들을 파편 액터로 스폰
@@ -885,7 +905,7 @@ public:
 	/** HC Laplacian 보정 강도 (0~1, 수축 방지) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HCBeta = 0.5f;
-
+	
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
 

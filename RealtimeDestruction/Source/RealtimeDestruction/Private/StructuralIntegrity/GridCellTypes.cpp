@@ -853,11 +853,19 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 
 	// A SuperCell requires a full SupercellSize fill along each axis
 	// Example: GridSize.X = 5, SupercellSize.X = 4 -> SupercellCount.X = 1 (1 leftover is orphan)
+	// even if we don't fill all the supercells, we will still make them supercells, but intact will be false.
 	SupercellCount = FIntVector(
-		GridCache.GridSize.X / SupercellSize.X,
-		GridCache.GridSize.Y / SupercellSize.Y,
-		GridCache.GridSize.Z / SupercellSize.Z
+		(GridCache.GridSize.X  + SupercellSize.X - 1) / SupercellSize.X,
+		(GridCache.GridSize.Y  + SupercellSize.Y - 1) / SupercellSize.Y,
+		(GridCache.GridSize.Z  + SupercellSize.Z - 1) / SupercellSize.Z
 	);
+	
+	//SupercellCount = FIntVector(
+	//	(GridCache.GridSize.X) / SupercellSize.X,
+	//	(GridCache.GridSize.Y) / SupercellSize.Y,
+	//	(GridCache.GridSize.Z) / SupercellSize.Z
+	//);
+
 
 	// Initialize Cell -> SuperCell mapping
 	const int32 TotalCells = GridCache.GetTotalCellCount();
@@ -873,7 +881,10 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 	// Initialize intact bitfield (all SuperCells intact)
 	InitializeIntactBits();
 
-	const int32 RequiredCellCount = SupercellSize.X * SupercellSize.Y * SupercellSize.Z;
+	InitialValidCellCounts.SetNumZeroed(SupercellCount.X * SupercellCount.Y * SupercellCount.Z);
+	DestroyedCellCounts.SetNumZeroed(SupercellCount.X * SupercellCount.Y * SupercellCount.Z);
+
+	const int32 RequiredCellCount = SupercellSize.X * SupercellSize.Y * SupercellSize.Z; 
 	// Map cells that belong to SuperCells
 	for (int32 SCZ = 0; SCZ < SupercellCount.Z; ++SCZ)
 	{
@@ -895,8 +906,18 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 					for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
 					{
 						for (int32 LX = 0; LX < SupercellSize.X; ++LX)
-						{
-							const int32 CellId = GridCache.CoordToId(StartX + LX, StartY + LY, StartZ + LZ);
+						{ 
+							const int32 GX = StartX + LX;
+							const int32 GY = StartY + LY;
+							const int32 GZ = StartZ + LZ;
+
+							// 범위 체크 추가
+							if (GX >= GridCache.GridSize.X || GY >= GridCache.GridSize.Y || GZ >= GridCache.GridSize.Z)
+							{
+								continue;
+							}
+
+							const int32 CellId = GridCache.CoordToId(GX, GY, GZ);
 							if (GridCache.GetCellExists(CellId))
 							{
 								ValidCount++;
@@ -916,13 +937,38 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 							{
 								const int32 CellId = GridCache.CoordToId(StartX + LX, StartY + LY, StartZ + LZ);
 								CellToSupercell[CellId] = SupercellId;
+								InitialValidCellCounts[SupercellId]++;
+							}
+						}
+					}
+				}
+				else
+				{
+					// Partially filled SuperCell: Map only valid cells and handle broken ones.
+					for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
+					{
+						for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
+						{
+							for (int32 LX = 0; LX < SupercellSize.X; ++LX)
+							{
+								const int32 GX = StartX + LX;
+								const int32 GY = StartY + LY;
+								const int32 GZ = StartZ + LZ;
+								// Grid range check (may exceed due to ceiling division)
+								if (GX >= GridCache.GridSize.X || GY >= GridCache.GridSize.Y || GZ >= GridCache.GridSize.Z)
+								{
+									continue;
+								}
+								const int32 CellId = GridCache.CoordToId(GX, GY, GZ);
+								if (GridCache.GetCellExists(CellId))
+								{
+									CellToSupercell[CellId] = SupercellId;
+									InitialValidCellCounts[SupercellId]++;
+								}
 							}
 						}
 					}
 
-				}
-				else
-				{ 
 					MarkSupercellBroken(SupercellId);
 				}
 			}
@@ -937,8 +983,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 		{
 			OrphanCellIds.Add(CellId);
 		}
-	}
-
+	} 
 
 	UE_LOG(LogTemp, Log, TEXT("FSuperCellState::BuildFromGridLayout - GridSize: (%d, %d, %d), SupercellSize: (%d, %d, %d), SupercellCount: (%d, %d, %d), TotalSupercells: %d, OrphanCells: %d"),
 		GridCache.GridSize.X, GridCache.GridSize.Y, GridCache.GridSize.Z,
