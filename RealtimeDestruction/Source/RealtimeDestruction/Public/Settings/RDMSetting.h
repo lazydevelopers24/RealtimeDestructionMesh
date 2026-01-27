@@ -17,7 +17,7 @@ class UDecalMaterialDataAsset;
 UENUM(BlueprintType)
 enum class ERDMThreadMode : uint8
 {
-	Absolute	UMETA(DisplayName = "Absoluite"),
+	Absolute	UMETA(DisplayName = "Absolute"),
 	Percentage	UMETA(DisplayName = "Percentage (%)")
 };
 

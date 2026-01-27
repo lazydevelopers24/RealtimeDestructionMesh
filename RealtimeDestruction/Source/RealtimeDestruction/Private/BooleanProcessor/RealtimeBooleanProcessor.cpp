@@ -272,7 +272,7 @@ void FRealtimeBooleanProcessor::EnqueueIslandRemoval(
 	WorkItem.PendingCombinedToolMesh = {};
 	WorkItem.UnionCount = 0;
 
-	int32 SlotIndex = RouteToSlot(ChunkIndex);
+	int32 SlotIndex = FindLeastBusySlot();
 	if (SlotSubtractQueues.IsValidIndex(SlotIndex))
 	{
 		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(WorkItem));
@@ -342,9 +342,6 @@ void FRealtimeBooleanProcessor::InitializeSlots()
 		SlotUnionWorkerCounts[i] = MakeUnique<std::atomic<int32>>(0);
 		SlotSubtractWorkerCounts[i] = MakeUnique<std::atomic<int32>>(0);
 	}
-
-	ChunkToSlotMap.Empty(); 
-	 
 }
 
 void FRealtimeBooleanProcessor::ShutdownSlots()
@@ -379,24 +376,6 @@ void FRealtimeBooleanProcessor::ShutdownSlots()
 	SlotUnionWorkerCounts.Empty();   
 
 	SlotSubtractWorkerCounts.Empty();
-	  
-	ChunkToSlotMap.Empty(); 
-}
-
-int32 FRealtimeBooleanProcessor::RouteToSlot(int32 ChunkIndex)
-{
-	//FScopeLock Lock(&MapLock); 
-	// Check for an existing slot mapping.
-	if (int32* ExistingSlot = ChunkToSlotMap.Find(ChunkIndex))
-	{
-		return *ExistingSlot;
-	}
-
-	// Or choose the least busy slot.
-	int32 TargetSlot = FindLeastBusySlot();
-	ChunkToSlotMap.Add(ChunkIndex, TargetSlot);
-
-	return TargetSlot;
 }
 
 int32 FRealtimeBooleanProcessor::FindLeastBusySlot() const
@@ -808,7 +787,12 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				UpdateUnionSize(ChunkIndex, CurrentSubtractDurationMs);
 				// Simplify.
 				bool bEnableDetailMode = bEnableHighDetailMode;
+				{
+#if !UE_BUILD_SHIPPING
+					TRACE_CPUPROFILER_EVENT_SCOPE("SlotWorkerUnion_Simplify");
+#endif
 				TrySimplify(ResultMesh, ChunkIndex, UnionResult.UnionCount, bEnableDetailMode);
+			}
 			}
 			else
 			{
@@ -830,15 +814,15 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				if (UnionResult.DebrisSharedToolMesh.IsValid() && UnionResult.IslandContext.IsValid())
 				{
 					FDynamicMesh3 DebrisTool = *UnionResult.DebrisSharedToolMesh;
-					FDynamicMesh3 Debris;
-					bool bSuccessIntersection = ApplyMeshBooleanAsync(
-						&WorkMesh,
+				FDynamicMesh3 Debris;
+				bool bSuccessIntersection = ApplyMeshBooleanAsync(
+					&WorkMesh,
 						&DebrisTool,
-						&Debris,
-						EGeometryScriptBooleanOperation::Intersection,
-						Ops);
-					if (bSuccessIntersection && Debris.TriangleCount() > 0)
-					{
+					&Debris,
+					EGeometryScriptBooleanOperation::Intersection,
+					Ops);
+				if (bSuccessIntersection && Debris.TriangleCount() > 0)
+				{
 						FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
 						// Initialize attributes
 						if (UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount() == 0)
@@ -850,7 +834,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 								UnionResult.IslandContext->AccumulatedDebrisMesh.EnableTriangleGroups();
 							}
 						}
-
+						
 						FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
 						FMeshIndexMappings Mappings;
 						Editor.AppendMesh(&Debris, Mappings);
@@ -1036,24 +1020,6 @@ void FRealtimeBooleanProcessor::CleanupSlotMapping(int32 SlotIndex)
 	{
 		return;  // Work still remaining.
 	}
-
-	FScopeLock Lock(&MapLock);
-
-	// Remove all chunks mapped to this slot.
-	TArray<int32> ChunksToRemove;
-
-	for (const auto& Pair : ChunkToSlotMap)
-	{
-		if (Pair.Value == SlotIndex)
-		{
-			ChunksToRemove.Add(Pair.Key);
-		}
-	}	
-
-	for (int32 ChunkIdx : ChunksToRemove)
-	{
-		ChunkToSlotMap.Remove(ChunkIdx);
-	}
 }
 
 void FRealtimeBooleanProcessor::UpdateUnionSize(int32 ChunkIndex, double DurationMs)
@@ -1201,7 +1167,7 @@ void FRealtimeBooleanProcessor::KickProcessIfNeededPerChunk()
 				 if (bEnableMultiWorkers)
 				 {
 				 	// Decide slot for this chunk.
-				 	int32 TargetSlot = RouteToSlot(ChunkIndex);
+				 	int32 TargetSlot = FindLeastBusySlot();
 				 	
 				 	// Enqueue into union queue.
 				  	SlotUnionQueues[TargetSlot]->Enqueue(MoveTemp(*Batch));
@@ -1513,7 +1479,7 @@ void FRealtimeBooleanProcessor::AccumulateSubtractDuration(int32 ChunkIndex, dou
 {
 	FChunkState& State = ChunkStates.GetState(ChunkIndex);
 	// Accumulate time if above threshold.
-	if (CurrentSubDuration >= SubDurationHighThreshold) 
+	if (CurrentSubDuration >= SubDurationHighThreshold)
 	{
 		State.SubtractDurationAccum += CurrentSubDuration;
 		State.DurationAccumCount++;
@@ -1946,7 +1912,6 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 		TargetMesh->CompactInPlace();
 	}
 }
-
 void FRealtimeBooleanProcessor::ApplyUniformRemesh(FDynamicMesh3* TargetMesh, double TargetEdgeLength, int32 NumPasses)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_ApplyUniformRemesh)

@@ -346,9 +346,6 @@ private:
 	void InitializeSlots();
 	void ShutdownSlots();
 
-	// Route work to an appropriate slot.
-	int32 RouteToSlot(int32 ChunkIndex);
-	
 	// Find the least busy slot.
 	int32 FindLeastBusySlot() const;
 
@@ -440,13 +437,11 @@ private:
 	// Per-slot subtract queues.
 	TArray<TUniquePtr<TQueue<FUnionResult, EQueueMode::Mpsc>>> SlotSubtractQueues;
 	
-	// Chunk-to-slot mapping (which slot is processing which chunk).
-	TMap<int32, int32> ChunkToSlotMap;
 	FCriticalSection MapLock; 
 	
 	// Per-slot worker active flags.
 	TArray<TUniquePtr<std::atomic<bool>>> SlotUnionActiveFlags;
-	TArray<TUniquePtr<std::atomic<bool>>> SlotSubtractActiveFlags;
+	TArray<TUniquePtr<std::atomic<bool>>> SlotSubtractActiveFlags;	
 };
 
 
