@@ -11,7 +11,13 @@
 
 #include "CoreMinimal.h"
 #include "Engine/NetSerialization.h"
+#include "GeometryCollection/GeometryCollectionParticlesData.h"
 #include "GridCellTypes.generated.h"
+
+struct DEBUGStruct
+{
+	static bool BFSTest();
+};
 
 // Forward declaration
 struct FRealtimeDestructionRequest;
@@ -1204,4 +1210,191 @@ struct REALTIMEDESTRUCTION_API FSuperCellState
 		int32 Direction,
 		const FGridCellLayout& GridLayout,
 		TArray<int32>& OutCellIds) const;
+};
+
+struct FConnectivityContext
+{
+	TArray<uint32> ConnectedCellBits = {};
+	TArray<uint32> VisitedSuperCellBits = {};
+
+	TArray<int32> ConnectedCellIds = {};
+
+	TArray<FBFSNode> WorkStack = {};
+
+	FConnectivityContext() = default;
+	~FConnectivityContext()
+	{
+		ConnectedCellBits.Empty();
+		VisitedSuperCellBits.Empty();
+		WorkStack.Empty();
+	}
+
+	void Reset(int32 MaxCells, int32 MaxSuperCells)
+	{
+		// Cell Count
+		const int32 RequiredCellWords = (MaxCells + 31) >> 5;	// divide by 32(2^5)
+
+		// Mem re-alloc
+		if (ConnectedCellBits.Num() < RequiredCellWords)
+		{
+			ConnectedCellBits.SetNumUninitialized(RequiredCellWords);
+		}
+
+		// Initialize elements to 0
+		FMemory::Memzero(ConnectedCellBits.GetData(), sizeof(uint32) * ConnectedCellBits.Num());
+
+		// Super Cell Count
+		const int32 RequiredSuperCellWords = (MaxSuperCells + 31) >> 5;	// divide by 32(2^5)
+
+		// Mem re-alloc
+		if (VisitedSuperCellBits.Num() < RequiredSuperCellWords)
+		{
+			VisitedSuperCellBits.SetNumUninitialized(RequiredSuperCellWords);
+		}
+
+		// Initialize elements to 0
+		FMemory::Memzero(VisitedSuperCellBits.GetData(), sizeof(uint32) * VisitedSuperCellBits.Num());
+
+		// Reset Stack, Not release mem
+		WorkStack.Reset();
+
+		// Memory management policy for the connected cell collection array
+		// If capacity exceeds 8KB and utilization is under 25%, reallocate to 2x current usage
+		int32 CurrentUsage = ConnectedCellIds.Num();			// Current usage
+		int32 CurrentArrayCapacity = ConnectedCellIds.Max();	// Current capacity 
+		if (CurrentArrayCapacity > 2048 && CurrentUsage < (CurrentArrayCapacity / 4))
+		{
+			int32 NewCapacity = CurrentUsage * 2;
+			ConnectedCellIds.Empty(NewCapacity);
+		}
+		else
+		{
+			ConnectedCellIds.Reset();
+		}
+	}
+
+	FORCEINLINE bool IsCellConnected(int32 CellId)
+	{
+		if (CellId < 0)
+		{
+			return false;
+		}
+
+		const int32 WordIndex = CellId >> 5;	// Divide by 32
+		const uint32 BitMask = 1u << (CellId & 31); // Modulo by 32
+
+		return (ConnectedCellBits[WordIndex] & BitMask) != 0;
+	}
+
+	FORCEINLINE void SetCellConnected(int32 CellId)
+	{
+		if (CellId < 0)
+		{
+			return;
+		}
+
+		const int32 WordIndex = CellId >> 5;	// Divide by 32
+		const uint32 BitMask = 1u << (CellId & 31); // Modulo by 32
+
+		if (ConnectedCellBits[WordIndex] & BitMask)
+		{
+			return;
+		}
+
+		ConnectedCellIds.Add(CellId);
+		
+		// Check visit
+		ConnectedCellBits[WordIndex] |= BitMask;
+	}
+
+	FORCEINLINE bool IsSuperCellVisited(int32 SuperCellId)
+	{
+		if (SuperCellId < 0)
+		{
+			return false;
+		}
+
+		const int32 WordIndex = SuperCellId >> 5;	// Divide by 32
+		const uint32 BitMask = 1u << (SuperCellId & 31); // Modulo by 32
+
+		return (VisitedSuperCellBits[WordIndex] & BitMask) != 0;
+	}
+
+	FORCEINLINE void SetSuperCellVisited(int32 SuperCellId)
+	{
+		if (SuperCellId < 0)
+		{
+			return;
+		}
+
+		const int32 WordIndex = SuperCellId >> 5;	// Divide by 32
+		const uint32 BitMask = 1u << (SuperCellId & 31); // Modulo by 32
+
+		// Check visit
+		VisitedSuperCellBits[WordIndex] |= BitMask;
+	}
+
+	FORCEINLINE bool CheckAndSetCell(int32 CellId)
+	{
+		if (CellId < 0)
+		{
+			return true;
+		}
+		
+		const int32 WordIndex = CellId >> 5;	// Divide by 32
+		const uint32 BitMask = 1u << (CellId & 31); // Modulo by 32
+
+		// Visited Cell
+		if (ConnectedCellBits[WordIndex] & BitMask)
+		{
+			return true;
+		}
+
+		// Check visit
+		ConnectedCellBits[WordIndex] |= BitMask;
+		
+		return false;
+	}
+
+	FORCEINLINE bool CheckAndSetSuperCell(int32 SuperCellId)
+	{
+		if (SuperCellId < 0)
+		{
+			return true;
+		}
+		
+		const int32 WordIndex = SuperCellId >> 5;	// Divide by 32
+		const uint32 BitMask = 1u << (SuperCellId & 31); // Modulo by 32
+
+		// Visited Cell
+		if (VisitedSuperCellBits[WordIndex] & BitMask)
+		{
+			return true;
+		}
+
+		// Check visit
+		VisitedSuperCellBits[WordIndex] |= BitMask;
+		return false;
+	}
+
+	void CollectConnectedCells(TSet<int32>& OutConnectedCells)
+	{
+		const int32 NumWord = ConnectedCellBits.Num();
+		for (int32 i = 0 ; i < NumWord; i++)
+		{
+			uint32 Word = ConnectedCellBits[i];
+			if (Word == 0)
+			{
+				continue;
+			}
+
+			for (int32 Bit = 0 ; Bit < 32; Bit++)
+			{
+				if (Word & (1u << Bit))
+				{
+					OutConnectedCells.Add((i << 5) | Bit);
+				}
+			}
+		}
+	}
 };

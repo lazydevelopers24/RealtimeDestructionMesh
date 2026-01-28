@@ -102,7 +102,8 @@ public:
 		FSuperCellState& SupercellState,
 		const FCellState& CellState,
 		bool bEnableSupercell,
-		bool bEnableSubcell);
+		bool bEnableSubcell,
+		FConnectivityContext& Context);
 
 	/**
 	 * <<<Cell Level API>>>
@@ -167,6 +168,14 @@ public:
 		const FGridCellLayout& Cache,
 		FSuperCellState& SupercellState,
 		const FCellState& CellState,
+		bool bEnableSubcell,
+		FConnectivityContext& Context);
+
+	static void FindConnectedCellsHierarchical_Optimized(
+		const FGridCellLayout& Cache,
+		FSuperCellState& SupercellState,
+		const FCellState& CellState,
+		FConnectivityContext& Context,
 		bool bEnableSubcell);
 
 	//=========================================================================

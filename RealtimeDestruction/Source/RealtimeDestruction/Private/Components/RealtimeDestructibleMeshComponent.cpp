@@ -458,7 +458,7 @@ FDestructionResult URealtimeDestructibleMeshComponent::DestructionLogic(const FR
 			for (int32 CellId : DestructionResult.NewlyDestroyedCells)
 			{
 				int32 SuperCellId = SupercellState.GetSupercellForCell(CellId);
-				if (SuperCellId != INDEX_NONE)
+				if (SuperCellId != INDEX_NONE && SupercellState.DestroyedCellCounts.IsValidIndex(SuperCellId))
 				{
 					SupercellState.DestroyedCellCounts[SuperCellId]++;
 					AffectedSupercells.Add(SuperCellId);
@@ -621,7 +621,8 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 			SupercellState,
 			CellState,
 			bEnableSupercell && SupercellState.IsValid(),
-			bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
+			bEnableSubcell && (NetMode == NM_Standalone),
+			CellContext); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
 	}
 	// Standalon용 BFS 성능 LOG
 	//double BFSEndTime = FPlatformTime::Seconds();
@@ -1618,7 +1619,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		TSharedPtr<FDynamicMesh3> SharedToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(ToolMesh));
 		TSharedPtr<FDynamicMesh3> SharedDebrisToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(DebrisToolMesh));
 
-		FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds(); 
+		FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
 		TArray<int32> OverlappingChunks;
 
 		for (int32 i = 0; i < GetChunkNum(); i++)
@@ -2607,7 +2608,7 @@ void URealtimeDestructibleMeshComponent::RegisterLocalDebris(int32 InDebrisId, U
 	}
 
 	// 이미 대기 중인 Actor가 있는 지 확인
-	if (ADebrisActor** FoundActor = PendingDebrisActors.Find(InDebrisId))
+	if (TObjectPtr<ADebrisActor>* FoundActor = PendingDebrisActors.Find(InDebrisId))
 	{
 		// Actor가 먼저 도착해서 대기 중이였으면, 바로 매칭
 		UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] Found pending actor for DebrisId=%d, applying mesh now"), InDebrisId);
@@ -3280,7 +3281,8 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 		SupercellState,
 		CellState,
 		bEnableSupercell && SupercellState.IsValid(),
-		bEnableSubcell && (NetMode == NM_Standalone)); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용 
+		bEnableSubcell && (NetMode == NM_Standalone),
+		CellContext); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용 
 
 	if (DisconnectedCells.Num() == 0)
 	{
@@ -4394,7 +4396,7 @@ void URealtimeDestructibleMeshComponent::ProcessDecalRemoval(const FDestructionR
 
 	TRACE_CPUPROFILER_EVENT_SCOPE("Decal_Removal")
 
-		TSet<int32> DecalsToRemove;
+	TSet<int32> DecalsToRemove;
 
 	for (int32 DestroyedCellId : Result.NewlyDestroyedCells)
 	{
@@ -4540,8 +4542,6 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 	{
 		InitializeFromStaticMeshInternal(SourceStaticMesh, false);
 	}
-
-	
 
 	for (int32 i = 0; i < ChunkMeshComponents.Num(); i++)
 	{

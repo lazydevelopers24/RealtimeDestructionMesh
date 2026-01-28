@@ -12,7 +12,7 @@
 #include "CoreMinimal.h"
 #include "Components/DynamicMeshComponent.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
-#include "DestructionTypes.h" 
+#include "DestructionTypes.h"
 #include "StructuralIntegrity/GridCellTypes.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/BodyInstance.h"
@@ -27,7 +27,7 @@ class UMaterialInterface;
 class FLifetimeProperty;
 class FRealtimeBooleanProcessor;
 class UBulletClusterComponent;
-class UDecalMaterialDataAsset; 
+class UDecalMaterialDataAsset;
 class ADebrisActor;
 
 //////////////////////////////////////////////////////////////////////////
@@ -397,6 +397,7 @@ public:
 	 */
 	bool ValidateDestructionRequest(const FRealtimeDestructionRequest& Request, APlayerController* RequestingPlayer, EDestructionRejectReason& OutReason);
 
+	FConnectivityContext CellContext;
 
 	/** 서버 검증: 사거리 설정 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
@@ -494,7 +495,7 @@ public:
 	/** 파괴 요청이 서버에서 거부되었을 때 (클라이언트에서만 호출됨) */
 	UPROPERTY(BlueprintAssignable, Category = "RealtimeDestructibleMesh|Events")
 	FOnDestructionRejected OnDestructionRejected;
-	
+
 	/** Clustering 변수 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
 	TObjectPtr<UBulletClusterComponent> BulletClusterComponent;
@@ -631,7 +632,7 @@ protected:
 	void ProcessDecalRemoval(const FDestructionResult& Result);
 
 	int32 NextDecalHandle = 0;
-
+	
 	TMap<int32, FManagedDecal> ActiveDecals;
 
 	TMap<int32, TArray<int32>> CellToDecalMap;
@@ -661,7 +662,7 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|MeshBoolean")
 	bool bEnableMultiWorkers = true;
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|MeshBoolean", meta = (ClampMin = 0.001))
 	float AngleThreshold = 0.001f;
 
@@ -858,7 +859,7 @@ public:
 	 */
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity")
 	bool bOnSmooth = false;;
 
@@ -875,7 +876,7 @@ public:
 	
 	FVector CachedToolForwardVector = FVector::ForwardVector;
 	 
- 	//TODO: 적절한 값들을 찾고 없앨 예정
+	//TODO: 적절한 값들을 찾고 없앨 예정
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 DebrisSplitCount = 1;
 
@@ -949,7 +950,7 @@ public:
 	/** HC Laplacian 보정 강도 (0~1, 수축 방지) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HCBeta = 0.5f;
-	
+
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
 private:
@@ -974,7 +975,7 @@ private:
 		 const FVector& SpawnLocation,
 		 const FVector& BoxExtent
 	 );
-	
+
 #if WITH_EDITOR
 public:
 	/**
@@ -1024,7 +1025,7 @@ protected:
 	/** Mesh Island 제거 시 ToolMesh/Intersection 와이어프레임 디버그 표시 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugMeshIslandRemoval = false;
-	 
+
 	/** 동기화 안 되는 작은 Debris를 빨간 박스로 표시 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugDrawDebris = false;

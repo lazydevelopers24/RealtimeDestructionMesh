@@ -147,7 +147,8 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
 	FSuperCellState& SupercellState,
 	const FCellState& CellState,
 	bool bEnableSupercell,
-	bool bEnableSubcell)
+	bool bEnableSubcell,
+	FConnectivityContext& Context)
 {
 	if (bEnableSupercell)
 	{
@@ -155,7 +156,8 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCells(
 			GridLayout,
 			SupercellState,
 			CellState,
-			bEnableSubcell);
+			bEnableSubcell,
+			Context);
 	}
 	if (bEnableSubcell)
 	{
@@ -170,7 +172,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsCellLevel(
 	const FGridCellLayout& GridLayout,
 	const TSet<int32>& DestroyedCells)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsCellLevel)
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCellsCellLevel)
 	TSet<int32> Connected;
 	TQueue<int32> Queue;
 
@@ -925,7 +927,7 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsSubCellLevel(
 	const FGridCellLayout& GridLayout,
 	const FCellState& CellState)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsSubCellLevel);
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCellsSubCellLevel);
 	using namespace SubCellBFSHelper;
 
 	TSet<int32> Connected;
@@ -1385,6 +1387,7 @@ namespace HierarchicalBFSHelper
 		TSet<int32>& ConnectedCells,
 		TSet<int32>& VisitedSupercells)
 	{
+		
 		const FIntVector CellCoord = GridLayout.IdToCoord(CellId);
 
 		for (int32 Dir = 0; Dir < 6; ++Dir)
@@ -1449,7 +1452,297 @@ namespace HierarchicalBFSHelper
 			}
 		}
 	}
+
+	FORCEINLINE void TryAddNeighborCell_Opt(
+		int32 BoundaryCellId,
+		int32 NeighborCellId,
+		int32 Dir,
+		const FGridCellLayout& GridLayout,
+		const FCellState& CellState,
+		bool bEnableSubcell,
+		FConnectivityContext& Context,
+		TArray<FBFSNode>& Stack)
+	{
+		if (!GridLayout.GetCellExists(NeighborCellId))
+		{
+			return;
+		}
+
+		if (CellState.DestroyedCells.Contains(NeighborCellId))
+		{
+			return;
+		}
+		
+		if (Context.IsCellConnected(NeighborCellId))
+		{
+			return;
+		}
+
+		if (bEnableSubcell &&
+			!SubCellBFSHelper::HasConnectedBoundary(BoundaryCellId, NeighborCellId, Dir, CellState))
+		{
+			return;
+		}
+
+		Context.SetCellConnected(NeighborCellId);
+		Stack.Push(FBFSNode::MakeCell(NeighborCellId));
+	}
+
+	void MarkAllCellsInSuperCell_Bit(
+		int32 SupercellId,
+		const FSuperCellState& SupercellState,
+		const FGridCellLayout& GridLayout,
+		const FCellState& CellState,
+		FConnectivityContext& Context		
+	)
+	{
+		const FSupercellCellRange Range(SupercellId, SupercellState, GridLayout);
+
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+			{
+				for (int32 X = Range.StartX; X < Range.EndX; ++X)
+				{
+					const int32 CellId = GridLayout.CoordToId(X, Y, Z);
+					if (GridLayout.GetCellExists(CellId) && !CellState.DestroyedCells.Contains(CellId))
+					{
+						Context.SetCellConnected(CellId);
+					}
+				}
+			}
+		}
+	}
+
+	void ProcessSupercellNode_Opt(
+		int32 SupercellId,
+		const FGridCellLayout& GridLayout,
+		FSuperCellState& SupercellState,
+		const FCellState& CellState,
+		bool bEnableSubcell,
+		FConnectivityContext& Context,
+		TArray<FBFSNode>& Stack
+		)
+	{
+		const FSupercellCellRange Range(SupercellId, SupercellState, GridLayout);
+		const FIntVector SupercellCoord = SupercellState.SupercellIdToCoord(SupercellId);
+
+		for (int32 Dir = 0; Dir < 6; Dir++)
+		{
+			const FIntVector NeighborSCCoord = SupercellCoord + FIntVector(
+				DIRECTION_OFFSETS[Dir][0],
+				DIRECTION_OFFSETS[Dir][1],
+				DIRECTION_OFFSETS[Dir][2]);
+
+			if (!SupercellState.IsValidSupercellCoord(NeighborSCCoord))
+			{
+				continue;
+			}
+
+			const int32 NeighborSupercellId = SupercellState.SupercellCoordToId(NeighborSCCoord);
+
+			if (SupercellState.IsSupercellIntact(NeighborSupercellId))
+			{
+				if (Context.IsSuperCellVisited(NeighborSupercellId))
+				{
+					continue;
+				}
+
+				Context.SetSuperCellVisited(NeighborSupercellId);
+				Stack.Push(FBFSNode::MakeSupercell(NeighborSupercellId));
+				MarkAllCellsInSuperCell_Bit(NeighborSupercellId, SupercellState, GridLayout, CellState, Context);
+				continue;
+			}
+
+			switch (Dir)
+			{
+			case 0: // -X
+				for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+				{
+					for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+					{
+						const int32 BoundaryCellId = GridLayout.CoordToId(Range.StartX, Y, Z);
+						if (GridLayout.IsValidCoord(Range.StartX - 1, Y, Z))
+						{
+							const int32 NeighborCellId = GridLayout.CoordToId(Range.StartX - 1, Y, Z);
+							TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, Dir, GridLayout, CellState,
+							                       bEnableSubcell, Context, Stack);
+						}
+					}
+				}
+				break;
+
+			case 1: // +X
+				for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+				{
+					for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+					{
+						const int32 BoundaryCellId = GridLayout.CoordToId(Range.EndX - 1, Y, Z);
+						if (GridLayout.IsValidCoord(Range.EndX, Y, Z))
+						{
+							const int32 NeighborCellId = GridLayout.CoordToId(Range.EndX, Y, Z);
+							TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, Dir, GridLayout, CellState,
+							                       bEnableSubcell, Context, Stack);
+						}
+					}
+				}
+				break;
+
+			case 2: // -Y
+				for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+				{
+					for (int32 X = Range.StartX; X < Range.EndX; ++X)
+					{
+						const int32 BoundaryCellId = GridLayout.CoordToId(X, Range.StartY, Z);
+						if (GridLayout.IsValidCoord(X, Range.StartY - 1, Z))
+						{
+							const int32 NeighborCellId = GridLayout.CoordToId(X, Range.StartY - 1, Z);
+							TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, Dir, GridLayout, CellState,
+							                       bEnableSubcell, Context, Stack);
+						}
+					}
+				}
+				break;
+
+			case 3: // +Y
+				for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+				{
+					for (int32 X = Range.StartX; X < Range.EndX; ++X)
+					{
+						const int32 BoundaryCellId = GridLayout.CoordToId(X, Range.EndY - 1, Z);
+						if (GridLayout.IsValidCoord(X, Range.EndY, Z))
+						{
+							const int32 NeighborCellId = GridLayout.CoordToId(X, Range.EndY, Z);
+							TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, Dir, GridLayout, CellState,
+							                       bEnableSubcell, Context, Stack);
+						}
+					}
+				}
+				break;
+
+			case 4: // -Z
+				for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+				{
+					for (int32 X = Range.StartX; X < Range.EndX; ++X)
+					{
+						const int32 BoundaryCellId = GridLayout.CoordToId(X, Y, Range.StartZ);
+						if (GridLayout.IsValidCoord(X, Y, Range.StartZ - 1))
+						{
+							const int32 NeighborCellId = GridLayout.CoordToId(X, Y, Range.StartZ - 1);
+							TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, Dir, GridLayout, CellState,
+							                       bEnableSubcell, Context, Stack);
+						}
+					}
+				}
+				break;
+
+			case 5: // +Z
+				for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+				{
+					for (int32 X = Range.StartX; X < Range.EndX; ++X)
+					{
+						const int32 BoundaryCellId = GridLayout.CoordToId(X, Y, Range.EndZ - 1);
+						if (GridLayout.IsValidCoord(X, Y, Range.EndZ))
+						{
+							const int32 NeighborCellId = GridLayout.CoordToId(X, Y, Range.EndZ);
+							TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, Dir, GridLayout, CellState,
+							                       bEnableSubcell, Context, Stack);
+						}
+					}
+				}
+				break;
+			}
+		}
+
+		auto TryAddOrphan = [&](int32 BoundaryCellId, int32 NeighborCellId, int32 OrphanDir)
+		{
+			if (SupercellState.IsCellOrphan(NeighborCellId))
+			{
+				TryAddNeighborCell_Opt(BoundaryCellId, NeighborCellId, OrphanDir, GridLayout, CellState,
+				                       bEnableSubcell, Context, Stack);
+			}
+		};
+
+		// -X boundary face
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+			{
+				const int32 BoundaryCellId = GridLayout.CoordToId(Range.StartX, Y, Z);
+				if (GridLayout.IsValidCoord(Range.StartX - 1, Y, Z))
+				{
+					TryAddOrphan(BoundaryCellId, GridLayout.CoordToId(Range.StartX - 1, Y, Z), 0);
+				}
+			}
+		}
+
+		// +X
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+			{
+				const int32 BoundaryCellId = GridLayout.CoordToId(Range.EndX - 1, Y, Z);
+				if (GridLayout.IsValidCoord(Range.EndX, Y, Z))
+				{
+					TryAddOrphan(BoundaryCellId, GridLayout.CoordToId(Range.EndX, Y, Z), 1);
+				}
+			}
+		}
+
+		// -Y
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridLayout.CoordToId(X, Range.StartY, Z);
+				if (GridLayout.IsValidCoord(X, Range.StartY - 1, Z))
+				{
+					TryAddOrphan(BoundaryCellId, GridLayout.CoordToId(X, Range.StartY - 1, Z), 2);
+				}
+			}
+		}
+
+		// +Y
+		for (int32 Z = Range.StartZ; Z < Range.EndZ; ++Z)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridLayout.CoordToId(X, Range.EndY - 1, Z);
+				if (GridLayout.IsValidCoord(X, Range.EndY, Z))
+				{
+					TryAddOrphan(BoundaryCellId, GridLayout.CoordToId(X, Range.EndY, Z), 3);
+				}
+			}
+		}
+
+		// -Z
+		for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridLayout.CoordToId(X, Y, Range.StartZ);
+				if (GridLayout.IsValidCoord(X, Y, Range.StartZ - 1))
+				{
+					TryAddOrphan(BoundaryCellId, GridLayout.CoordToId(X, Y, Range.StartZ - 1), 4);
+				}
+			}
+		}
+
+		// +Z
+		for (int32 Y = Range.StartY; Y < Range.EndY; ++Y)
+		{
+			for (int32 X = Range.StartX; X < Range.EndX; ++X)
+			{
+				const int32 BoundaryCellId = GridLayout.CoordToId(X, Y, Range.EndZ - 1);
+				if (GridLayout.IsValidCoord(X, Y, Range.EndZ))
+				{
+					TryAddOrphan(BoundaryCellId, GridLayout.CoordToId(X, Y, Range.EndZ), 5);
+				}
+			}
+		}		
+	}
 }  
+
 
 TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 	const FGridCellLayout& GridLayout,
@@ -1457,7 +1750,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 	const FCellState& CellState,
 	bool bEnableSubcell)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(FindConnectedCellsHierarchical);
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_lagacy);
 	using namespace HierarchicalBFSHelper;
 
 	TSet<int32> ConnectedCells;
@@ -1468,12 +1761,15 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 	// Step 1: Initialize anchors
 	// Performance optimization: use only IsSupercellIntact() (bitfield O(1))
 	//=========================================================================
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_lagacy_Anchor);
 	for (int32 CellId = 0; CellId < GridLayout.GetTotalCellCount(); ++CellId)
 	{
 		if (!GridLayout.GetCellExists(CellId))
 		{
 			continue;
 		}
+
 
 		if (!GridLayout.GetCellIsAnchor(CellId))
 		{
@@ -1484,6 +1780,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 		{
 			continue;
 		}
+
 
 		// In subcell mode, must have an alive subcell
 		if (bEnableSubcell && !SubCellBFSHelper::HasAliveSubCell(CellId, CellState))
@@ -1513,10 +1810,13 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 			}
 		}
 	}
+	}
 
 	//=========================================================================
 	// Step 2: BFS traversal
 	//=========================================================================
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_lagacy_BFS);
 	while (!Queue.IsEmpty())
 	{
 		FBFSNode Current;
@@ -1524,6 +1824,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 
 		if (Current.bIsSupercell)
 		{
+				TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_lagacy_Intact);
 			// Case A: Intact SuperCell node
 			ProcessSupercellNode(
 				Current.Id,
@@ -1537,6 +1838,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 		}
 		else
 		{
+				TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_lagacy_Cell);
 			// Case B: Individual cell node
 			ProcessCellNode(
 				Current.Id,
@@ -1549,6 +1851,7 @@ TSet<int32> FCellDestructionSystem::FindConnectedCellsHierarchical(
 				VisitedSupercells);
 		}
 	}
+	}
 
 	return ConnectedCells;
 }
@@ -1557,13 +1860,25 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsHierarchicalLevel(
 	const FGridCellLayout& GridLayout,
 	FSuperCellState& SupercellState,
 	const FCellState& CellState,
-	bool bEnableSubcell)
+	bool bEnableSubcell,
+	FConnectivityContext& Context)
 {
-	TRACE_CPUPROFILER_EVENT_SCOPE(FindDisconnectedCellsHierarchicalLevel);
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCellsHierarchicalLevel);
 
 	// 1. Find cells connected to anchors
-	TSet<int32> ConnectedCells = FindConnectedCellsHierarchical(
-		GridLayout, SupercellState, CellState, bEnableSubcell);
+	FindConnectedCellsHierarchical_Optimized(
+		GridLayout, SupercellState, CellState, Context, bEnableSubcell);
+	
+	// if (!DEBUGStruct::BFSTest())
+	// {
+	// 	ConnectedCells = FindConnectedCellsHierarchical(
+	// 	   GridLayout, SupercellState, CellState, bEnableSubcell);
+	// }
+	// else
+	// {
+	// 	ConnectedCells = FindConnectedCellsHierarchical_Optimized(
+	// 	GridLayout, SupercellState, CellState, Context, bEnableSubcell);
+	// }
 
 	// 2. Cells not in Connected are disconnected
 	TSet<int32> Disconnected;
@@ -1580,11 +1895,188 @@ TSet<int32> FCellDestructionSystem::FindDisconnectedCellsHierarchicalLevel(
 			continue;
 		}
 
-		if (!ConnectedCells.Contains(CellId))
+		if (!Context.IsCellConnected(CellId))
 		{
 			Disconnected.Add(CellId);
 		}
 	}
 	
 	return Disconnected;
+}
+
+void FCellDestructionSystem::FindConnectedCellsHierarchical_Optimized(
+	const FGridCellLayout& Cache,
+	FSuperCellState& SupercellState,
+	const FCellState& CellState,
+	FConnectivityContext& Context,
+	bool bEnableSubcell)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_Opt);
+	
+	using namespace HierarchicalBFSHelper;
+	int32 TotalCells = Cache.GetTotalCellCount();
+	
+	Context.Reset(TotalCells, SupercellState.GetTotalSupercellCount());
+
+	TArray<FBFSNode>& Stack = Context.WorkStack;
+
+	const int32 SizeX = Cache.GridSize.X;
+	const int32 SizeY = Cache.GridSize.Y;
+	const int32 SizeXY = Cache.GridSize.X * Cache.GridSize.Y;
+
+	const int32 Strides[6] = {-1, 1, -SizeX, SizeX, -SizeXY, SizeXY};
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_Opt_Anchor);
+		for (int32 CellId = 0; CellId < TotalCells; CellId++)
+		{
+			if (!Cache.GetCellExists(CellId))
+			{
+				continue;
+			}
+		
+			if (!Cache.GetCellIsAnchor(CellId))
+			{
+				continue;
+			}		
+
+			if (CellState.DestroyedCells.Contains(CellId))
+			{
+				continue;
+			}
+
+			if (bEnableSubcell && !SubCellBFSHelper::HasAliveSubCell(CellId, CellState))
+			{
+				continue;
+			}
+
+			const int32 SupercellId = SupercellState.GetSupercellForCell(CellId);
+
+			if (SupercellId != INDEX_NONE &&
+				SupercellState.IsSupercellIntact(SupercellId) &&
+				!Context.IsSuperCellVisited(SupercellId))
+			{
+				Context.SetSuperCellVisited(SupercellId);
+				Stack.Push(FBFSNode::MakeSupercell(SupercellId));
+				MarkAllCellsInSuperCell_Bit(SupercellId, SupercellState, Cache, CellState, Context);
+			}
+			else
+			{
+				if (!Context.IsCellConnected(CellId))
+				{
+					Context.SetCellConnected(CellId);
+					Stack.Push(FBFSNode::MakeCell(CellId));
+				}
+			}
+		}
+	}
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_Opt_DFS);
+		while (Stack.Num() > 0)
+		{
+			const FBFSNode Current = Stack.Pop(EAllowShrinking::No);
+
+			if (Current.bIsSupercell)
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_Opt_Intact);
+				ProcessSupercellNode_Opt(
+					Current.Id,
+					Cache,
+					SupercellState,
+					CellState,
+					bEnableSubcell,
+					Context,
+					Stack);
+			}
+			else
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindConnectedCellsHierarchical_Opt_Cell);
+				const int32 CurrentId = Current.Id;
+
+				const int32 Z = CurrentId / SizeXY;
+				const int32 RemXY = CurrentId - Z * SizeXY;
+				const int32 Y = RemXY / SizeX;
+				const int32 X = RemXY - Y * SizeX;
+
+				for (int32 Dir = 0; Dir < 6; ++Dir)
+				{
+					// -X boundary
+					if (Dir == 0 && X == 0)
+					{
+						continue;
+					}
+					// +X boundary
+					if (Dir == 1 && X == SizeX - 1)
+					{
+						continue;
+					}				
+				
+					// -Y boundary
+					if (Dir == 2 && Y == 0)
+					{
+						continue;
+					}
+					// +Y boundary
+					if (Dir == 3 && Y >= (SizeY - 1))
+					{
+						continue;
+					}
+
+					// -Z boundary
+					if (Dir == 4 && Z == 0)
+					{
+						continue;
+					}
+					// +Z boundary
+					if (Dir == 5 && Z == Cache.GridSize.Z - 1)
+					{
+						continue;
+					}
+
+					const int32 NeighborId = CurrentId + Strides[Dir];
+
+					if (!Cache.GetCellExists(NeighborId))
+					{
+						continue;
+					}
+
+					if (CellState.DestroyedCells.Contains(NeighborId))
+					{
+						continue;
+					}
+
+					if (Context.IsCellConnected(NeighborId))
+					{
+						continue;
+					}
+				
+					if (bEnableSubcell && !SubCellBFSHelper::HasConnectedBoundary(CurrentId, NeighborId, Dir, CellState))
+					{
+						continue;
+					}
+
+					const int32 NeighborSupercellId = SupercellState.GetSupercellForCell(NeighborId);
+
+					if (NeighborSupercellId != INDEX_NONE &&
+						SupercellState.IsSupercellIntact(NeighborSupercellId) &&
+						!Context.IsSuperCellVisited(NeighborSupercellId))
+					{
+						Context.SetSuperCellVisited(NeighborSupercellId);
+						Stack.Push(FBFSNode::MakeSupercell(NeighborSupercellId));
+						MarkAllCellsInSuperCell_Bit(NeighborSupercellId, SupercellState, Cache, CellState, Context);
+					}
+					else
+					{
+						Context.SetCellConnected(NeighborId);
+						Stack.Push(FBFSNode::MakeCell(NeighborId));
+					}
+				}
+			}
+		}
+	}
+
+	// TSet<int32> ConnectedCells(Context.ConnectedCellIds);
+	//
+	// return ConnectedCells;
 }

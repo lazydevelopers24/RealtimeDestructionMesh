@@ -14,6 +14,21 @@
 // FDestructionShape
 //=============================================================================
 
+static TAutoConsoleVariable<int32> CVarBFSTest(
+    TEXT("Destruction.Debug.BFSTest"),
+    0,
+    TEXT("Enable BFS Debugging Flags.\n")
+    TEXT(" 0: Off\n")
+    TEXT(" 1: On"),
+    ECVF_Cheat // 치트 명령어로 분류 (Shipping 빌드에서는 제외됨)
+);
+
+
+bool DEBUGStruct::BFSTest()
+{
+	return CVarBFSTest.GetValueOnAnyThread() > 0;
+}
+
 bool FCellDestructionShape::ContainsPoint(const FVector& Point) const
 {
 	switch (Type)
@@ -859,7 +874,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 		(GridCache.GridSize.Y  + SupercellSize.Y - 1) / SupercellSize.Y,
 		(GridCache.GridSize.Z  + SupercellSize.Z - 1) / SupercellSize.Z
 	);
-	
+
 	//SupercellCount = FIntVector(
 	//	(GridCache.GridSize.X) / SupercellSize.X,
 	//	(GridCache.GridSize.Y) / SupercellSize.Y,
@@ -884,7 +899,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 	InitialValidCellCounts.SetNumZeroed(SupercellCount.X * SupercellCount.Y * SupercellCount.Z);
 	DestroyedCellCounts.SetNumZeroed(SupercellCount.X * SupercellCount.Y * SupercellCount.Z);
 
-	const int32 RequiredCellCount = SupercellSize.X * SupercellSize.Y * SupercellSize.Z; 
+	const int32 RequiredCellCount = SupercellSize.X * SupercellSize.Y * SupercellSize.Z;
 	// Map cells that belong to SuperCells
 	for (int32 SCZ = 0; SCZ < SupercellCount.Z; ++SCZ)
 	{
@@ -906,7 +921,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 					for (int32 LY = 0; LY < SupercellSize.Y; ++LY)
 					{
 						for (int32 LX = 0; LX < SupercellSize.X; ++LX)
-						{ 
+						{
 							const int32 GX = StartX + LX;
 							const int32 GY = StartY + LY;
 							const int32 GZ = StartZ + LZ;
@@ -943,7 +958,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 					}
 				}
 				else
-				{
+				{ 
 					// Partially filled SuperCell: Map only valid cells and handle broken ones.
 					for (int32 LZ = 0; LZ < SupercellSize.Z; ++LZ)
 					{
@@ -983,7 +998,7 @@ void FSuperCellState::BuildFromGridLayout(const FGridCellLayout& GridCache)
 		{
 			OrphanCellIds.Add(CellId);
 		}
-	} 
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSuperCellState::BuildFromGridLayout - GridSize: (%d, %d, %d), SupercellSize: (%d, %d, %d), SupercellCount: (%d, %d, %d), TotalSupercells: %d, OrphanCells: %d"),
 		GridCache.GridSize.X, GridCache.GridSize.Y, GridCache.GridSize.Z,
