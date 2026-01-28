@@ -18,6 +18,7 @@
 #include "BoxTypes.h"
 #include "IndexTypes.h"
 #include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
 
 ADebrisActor::ADebrisActor()
 {
@@ -110,10 +111,25 @@ void ADebrisActor::OnRep_DebrisParams()
 			// 비트맵 → CellIds 디코딩
 			DecodeBitmapToCells(SourceMesh->GetGridCellLayout());
 
-			// CellIds로 메시 생성
 			if (CellIds.Num() > 0)
 			{
-				GenerateMeshFromCells();
+				// Boolean Intersection 시도 (Standalone 품질)
+				// BooleanProcessor가 유효하고 ChunkMesh가 있을 때만 사용
+				bool bUseBooleanExtraction = SourceMesh->CanExtractDebrisForClient();
+
+				if (bUseBooleanExtraction)
+				{
+					// RemoveTrianglesForDetachedCells에 TargetDebrisActor를 전달하여
+					// Subtract + Intersection 모두 수행 (Standalone과 동일)
+					UE_LOG(LogTemp, Warning, TEXT("[DebrisActor] Using RemoveTrianglesForDetachedCells for mesh extraction (Standalone quality)"));
+					SourceMesh->RemoveTrianglesForDetachedCells(CellIds, this);
+				}
+				else
+				{
+					// Fallback: Greedy Mesh 사용 (기존 방식)
+					UE_LOG(LogTemp, Warning, TEXT("[DebrisActor] Fallback to GenerateMeshFromCells (BooleanProcessor unavailable)"));
+					GenerateMeshFromCells();
+				}
 			}
 			else
 			{

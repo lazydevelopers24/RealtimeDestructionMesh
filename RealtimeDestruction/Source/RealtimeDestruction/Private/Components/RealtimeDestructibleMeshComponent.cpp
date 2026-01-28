@@ -1315,7 +1315,7 @@ void URealtimeDestructibleMeshComponent::UpdateDirtyCollisionChunks()
 	}
 }
 
-bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds)
+bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor)
 {
 		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_RemoveTrianglesForDetachedCells);
 	using namespace UE::Geometry;
@@ -1325,7 +1325,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		return false;
 	}
 
-	UE_LOG(LogTemp, Warning, TEXT("=== RemoveTrianglesForDetachedCells START ==="));
+	UE_LOG(LogTemp, Warning, TEXT("=== RemoveTrianglesForDetachedCells START (TargetDebrisActor=%p) ==="), TargetDebrisActor);
 	UE_LOG(LogTemp, Warning, TEXT("DetachedCellIds.Num()=%d, ChunkMeshComponents.Num()=%d"),
 		DetachedCellIds.Num(), ChunkMeshComponents.Num());
 
@@ -1349,11 +1349,12 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		);
 		BaseCells.Add(GridPos);
 	}
-	
+
 
 	TArray<TArray<FIntVector>> FinalPieces;
 
-	if (DebrisSplitCount <= 1 || BaseCells.Num() <= 1)
+	// TargetDebrisActor가 있으면 분할 없이 단일 조각으로 처리 (서버에서 이미 분할 결정됨)
+	if (TargetDebrisActor || DebrisSplitCount <= 1 || BaseCells.Num() <= 1)
 	{
 		FinalPieces.Add(BaseCells.Array());
 	}
@@ -1652,6 +1653,12 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			Context = MakeShared<FIslandRemovalContext>();
 			Context->Owner = this;
 			Context->RemainingTaskCount = OverlappingChunks.Num();
+
+			// TargetDebrisActor가 있으면 설정 (클라이언트에서 기존 DebrisActor에 메시 적용)
+			if (TargetDebrisActor)
+			{
+				Context->TargetDebrisActor = TargetDebrisActor;
+			}
 		}
 
 		if (BooleanProcessor.IsValid())
@@ -1981,7 +1988,7 @@ FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(c
 	return ResultMesh; 
 }
 
-void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials)
+void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials, ADebrisActor* TargetActor)
 {
 	using namespace UE::Geometry;
 
@@ -2218,6 +2225,17 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source
 	BoxExtent = BoxExtent.ComponentMax(FVector(1.0f, 1.0f, 1.0f));
 
 	const bool bShouldSync = BoxExtent.GetMax() >= MinDebrisSyncSize; 
+
+	// Target Actor가 있으면 Client 전용
+	if (TargetActor)
+	{
+		TargetActor->SetActorLocation(SpawnLocation);
+		CreateDebrisMeshSections(TargetActor->DebrisMesh, SectionDataByMaterial, Materials);
+		TargetActor->SetCollisionBoxExtent(BoxExtent);
+
+		// physics는 서버에서 딸려옴 
+		return;
+	}
 
 	if (bIsServer && bShouldSync)
 	{
@@ -2598,6 +2616,27 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActorForDedicatedServer(cons
 		UE_LOG(LogTemp, Warning, TEXT("[DediServer] SpawnDebrisActorForDedicatedServer: DebrisId=%d, CellCount=%d, Location=%s, Material=%s"),
 			DebrisId, PieceCellIds.Num(), *SpawnLocation.ToString(), DebrisMaterial ? *DebrisMaterial->GetName() : TEXT("NULL"));
 	}
+}
+
+bool URealtimeDestructibleMeshComponent::CanExtractDebrisForClient() const
+{
+	// BooleanProcessor가 유효한지 확인
+	if (!BooleanProcessor.IsValid())
+	{
+		return false;
+	}
+
+	// ChunkMeshComponents에 유효한 메시가 있는지 확인
+	for (int32 i = 0; i < ChunkMeshComponents.Num(); i++)
+	{
+		if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh() &&
+			ChunkMeshComponents[i]->GetMesh()->TriangleCount() > 0)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void URealtimeDestructibleMeshComponent::RegisterLocalDebris(int32 InDebrisId, UProceduralMeshComponent* Mesh)
@@ -5886,8 +5925,7 @@ int32 URealtimeDestructibleMeshComponent::GetMaterialIDFromFaceIndex(int32 FaceI
 	}
 
 	return 0;
-}
-
+} 
 void URealtimeDestructibleMeshComponent::CreateDebrisMeshSections(UProceduralMeshComponent* Mesh,
 	const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
 	const TArray<UMaterialInterface*>& InMaterials)

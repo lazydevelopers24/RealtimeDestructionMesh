@@ -40,6 +40,9 @@ enum class EBooleanWorkType : uint8
 	IslandRemoval
 };
 
+// Forward declaration
+class ADebrisActor;
+
 struct FIslandRemovalContext
 {
 	std::atomic<int32> RemainingTaskCount{0};
@@ -47,6 +50,9 @@ struct FIslandRemovalContext
 
 	FCriticalSection MeshLock;
 	TWeakObjectPtr<URealtimeDestructibleMeshComponent> Owner;
+
+	/** Client용: 이미 존재하는 DebrisActor에 메시 적용 (null이면 SpawnDebrisActor 호출) */
+	TWeakObjectPtr<ADebrisActor> TargetDebrisActor;
 };
 
 /** Union result payload for a chunk, including the combined tool mesh and decals. */

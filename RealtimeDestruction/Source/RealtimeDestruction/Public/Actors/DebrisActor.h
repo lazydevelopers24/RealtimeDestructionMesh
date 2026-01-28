@@ -13,6 +13,8 @@
 #include "GameFramework/Actor.h"
 #include "DebrisActor.generated.h"
 
+// Forward declarations
+namespace UE { namespace Geometry { class FDynamicMesh3; } }
 class UProceduralMeshComponent;
 class URealtimeDestructibleMeshComponent;
 class UBoxComponent;
@@ -84,7 +86,7 @@ public:
 
 	/** 로컬 메시 데이터를 적용 (클라이언트에서 호출) */
 	void ApplyLocalMesh(UProceduralMeshComponent* LocalMesh);
-	
+
 	/** Box Collision 크기 설정 */
 	void SetCollisionBoxExtent(const FVector& Extent);
 	

@@ -26,6 +26,7 @@
 #include "Subsystems/RDMThreadManagerSubsystem.h"
 #include "Remesher.h"
 #include "MeshConstraintsUtil.h"
+#include "Actors/DebrisActor.h"
 
 TRACE_DECLARE_INT_COUNTER(Counter_ThreadCount, TEXT("RealtimeDestruction/ThreadCount"));
 TRACE_DECLARE_INT_COUNTER(Counter_UnionThreadCount, TEXT("RealtimeDestruction/UnionThreadCount"));
@@ -252,10 +253,17 @@ void FRealtimeBooleanProcessor::EnqueueIslandRemoval(
 		return;
 	}
 
-	if (!ToolMesh.IsValid())
+	// ToolMesh 또는 DebrisToolMesh 중 하나라도 있어야 함
+	// Client extraction의 경우 ToolMesh는 nullptr이고 DebrisToolMesh만 있음
+	if (!ToolMesh.IsValid() && !DebrisToolMesh.IsValid())
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[EnqueueIslandRemoval] Both ToolMesh and DebrisToolMesh are invalid - skipping"));
 		return;
 	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[EnqueueIslandRemoval] ChunkIndex=%d, ToolMesh=%d, DebrisToolMesh=%d, TargetDebrisActor=%d"),
+		ChunkIndex, ToolMesh.IsValid() ? 1 : 0, DebrisToolMesh.IsValid() ? 1 : 0,
+		(Context.IsValid() && Context->TargetDebrisActor.IsValid()) ? 1 : 0);
 
 	FUnionResult WorkItem = {};
 	WorkItem.ChunkIndex = ChunkIndex;
@@ -695,15 +703,29 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          {
 				          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
 				          {
-					          TArray<UMaterialInterface*> Materials;
-					          if (auto ChunkMesh = Owner->GetChunkMeshComponent(ChunkIndex))
+					          if (Context->AccumulatedDebrisMesh.TriangleCount() > 0)
 					          {
-						          for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
+						          TArray<UMaterialInterface*> Materials;
+						          if (auto ChunkMesh = Owner->GetChunkMeshComponent(ChunkIndex))
 						          {
-							          Materials.Add(ChunkMesh->GetMaterial(i));
+							          for (int32 i = 0; i < ChunkMesh->GetNumMaterials(); i++)
+							          {
+								          Materials.Add(ChunkMesh->GetMaterial(i));
+							          }
+						          }
+
+						          // TargetDebrisActor가 있으면 기존 Actor에 메시 적용 (Client extraction)
+						          if (Context->TargetDebrisActor.IsValid())
+						          {
+									  Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials, Context->TargetDebrisActor.Get());
+
+						          }
+						          // 그 외: 새 DebrisActor 스폰 (Standalone/Listen Server)
+						          else if (Context->Owner.IsValid())
+						          {
+							          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
 						          }
 					          }
-					          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
 				          }
 			          }
 
@@ -818,44 +840,61 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		}
 		else
 		{
+			FGeometryScriptMeshBooleanOptions Ops;
+			Ops.bFillHoles = true;
+			Ops.bSimplifyOutput = false;
+
+			// Intersection (Debris): 원본 크기 DebrisToolMesh 사용
+			if (UnionResult.DebrisSharedToolMesh.IsValid() && UnionResult.IslandContext.IsValid())
+			{
+				FDynamicMesh3 DebrisTool = *UnionResult.DebrisSharedToolMesh;
+				FDynamicMesh3 Debris;
+
+				UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Intersection START - WorkMesh Tris=%d, DebrisTool Tris=%d"),
+					WorkMesh.TriangleCount(), DebrisTool.TriangleCount());
+
+				bool bSuccessIntersection = ApplyMeshBooleanAsync(
+					&WorkMesh,
+					&DebrisTool,
+					&Debris,
+					EGeometryScriptBooleanOperation::Intersection,
+					Ops);
+
+				UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Intersection RESULT - bSuccess=%d, Debris Tris=%d"),
+					bSuccessIntersection ? 1 : 0, Debris.TriangleCount());
+
+				if (bSuccessIntersection && Debris.TriangleCount() > 0)
+				{
+					FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
+					// Initialize attributes
+					if (UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount() == 0)
+					{
+						UnionResult.IslandContext->AccumulatedDebrisMesh.EnableAttributes();
+						UnionResult.IslandContext->AccumulatedDebrisMesh.Attributes()->EnableMaterialID();
+						if (!UnionResult.IslandContext->AccumulatedDebrisMesh.HasTriangleGroups())
+						{
+							UnionResult.IslandContext->AccumulatedDebrisMesh.EnableTriangleGroups();
+						}
+					}
+
+					FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
+					FMeshIndexMappings Mappings;
+					Editor.AppendMesh(&Debris, Mappings);
+					bHasDebris = true;
+
+					UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Accumulated Debris Tris=%d"),
+						UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount());
+				}
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Intersection SKIPPED - DebrisToolMesh=%d, IslandContext=%d"),
+					UnionResult.DebrisSharedToolMesh.IsValid() ? 1 : 0, UnionResult.IslandContext.IsValid() ? 1 : 0);
+			}
+
+			// Subtract (구멍): 스케일된 SharedToolMesh 사용
 			if (UnionResult.SharedToolMesh.IsValid())
 			{
-				FGeometryScriptMeshBooleanOptions Ops;
-				Ops.bFillHoles = true;
-				Ops.bSimplifyOutput = false;
-				// Intersection (Debris): 원본 크기 DebrisToolMesh 사용
-				if (UnionResult.DebrisSharedToolMesh.IsValid() && UnionResult.IslandContext.IsValid())
-				{
-					FDynamicMesh3 DebrisTool = *UnionResult.DebrisSharedToolMesh;
-					FDynamicMesh3 Debris;
-					bool bSuccessIntersection = ApplyMeshBooleanAsync(
-						&WorkMesh,
-						&DebrisTool,
-						&Debris,
-						EGeometryScriptBooleanOperation::Intersection,
-						Ops);
-					if (bSuccessIntersection && Debris.TriangleCount() > 0)
-					{
-						FScopeLock Lock(&UnionResult.IslandContext->MeshLock);
-						// Initialize attributes
-						if (UnionResult.IslandContext->AccumulatedDebrisMesh.TriangleCount() == 0)
-						{
-							UnionResult.IslandContext->AccumulatedDebrisMesh.EnableAttributes();
-							UnionResult.IslandContext->AccumulatedDebrisMesh.Attributes()->EnableMaterialID();
-							if (!UnionResult.IslandContext->AccumulatedDebrisMesh.HasTriangleGroups())
-							{
-								UnionResult.IslandContext->AccumulatedDebrisMesh.EnableTriangleGroups();
-							}
-						}
-
-						FDynamicMeshEditor Editor(&UnionResult.IslandContext->AccumulatedDebrisMesh);
-						FMeshIndexMappings Mappings;
-						Editor.AppendMesh(&Debris, Mappings);
-						bHasDebris = true;
-					}
-				}
-			
-				// Subtract (구멍): 스케일된 SharedToolMesh 사용
 				FDynamicMesh3 LocalTool = *UnionResult.SharedToolMesh;
 				bSuccess = ApplyMeshBooleanAsync(
 					&WorkMesh,
@@ -917,12 +956,17 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 			          Processor->UpdateSimplifyInterval(ExecutionDurationMs, ChunkIndex);
 
-			          // Spawn debris
+			          // Spawn debris or apply to existing DebrisActor (client extraction)
 			          if (Context.IsValid())
 			          {
+				          int32 RemainingBefore = Context->RemainingTaskCount.load();
+				          UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Completion Callback - RemainingTasks=%d, AccumulatedTris=%d, TargetDebrisActor=%d"),
+					          RemainingBefore, Context->AccumulatedDebrisMesh.TriangleCount(),
+					          Context->TargetDebrisActor.IsValid() ? 1 : 0);
+
 				          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
-				          {					          
-					          if (Context->Owner.IsValid() && Context->AccumulatedDebrisMesh.TriangleCount() > 0)
+				          {
+					          if (Context->AccumulatedDebrisMesh.TriangleCount() > 0)
 					          {
 						          TArray<UMaterialInterface*> Materials;
 						          if (auto ChunkMesh = WeakOwner->GetChunkMeshComponent(1))
@@ -933,8 +977,18 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 							          }
 						          }
 
-						          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
-					          	//Context->Owner->CleanupSmallFragments();
+						          // TargetDebrisActor가 있으면 기존 Actor에 메시 적용 (Client extraction)
+						          if (Context->TargetDebrisActor.IsValid())
+						          {
+							          UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Calling ApplyMeshToDebrisActor with %d triangles"), Context->AccumulatedDebrisMesh.TriangleCount());
+							          WeakOwner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials, Context->TargetDebrisActor.Get());
+							          UE_LOG(LogTemp, Warning, TEXT("[BooleanProcessor] Applied mesh to existing DebrisActor"));
+						          }
+						          // 그 외: 새 DebrisActor 스폰 (Standalone/Listen Server)
+						          else if (Context->Owner.IsValid())
+						          {
+							          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+						          }
 					          }
 				          }
 			          } 

@@ -857,7 +857,7 @@ public:
 	 * @param OutRemovedMeshIsland - 제거 성공시 원본 메시에서 잘려나간 부분 (OriginalMesh ∩ ToolMesh)
 	 * @return 제거 성공 여부
 	 */
-	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
+	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr);
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity")
@@ -893,11 +893,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
 	float DebrisSpawnOffset = 0.7f;
 
-	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
+	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials, ADebrisActor* TargetActgor = nullptr);
 
 	/** 데디서버용 Spawn Debris */
 	void SpawnDebrisActorForDedicatedServer(const TArray<int32>& DetachedCellIds);
 
+	/** Boolean Intersection 방식으로 Debris 추출이 가능한지 확인
+	 *  BooleanProcessor가 유효하고 ChunkMesh가 있어야 사용 가능
+	 */
+	bool CanExtractDebrisForClient() const;
+	 
 	/** DebrisId 생성 */
 	int32 GenerateDebrisId() { return NextDebrisId++; }
 
