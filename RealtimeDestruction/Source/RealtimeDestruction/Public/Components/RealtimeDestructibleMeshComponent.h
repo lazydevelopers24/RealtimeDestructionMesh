@@ -956,10 +956,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowServerCollisionDebug = false;
 
-	/** 실제 활성화된 물리 박스만 표시 (BodySetup 기반) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
-	bool bShowActivePhysicsBoxes = false;
-
 	/** Mesh Island 제거 시 ToolMesh/Intersection 와이어프레임 디버그 표시 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugMeshIslandRemoval = false;
@@ -984,9 +980,6 @@ protected:
 
 	/** 서버 콜리전 박스 디버그 시각화 */
 	void DrawServerCollisionDebug();
-
-	/** 실제 BodySetup의 물리 박스 시각화 (활성화된 콜리전만) */
-	void DrawActivePhysicsBoxesDebug();
 
 	bool bShouldDebugUpdate = true;
 

@@ -3953,99 +3953,6 @@ void URealtimeDestructibleMeshComponent::DrawServerCollisionDebug()
 	}
 }
 
-void URealtimeDestructibleMeshComponent::DrawActivePhysicsBoxesDebug()
-{
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-
-	const FTransform& ComponentTransform = GetComponentTransform();
-	int32 TotalActiveBoxes = 0;
-	int32 DisabledChunks = 0;
-
-	// 디버그 색상 (Green - 발표용)
-	const FColor DebugColor = FColor::Green;
-
-	// 서버 경로: CollisionChunks 기반 디버그 (Cell Box Collision이 초기화된 경우)
-	if (bServerCellCollisionInitialized && CollisionChunks.Num() > 0)
-	{
-		for (int32 ChunkIdx = 0; ChunkIdx < CollisionChunks.Num(); ++ChunkIdx)
-		{
-			const FCollisionChunkData& Chunk = CollisionChunks[ChunkIdx];
-
-			// BodySetup이 없으면 스킵
-			if (!Chunk.BodySetup)
-			{
-				continue;
-			}
-
-			// 콜리전 컴포넌트 상태 확인
-			UStaticMeshComponent* ChunkComp = Cast<UStaticMeshComponent>(Chunk.ChunkComponent);
-			if (!ChunkComp || ChunkComp->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
-			{
-				++DisabledChunks;
-				continue;
-			}
-
-			// 실제 BodySetup의 BoxElems에서 박스 그리기
-			const FKAggregateGeom& DebugAggGeom = Chunk.BodySetup->AggGeom;
-			for (const FKBoxElem& BoxElem : DebugAggGeom.BoxElems)
-			{
-				const FVector WorldCenter = ComponentTransform.TransformPosition(BoxElem.Center);
-				const FVector HalfExtent = FVector(BoxElem.X, BoxElem.Y, BoxElem.Z) * 0.5f * ComponentTransform.GetScale3D();
-				DrawDebugBox(World, WorldCenter, HalfExtent, ComponentTransform.GetRotation(), DebugColor, false, 0.0f, SDPG_Foreground, 1.0f);
-				++TotalActiveBoxes;
-			}
-		}
-	}
-	// 클라이언트 경로: GridCellLayout 기반 디버그 (파괴된 셀 필터링)
-	else if (GridCellLayout.IsValid())
-	{
-		const FVector HalfExtent = GridCellLayout.CellSize * 0.5f * ComponentTransform.GetScale3D();
-
-		for (int32 CellId = 0; CellId < GridCellLayout.GetTotalCellCount(); ++CellId)
-		{
-			// 존재하지 않는 셀 스킵
-			if (!GridCellLayout.GetCellExists(CellId))
-			{
-				continue;
-			}
-
-			// 파괴된 셀 스킵
-			if (CellState.DestroyedCells.Contains(CellId))
-			{
-				++DisabledChunks;
-				continue;
-			}
-
-			// 셀 중심 계산 및 박스 그리기
-			const FVector LocalCenter = GridCellLayout.IdToLocalCenter(CellId);
-			const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
-			DrawDebugBox(World, WorldCenter, HalfExtent, ComponentTransform.GetRotation(), DebugColor, false, 0.0f, SDPG_Foreground, 1.0f);
-			++TotalActiveBoxes;
-		}
-	}
-	else
-	{
-		// GridCellLayout도 없으면 디버그 불가
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 0.0f, FColor::Red,
-				TEXT("[PhysicsBoxes] No collision data available (Server: no CollisionChunks, Client: no GridCellLayout)"));
-		}
-		return;
-	}
-
-	// 매 프레임 상태 표시 (화면 왼쪽 상단)
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(-1, 0.0f, FColor::Yellow,
-			FString::Printf(TEXT("[PhysicsBoxes] Active: %d boxes, Destroyed cells: %d"),
-				TotalActiveBoxes, DisabledChunks));
-	}
-}
 
 void URealtimeDestructibleMeshComponent::SetSourceMeshEnabled(bool bEnabled)
 {
@@ -4441,12 +4348,6 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 	if (bShowSupercellDebug)
 	{
 		DrawSupercellDebug();
-	}
-
-	// 실제 활성화된 물리 박스 디버그 표시 (BodySetup 기반)
-	if (bShowActivePhysicsBoxes)
-	{
-		DrawActivePhysicsBoxesDebug();
 	}
 
 	// 서버/클라이언트 Cell Box Collision: 지연 초기화 (BeginPlay에서 GridCellLayout이 유효하지 않았던 경우)
