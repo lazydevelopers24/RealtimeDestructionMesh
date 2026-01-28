@@ -58,7 +58,6 @@
 #if WITH_EDITOR
 #include "Selection.h"
 #endif
-#include "HeadMountedDisplayTypes.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
