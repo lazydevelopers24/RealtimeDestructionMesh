@@ -29,10 +29,10 @@ public:
 	// Root: BoxComponent(물리 담당)
 	// ProceduralMesh는 Rendering 담당
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Debris")
-	UBoxComponent* CollisionBox;
+	TObjectPtr<UBoxComponent> CollisionBox;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Debris")
-	UProceduralMeshComponent* DebrisMesh;
+	TObjectPtr<UProceduralMeshComponent> DebrisMesh;
 
 	// Replicated Properties
 
@@ -59,7 +59,7 @@ public:
 
 	/** 원본 메시 소유 Actor (CellID로 debirs 생성할 때 필요) */
 	UPROPERTY(Replicated)
-	AActor* SourceMeshOwner;
+	TObjectPtr<AActor> SourceMeshOwner;
 
 	/** 원본 청크 인덱스 */
 	UPROPERTY(Replicated)
@@ -67,7 +67,7 @@ public:
 	
 	/** 머티리얼 */
 	UPROPERTY(Replicated)
-	UMaterialInterface* DebrisMaterial;
+	TObjectPtr<UMaterialInterface> DebrisMaterial;
 
 	// Settings
 	UPROPERTY(EditDefaultsOnly, Category = "Debris")

@@ -1128,7 +1128,7 @@ private:
 
 	/** 로컬 메쉬보다 Actor가 먼저 도착한 경우 대기 */
 	UPROPERTY()
-	TMap<int32, ADebrisActor*> PendingDebrisActors;
+	TMap<int32, TObjectPtr<ADebrisActor>> PendingDebrisActors;
 	
 	/** Debris 물리 동기화 타이머 */
 	FTimerHandle DebrisPhysicsSyncTimerHandle;
