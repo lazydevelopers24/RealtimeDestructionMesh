@@ -958,6 +958,11 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
+
+	/** Detached Cell 제거 시 HC Laplacian Smoothing (Vollmer et al., 1999) 적용 (계단 현상 완화)
+ * @param Mesh - 스무딩할 ToolMesh
+ */
+	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh);
 private:
 	/** ProceduralMeshComponent에 메시 섹션 생성 */
 	void CreateDebrisMeshSections(
@@ -994,10 +999,7 @@ public:
 	UFUNCTION(CallInEditor, BlueprintCallable, Category = "RealtimeDestructibleMesh", meta = (DisplayName = "Revert Chunks"))
 	void RevertChunksToSourceMesh();
 
-	/** Detached Cell 제거 시 HC Laplacian Smoothing (Vollmer et al., 1999) 적용 (계단 현상 완화)
-	 * @param Mesh - 스무딩할 ToolMesh
-	 */
-	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh);
+
 private:
 	/**
 	 * SourceStaticMesh로부터 GeometryCollection을 생성하고 슬라이싱합니다.

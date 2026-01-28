@@ -528,7 +528,7 @@ protected:
 	bool bShowVisualization = true;
 
 	UPROPERTY()
-	bool bShowHUD = true;
+	bool bShowHUD = false;
 
 	UPROPERTY()
 	int32 MaxHistorySize = 100;
