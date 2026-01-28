@@ -19,8 +19,11 @@
 #include "Algo/Sort.h"
 #include <algorithm> // std::lower_bound
 #include "Engine/World.h"
+#include "Actors/DebrisActor.h"
+#include "Components/BoxComponent.h"
 
-#include "DynamicMesh/MeshNormals.h"
+#include "DynamicMesh/MeshNormals.h" 
+#include "DrawDebugHelpers.h"
 
 // GeometryCollection
 #include "GeometryCollection/GeometryCollectionObject.h"
@@ -55,6 +58,7 @@
 #if WITH_EDITOR
 #include "Selection.h"
 #endif
+#include "HeadMountedDisplayTypes.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
@@ -334,6 +338,9 @@ bool URealtimeDestructibleMeshComponent::RequestDestruction(const FRealtimeDestr
 bool URealtimeDestructibleMeshComponent::ExecuteDestructionInternal(const FRealtimeDestructionRequest& Request)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE("ExecuteDestructionInternal")
+	
+	// 벽 무너지는거 자연스럽게 하기 위해 forward를 캐싱해놓기
+	CachedToolForwardVector = Request.ToolForwardVector;
 
 	// 데디케이티드 서버에서는 Boolean 연산 스킵 (시각적 처리 불필요)
 	// Cell 상태만 업데이트하고 콜리전 갱신은 별도 처리
@@ -647,13 +654,24 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
 
 		// 분리된 셀의 삼각형 삭제 (데디서버: 렌더링 불필요, Cell Box만 업데이트)
-		if (!GetWorld() || GetWorld()->GetNetMode() != NM_DedicatedServer)
-		{
+ 		{
+			const ENetMode NetMode = GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone; 
 			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_Phase4);
 
-			for (const TArray<int32>& Group : NewDetachedGroups)
+			// dedicated server는 메시 연산없이 메타 데이터만으로 actor 스폰
+			if (NetMode == NM_DedicatedServer)
 			{
-				RemoveTrianglesForDetachedCells(Group);			
+				for (const TArray<int32>& Group : NewDetachedGroups)
+				{
+					SpawnDebrisActorForDedicatedServer(Group);
+				}
+			}
+			else
+			{
+				for (const TArray<int32>& Group : NewDetachedGroups)
+				{
+					RemoveTrianglesForDetachedCells(Group);
+				}
 			}
 		}
 		CellState.MoveAllDetachedToDestroyed();
@@ -1028,7 +1046,8 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 		ChunkComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		ChunkComp->SetCollisionObjectType(ECC_WorldStatic);
 		ChunkComp->SetCollisionResponseToAllChannels(ECR_Ignore);
-		ChunkComp->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);  // Pawn만 Block
+		ChunkComp->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+		ChunkComp->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);  // Debris와 충돌
 		ChunkComp->SetCanEverAffectNavigation(false);  // NavMesh 영향 없음
 		ChunkComp->SetIsReplicated(true);  // 네트워크 MovementBase 참조 지원
 
@@ -1040,6 +1059,7 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 			BI->SetObjectType(ECC_WorldStatic);
 			BI->SetResponseToAllChannels(ECR_Ignore);
 			BI->SetResponseToChannel(ECC_Pawn, ECR_Block);
+			BI->SetResponseToChannel(ECC_PhysicsBody, ECR_Block);  // Debris와 충돌
 			BI->bSimulatePhysics = false;
 			BI->bEnableGravity = false;
 		}
@@ -1140,6 +1160,7 @@ void URealtimeDestructibleMeshComponent::BuildCollisionChunkBodySetup(int32 Chun
 		ChunkBodyInstance->SetObjectType(ECC_WorldStatic);
 		ChunkBodyInstance->SetResponseToAllChannels(ECR_Ignore);
 		ChunkBodyInstance->SetResponseToChannel(ECC_Pawn, ECR_Block);
+		ChunkBodyInstance->SetResponseToChannel(ECC_PhysicsBody, ECR_Block);  // Debris와 충돌
 
 		// 물리 시뮬레이션 비활성화 (정적 콜리전)
 		ChunkBodyInstance->bSimulatePhysics = false;
@@ -1318,10 +1339,12 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	for (int32 CellId : DetachedCellIds)
 	{
 		const FVector LocalMin = GridCellLayout.IdToLocalMin(CellId);
+		const FVector Origin = GridCellLayout.GridOrigin;
+
 		FIntVector GridPos(
-			FMath::FloorToInt(LocalMin.X / CellSizeVec.X),
-			FMath::FloorToInt(LocalMin.Y / CellSizeVec.Y),
-			FMath::FloorToInt(LocalMin.Z / CellSizeVec.Z)
+			FMath::FloorToInt((LocalMin.X - Origin.X)/ CellSizeVec.X),
+			FMath::FloorToInt((LocalMin.Y - Origin.Y)/ CellSizeVec.Y),
+			FMath::FloorToInt((LocalMin.Z - Origin.Z) / CellSizeVec.Z)
 		);
 		BaseCells.Add(GridPos);
 	}
@@ -1426,7 +1449,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 
 
 	// 3. 각 조각별로 ToolMesh 생성 + Enqueue
-	const double BoxExpand = 1.0;
+	const double BoxExpand = 1.0f;
 	UE_LOG(LogTemp, Warning, TEXT("Final Piceses : %d"), FinalPieces.Num());
 
 	// 이진탐색용 비교 함수
@@ -1458,12 +1481,10 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 				const FIntVector* End = Start + Piece.Num();
 				const FIntVector* It = std::lower_bound(Start, End, Value, VoxelLess);
 				return It != End && *It == Value;
-			};
-
-
+			}; 
 
 		// Greedy Mesh 생성 (정렬된 TArray를 직접 전달)
-		FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(Piece, CellSizeVec, BoxExpand);
+		FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(Piece, GridCellLayout.GridOrigin, CellSizeVec, BoxExpand);
 
 		if (ToolMesh.TriangleCount() == 0)
 		{
@@ -1603,17 +1624,20 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		for (int32 i = 0; i < GetChunkNum(); i++)
 		{
 			if (ChunkMeshComponents[i] && ChunkMeshComponents[i]->GetMesh())
-			{
+			{ 
 				if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
-				{
-					if (ChunkMeshComponents[i]->GetMesh()->GetBounds().Intersects(ToolBounds))
-					{
-						OverlappingChunks.Add(i);
-					}
+	  			{
 					OverlappingChunks.Add(i);
-				}
+				} 
 			}
 		}
+		 
+		UE_LOG(LogTemp, Warning, TEXT("Piece %d/%d: CellCount=%d, OverlappingChunks=%d, ChunkIndices=[%s]"),
+			FinalPieces.IndexOfByKey(Piece),
+			FinalPieces.Num(),
+			Piece.Num(),
+			OverlappingChunks.Num(),
+			*FString::JoinBy(OverlappingChunks, TEXT(","), [](int32 x) { return FString::FromInt(x); }));
 
 		if (OverlappingChunks.Num() == 0)
 		{
@@ -1622,7 +1646,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 
 		TSharedPtr<FIslandRemovalContext> Context = nullptr;
 
-		if (Piece.Num() >= MinCellsForDebris)
+		//if (Piece.Num() >= MinCellsForDebris)
 		{
 			Context = MakeShared<FIslandRemovalContext>();
 			Context->Owner = this;
@@ -1635,17 +1659,24 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			{
 				TRACE_CPUPROFILER_EVENT_SCOPE(Debris_EnqueueIslandRemoval);
 				//BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, Context);
+
+				UE_LOG(LogTemp, Warning, TEXT("EnqueueIslandRemoval: Piece=%d, ChunkIndex=%d, ToolMesh Tris=%d, Context=%p"),
+					FinalPieces.IndexOfByKey(Piece),
+					ChunkIndex,
+					SharedToolMesh->TriangleCount(),
+					Context.Get());
+
+
 				BooleanProcessor->EnqueueIslandRemoval(ChunkIndex, SharedToolMesh, SharedDebrisToolMesh, Context);
 			}
-		}
-		return true;
+		} 
 	}
 
 	return true;
 
 	
 }
-FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellSize, double InBoxExpand)
+FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_GenerateGreedyMeshFromVoxels);
 
@@ -1731,9 +1762,9 @@ FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(c
 			}
 
 			FVector3d VertexPos(
-				Corner.X * InCellSize.X + ExpX,
-				Corner.Y * InCellSize.Y + ExpY,
-				Corner.Z * InCellSize.Z + ExpZ
+				InCellOrigin.X + Corner.X * InCellSize.X + ExpX,
+				InCellOrigin.Y + Corner.Y * InCellSize.Y + ExpY,
+				InCellOrigin.Z + Corner.Z * InCellSize.Z + ExpZ
 			);
 
 			int32 NewId = ResultMesh.AppendVertex(VertexPos);
@@ -1966,10 +1997,13 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source
 	// -------------------------------------------------------------------------
 
 	// 데디케이티드 서버에서는 렌더링/물리 처리 스킵 (시각적 요소 불필요)
-	if (IsRunningDedicatedServer())
-	{
-		return;
-	}
+	//if (IsRunningDedicatedServer())
+	//{
+	//	return;
+	//}
+
+		// Dedicated Server 체크
+	const bool bIsDedicatedServer = GetWorld() && GetWorld()->GetNetMode() == NM_DedicatedServer;
 
 	// 빈 메시 체크
 	if (Source.TriangleCount() == 0 || Source.VertexCount() == 0)
@@ -1989,6 +2023,10 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source
 	// -------------------------------------------------------------------------
 	// - 메시의 중심점(Centroid)을 기준으로 액터를 스폰
 	// - 정점 좌표는 이 중심점 기준 상대 좌표로 변환하여 저장
+
+	UE_LOG(LogTemp, Warning, TEXT("=== SpawnDebrisActor START === TriCount=%d, VertCount=%d"),
+		Source.TriangleCount(),
+		Source.VertexCount());
 
 	FAxisAlignedBox3d MeshBounds = Source.GetBounds();
 	FVector3d MeshCenter = MeshBounds.Center();
@@ -2059,16 +2097,7 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source
 	// - ProceduralMeshComponent는 Section별로 정점 배열이 독립적
 	// - 따라서 각 그룹별로 정점을 재매핑해야 함
 	// - 정점 좌표는 스폰 위치(MeshCenter) 기준 상대 좌표로 변환
-
-	struct FMeshSectionData
-	{
-		TArray<FVector> Vertices;           // 정점 위치 (상대 좌표)
-		TArray<int32> Triangles;            // 삼각형 인덱스
-		TArray<FVector> Normals;            // 정점 노말
-		TArray<FVector2D> UVs;              // UV 좌표
-		TMap<FVertexKey, int32> VertexRemap;     // 원본 VertexID → 섹션 내 새 인덱스
-	};
-
+	
 	TMap<int32, FMeshSectionData> SectionDataByMaterial;
 
 	// 노말 속성 확인
@@ -2171,165 +2200,462 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source
 	// - 파괴 시스템이 Deterministic이므로 서버와 클라이언트의 호출 순서가 동일
 	// - 따라서 NextDebrisId를 동일하게 증가시키면 같은 ID가 부여됨
 
-	const int32 DebrisId = NextDebrisId++;
 
-	// -------------------------------------------------------------------------
-	// 7. Debris Actor 및 ProceduralMeshComponent 생성
-	// -------------------------------------------------------------------------
+	// 7. 서버/클라이언트 분기 처리
+	const bool bIsServer = GetOwner() && GetOwner()->HasAuthority();
 
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	AActor* DebrisActor = World->SpawnActor<AActor>(AActor::StaticClass(), SpawnLocation, FRotator::ZeroRotator, SpawnParams);
-	if (!DebrisActor)
+	// Bounding Box 먼저 계산 (동기화 여부 결정용)
+	FBox DebrisBounds(ForceInit);
+	for (const auto& Pair : SectionDataByMaterial)
 	{
-		UE_LOG(LogTemp, Error, TEXT("SpawnDebrisActor: Failed to spawn actor"));
+		for (const FVector& Vert : Pair.Value.Vertices)
+		{
+			DebrisBounds += Vert;
+		}
+	}
+	FVector BoxExtent = DebrisBounds.GetExtent(); 
+	BoxExtent = BoxExtent.ComponentMax(FVector(1.0f, 1.0f, 1.0f));
+
+	const bool bShouldSync = BoxExtent.GetMax() >= MinDebrisSyncSize; 
+
+	if (bIsServer && bShouldSync)
+	{
+		const int32 DebrisId = NextDebrisId++;
+
+		// Server: Spawn Debris Actor ( 클라이언트로 자동 복제 ) 
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn; // 위치가 뭐가 있어도 일단 생성하자
+
+		ADebrisActor* DebrisActor = World->SpawnActor<ADebrisActor>(
+		ADebrisActor::StaticClass(),
+		SpawnLocation,
+		ComponentTransform.GetRotation().Rotator(),
+		SpawnParams
+		);
+
+		if (!DebrisActor)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] Failed To Spawn ADebrisActor"));
+			return;
+		}
+
+		// 스케일 설정
+		DebrisActor->SetActorScale3D(ComponentTransform.GetScale3D());
+
+		// Material;
+		UMaterialInterface* DebrisMaterial = Materials.Num() > 0 ? Materials[0] : nullptr;
+
+		// Init Debris Actor
+		DebrisActor->InitializeDebris(DebrisId, TArray<int32>() , INDEX_NONE, this, DebrisMaterial);
+
+
+		if (!bIsDedicatedServer)
+		{
+			CreateDebrisMeshSections(DebrisActor->DebrisMesh, SectionDataByMaterial, Materials);
+		}
+		DebrisActor->SetCollisionBoxExtent(BoxExtent);
+		DebrisActor->EnablePhysics();
+		ApplyDebrisPhysics(DebrisActor->CollisionBox, SpawnLocation, BoxExtent);
+
+		ActiveDebrisActors.Add(DebrisId, DebrisActor);
+
+		if (bDebugDrawDebris)
+		{
+			DrawDebugBox(
+				GetWorld(),
+				SpawnLocation,
+				BoxExtent,
+				FColor::Green,
+				false,
+				DebugDrawDuration,
+				0,
+				2.0f
+			);
+		}
+		UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] Server: SpawnDebrisActor: ADebrisActor spawned, DebrisId=%d"), DebrisId);
+	}
+	else if (!bIsServer && bShouldSync)
+	{
+		// ========================================================================
+		// 클라이언트 + 큰 조각: 서버 타입에 따라 분기
+		// ========================================================================
+
+		if (bServerIsDedicatedServer)
+		{
+			// ----------------------------------------------------------------
+			// 데디서버 클라이언트: 로컬 메시 생성 스킵
+			// ----------------------------------------------------------------
+			// 서버에서 복제된 ADebrisActor의 OnRep_DebrisParams에서
+			// CellIds 기반으로 GenerateMeshFromCells() 호출하여 메시 생성
+			// DebrisId도 생성하지 않음 (서버 Actor의 ID 사용)
+
+			UE_LOG(LogTemp, Log, TEXT("[Client-Dedicated] SpawnDebrisActor: Skipping local mesh - will use CellIds from replicated ADebrisActor"));
+		}
+		else
+		{
+			// ----------------------------------------------------------------
+			// Listen 서버 클라이언트: 기존 로컬 메시 생성 및 등록
+			// ----------------------------------------------------------------
+			// 서버와 동일한 SpawnDebrisActor 경로이므로 DebrisId 동기화됨
+
+			const int32 DebrisId = NextDebrisId++;
+
+			FActorSpawnParameters SpawnParams;
+			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+			// 임시 Actor 생성 (메시 보관용)
+			AActor* TempActor = World->SpawnActor<AActor>(AActor::StaticClass(), SpawnLocation, FRotator::ZeroRotator, SpawnParams);
+			if (!TempActor)
+			{
+				return;
+			}
+
+			UProceduralMeshComponent* LocalMesh = NewObject<UProceduralMeshComponent>(
+				TempActor, UProceduralMeshComponent::StaticClass(), TEXT("LocalDebrisMesh"));
+			LocalMesh->SetMobility(EComponentMobility::Movable);
+
+			CreateDebrisMeshSections(LocalMesh, SectionDataByMaterial, Materials);
+
+			TempActor->SetRootComponent(LocalMesh);
+			LocalMesh->RegisterComponent();
+			TempActor->AddInstanceComponent(LocalMesh);
+
+			// Transform 설정
+			TempActor->SetActorLocation(SpawnLocation);
+			TempActor->SetActorRotation(ComponentTransform.GetRotation());
+			TempActor->SetActorScale3D(ComponentTransform.GetScale3D());
+
+			// 로컬 메시 등록 (ADebrisActor 도착 시 매칭용)
+			RegisterLocalDebris(DebrisId, LocalMesh);
+
+			// 임시 Actor는 일단 숨김 (ADebrisActor 매칭 후 삭제 예정)
+			TempActor->SetActorHiddenInGame(true);
+
+			if (bDebugDrawDebris)
+			{
+				DrawDebugBox(
+					GetWorld(),
+					SpawnLocation,
+					BoxExtent,
+					FColor::Green,
+					false,
+					DebugDrawDuration,
+					0,
+					2.0f
+				);
+			}
+			UE_LOG(LogTemp, Warning, TEXT("[Client-Listen] SpawnDebrisActor: Local mesh registered, DebrisId=%d"), DebrisId);
+		}
+	}
+	else
+	{
+		// 로컬 전용 
+		if (!bIsDedicatedServer)
+		{
+			CreateLocalOnlyDebrisActor(World, SpawnLocation, BoxExtent, SectionDataByMaterial, Materials);
+			UE_LOG(LogTemp, Log, TEXT("[Debris] Local-only debris (no sync) - Size=%f"), BoxExtent.GetMax());
+
+			if (bDebugDrawDebris)
+			{
+				FVector BoxCenter = SpawnLocation;
+
+				DrawDebugBox(
+					GetWorld(),
+					BoxCenter,
+					BoxExtent,
+					FColor::Red,
+					false,              // bPersistent
+					DebugDrawDuration,  // LifeTime
+					0,                  // DepthPriority
+					2.0f                // Thickness
+				);
+			}
+		}
+	}
+	
+	// -------------------------------------------------------------------------
+	// 11. 수명 설정 및 로그
+	// -------------------------------------------------------------------------
+	
+	// 10초 후 자동 삭제 (메모리 관리)
+	//DebrisActor->SetLifeSpan(10.0f); 
+}
+
+void URealtimeDestructibleMeshComponent::SpawnDebrisActorForDedicatedServer(const TArray<int32>& DetachedCellIds)
+{
+	if (DetachedCellIds.Num() == 0)
+	{
 		return;
 	}
 
-	UProceduralMeshComponent* ProcMesh = NewObject<UProceduralMeshComponent>(
-		DebrisActor,
-		UProceduralMeshComponent::StaticClass(),
-		TEXT("DebrisMesh")
-	);
-	ProcMesh->SetMobility(EComponentMobility::Movable);
-	ProcMesh->bUseComplexAsSimpleCollision = false;
-
-	// -------------------------------------------------------------------------
-	// 7. 각 머티리얼 그룹별 메시 섹션 생성
-	// -------------------------------------------------------------------------
-	// - Section 인덱스 = MaterialID (머티리얼 슬롯과 1:1 매칭)
-	// - 이렇게 해야 Materials 배열의 순서와 일치
-
-	// Collision용 전체 정점 수집 (모든 섹션의 정점을 하나로 합침)
-	TArray<FVector> AllVerticesForCollision;
-
-	for (const auto& Pair : SectionDataByMaterial)
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		int32 MaterialId = Pair.Key;
-		const FMeshSectionData& SectionData = Pair.Value;
+		return;
+	}
 
-		if (SectionData.Vertices.Num() < 3 || SectionData.Triangles.Num() < 3)
+	// 서버 권한 체크
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	FTransform ComponentTransform = GetComponentTransform();
+	const FVector CellSizeVec = GridCellLayout.CellSize;
+
+	// =========================================================================
+	// 1. CellIds를 Grid 좌표로 변환
+	// =========================================================================
+	TSet<FIntVector> BaseCells;
+	for (int32 CellId : DetachedCellIds)
+	{
+		const FVector LocalMin = GridCellLayout.IdToLocalMin(CellId);
+		const FVector Origin = GridCellLayout.GridOrigin;
+
+		FIntVector GridPos(
+			FMath::FloorToInt((LocalMin.X - Origin.X) / CellSizeVec.X),
+			FMath::FloorToInt((LocalMin.Y - Origin.Y) / CellSizeVec.Y),
+			FMath::FloorToInt((LocalMin.Z - Origin.Z) / CellSizeVec.Z)
+		);
+		BaseCells.Add(GridPos);
+	}
+
+	// =========================================================================
+	// 2. Split 로직 (DebrisSplitCount 기반)
+	// =========================================================================
+	TArray<TArray<FIntVector>> FinalPieces;
+
+	if (DebrisSplitCount <= 1 || BaseCells.Num() <= 1)
+	{
+		FinalPieces.Add(BaseCells.Array());
+	}
+	else
+	{
+		struct FPieceRange
+		{
+			int32 Start;
+			int32 End;
+			int32 Num() const { return End - Start; }
+		};
+
+		TArray<FIntVector> AllCells = BaseCells.Array();
+		TArray<FPieceRange> Ranges;
+		Ranges.Add({ 0, AllCells.Num() });
+
+		while (Ranges.Num() < DebrisSplitCount)
+		{
+			// 가장 큰 조각 찾기
+			int32 LargestIdx = 0;
+			for (int32 i = 1; i < Ranges.Num(); i++)
+			{
+				if (Ranges[i].Num() > Ranges[LargestIdx].Num())
+				{
+					LargestIdx = i;
+				}
+			}
+
+			if (Ranges[LargestIdx].Num() <= 1)
+			{
+				break;
+			}
+
+			FPieceRange& Range = Ranges[LargestIdx];
+
+			// 바운딩박스 계산 + 가장 긴 축 찾기
+			FIntVector MinBB(TNumericLimits<int32>::Max());
+			FIntVector MaxBB(TNumericLimits<int32>::Lowest());
+			for (int32 i = Range.Start; i < Range.End; i++)
+			{
+				MinBB.X = FMath::Min(MinBB.X, AllCells[i].X);
+				MinBB.Y = FMath::Min(MinBB.Y, AllCells[i].Y);
+				MinBB.Z = FMath::Min(MinBB.Z, AllCells[i].Z);
+				MaxBB.X = FMath::Max(MaxBB.X, AllCells[i].X);
+				MaxBB.Y = FMath::Max(MaxBB.Y, AllCells[i].Y);
+				MaxBB.Z = FMath::Max(MaxBB.Z, AllCells[i].Z);
+			}
+
+			int32 ExtX = MaxBB.X - MinBB.X;
+			int32 ExtY = MaxBB.Y - MinBB.Y;
+			int32 ExtZ = MaxBB.Z - MinBB.Z;
+			int32 SplitAxis = (ExtX >= ExtY && ExtX >= ExtZ) ? 0 : (ExtY >= ExtZ ? 1 : 2);
+
+			int32 MidIdx = Range.Start + Range.Num() / 2;
+			auto GetAxisValue = [SplitAxis](const FIntVector& V) -> int32
+			{
+				return SplitAxis == 0 ? V.X : (SplitAxis == 1 ? V.Y : V.Z);
+			};
+
+			// 가장 긴 축 기준 정렬
+			TArrayView<FIntVector> SortView(&AllCells[Range.Start], Range.Num());
+			SortView.Sort([&](const FIntVector& A, const FIntVector& B)
+			{
+				return GetAxisValue(A) < GetAxisValue(B);
+			});
+
+			if (MidIdx == Range.Start || MidIdx == Range.End)
+			{
+				break;
+			}
+
+			// Range를 둘로 분할
+			int32 OldEnd = Range.End;
+			Range.End = MidIdx;
+			Ranges.Add({ MidIdx, OldEnd });
+		}
+
+		// 각 범위를 TArray로 복사
+		for (const FPieceRange& Range : Ranges)
+		{
+			TArray<FIntVector> PieceArr(&AllCells[Range.Start], Range.Num());
+			FinalPieces.Add(MoveTemp(PieceArr));
+		}
+	}
+
+	// =========================================================================
+	// 3. 각 조각별로 Debris Actor 스폰
+	// =========================================================================
+	UMaterialInterface* DebrisMaterial = GetMaterial(0);
+
+	for (const TArray<FIntVector>& Piece : FinalPieces)
+	{
+		if (Piece.Num() == 0)
 		{
 			continue;
 		}
 
-		// 메시 섹션 생성 (Section Index = MaterialID)
-		ProcMesh->CreateMeshSection_LinearColor(
-			MaterialId,                         // Section Index
-			SectionData.Vertices,               // 정점
-			SectionData.Triangles,              // 삼각형 인덱스
-			SectionData.Normals,                // 노말
-			SectionData.UVs,                    // UV
-			TArray<FLinearColor>(),             // 정점 컬러 (미사용)
-			TArray<FProcMeshTangent>(),         // 탄젠트 (자동 계산)
-			false                               // Collision 생성 여부 (나중에 별도 처리)
+		// Grid 좌표를 CellId로 변환
+		TArray<int32> PieceCellIds;
+		PieceCellIds.Reserve(Piece.Num());
+		for (const FIntVector& GridPos : Piece)
+		{
+			if (GridCellLayout.IsValidCoord(GridPos))
+			{
+				PieceCellIds.Add(GridCellLayout.CoordToId(GridPos));
+			}
+		}
+
+		if (PieceCellIds.Num() == 0)
+		{
+			continue;
+		}
+
+		// 바운딩박스 계산
+		FBox CellBounds(ForceInit);
+		for (int32 CellId : PieceCellIds)
+		{
+			FVector CellMin = GridCellLayout.IdToLocalMin(CellId);
+			FVector CellMax = CellMin + GridCellLayout.CellSize;
+			CellBounds += CellMin;
+			CellBounds += CellMax;
+		}
+
+		FVector LocalCenter = CellBounds.GetCenter();
+		FVector SpawnLocation = ComponentTransform.TransformPosition(LocalCenter);
+		FVector BoxExtent = CellBounds.GetExtent();
+		BoxExtent = BoxExtent.ComponentMax(FVector(1.0f, 1.0f, 1.0f));
+
+		// 동기화 여부 판정 (작은 조각은 스킵)
+		if (BoxExtent.GetMax() < MinDebrisSyncSize)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DediServer] Debris piece too small, skipping - Size=%f"), BoxExtent.GetMax());
+			continue;
+		}
+
+		// Debris ID 생성
+		const int32 DebrisId = NextDebrisId++;
+
+		// Debris Actor 스폰
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		ADebrisActor* DebrisActor = World->SpawnActor<ADebrisActor>(
+			ADebrisActor::StaticClass(),
+			SpawnLocation,
+			ComponentTransform.GetRotation().Rotator(),
+			SpawnParams
 		);
 
-		// 머티리얼 적용
-		if (Materials.IsValidIndex(MaterialId) && Materials[MaterialId])
+		if (!DebrisActor)
 		{
-			ProcMesh->SetMaterial(MaterialId, Materials[MaterialId]);
-		}
-		else if (Materials.Num() > 0 && Materials[0])
-		{
-			// MaterialID에 해당하는 머티리얼이 없으면 첫 번째 머티리얼 사용
-			ProcMesh->SetMaterial(MaterialId, Materials[0]);
+			UE_LOG(LogTemp, Warning, TEXT("[DediServer] Failed to spawn ADebrisActor"));
+			continue;
 		}
 
-		// Collision용 정점 수집
-		AllVerticesForCollision.Append(SectionData.Vertices);
+		DebrisActor->SetActorScale3D(ComponentTransform.GetScale3D());
+
+		// CellIds 전달 - 클라이언트가 이걸로 메시 생성
+		DebrisActor->InitializeDebris(DebrisId, PieceCellIds, INDEX_NONE, this, DebrisMaterial);
+
+		// 콜리전 및 물리 설정
+		DebrisActor->SetCollisionBoxExtent(BoxExtent);
+		DebrisActor->EnablePhysics();
+		ApplyDebrisPhysics(DebrisActor->CollisionBox, SpawnLocation, BoxExtent);
+
+		// 추적 맵에 추가
+		ActiveDebrisActors.Add(DebrisId, DebrisActor);
+
+		UE_LOG(LogTemp, Warning, TEXT("[DediServer] SpawnDebrisActorForDedicatedServer: DebrisId=%d, CellCount=%d, Location=%s, Material=%s"),
+			DebrisId, PieceCellIds.Num(), *SpawnLocation.ToString(), DebrisMaterial ? *DebrisMaterial->GetName() : TEXT("NULL"));
+	}
+}
+
+void URealtimeDestructibleMeshComponent::RegisterLocalDebris(int32 InDebrisId, UProceduralMeshComponent* Mesh)
+{
+	if (!Mesh || InDebrisId == INDEX_NONE)
+	{
+		return;
 	}
 
-	// -------------------------------------------------------------------------
-	// 8. 컴포넌트 등록 및 물리 설정
-	// -------------------------------------------------------------------------
-
-	// RootComponent 설정 → 등록 순서 중요
-	DebrisActor->SetRootComponent(ProcMesh);
-	ProcMesh->RegisterComponent();
-	DebrisActor->AddInstanceComponent(ProcMesh);
-
-	// Transform 설정 (원본 컴포넌트의 스케일/회전 적용)
-	// - 위치: 메시 중심의 월드 좌표
-	// - 회전: 원본 컴포넌트와 동일
-	// - 스케일: 원본 컴포넌트와 동일
-	DebrisActor->SetActorLocation(SpawnLocation);
-	DebrisActor->SetActorRotation(ComponentTransform.GetRotation());
-	DebrisActor->SetActorScale3D(ComponentTransform.GetScale3D());
-
-	if (bCanUsePhysics && AllVerticesForCollision.Num() >= 4)
+	// 이미 대기 중인 Actor가 있는 지 확인
+	if (ADebrisActor** FoundActor = PendingDebrisActors.Find(InDebrisId))
 	{
-		// Convex Collision 추가 (전체 정점 기반)
-		ProcMesh->AddCollisionConvexMesh(AllVerticesForCollision);
+		// Actor가 먼저 도착해서 대기 중이였으면, 바로 매칭
+		UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] Found pending actor for DebrisId=%d, applying mesh now"), InDebrisId);
 
-		// 질량 설정 (자동 계산 방지, 고정 질량 사용)
-		ProcMesh->SetMassOverrideInKg(NAME_None, 10.0f, true);
+		ADebrisActor* DebrisActor = *FoundActor;
+		PendingDebrisActors.Remove(InDebrisId);
 
-		// 충돌 및 물리 시뮬레이션 활성화
-		ProcMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		ProcMesh->SetCollisionResponseToAllChannels(ECR_Block);
-		ProcMesh->SetSimulatePhysics(true);
-		ProcMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		if (DebrisActor)
+		{
+			DebrisActor->ApplyLocalMesh(Mesh); 
+		}
 
-		// 초기 속도: 약간 아래로 (자연스러운 낙하 시작)
-		ProcMesh->SetPhysicsLinearVelocity(FVector(0, 0, -50.0f));
-
-		// 랜덤 회전 속도 (자연스러운 낙하 연출)
-		FVector RandomAngular(
-			FMath::RandRange(-45.0f, 45.0f),
-			FMath::RandRange(-45.0f, 45.0f),
-			FMath::RandRange(-45.0f, 45.0f)
-		);
-		ProcMesh->SetPhysicsAngularVelocityInDegrees(RandomAngular);
+		// TempActor 정리
+		AActor* TempActor = Mesh->GetOwner();
+		if (TempActor)
+		{
+			TempActor->Destroy();
+		}
 	}
 	else
 	{
-		// 물리 사용 불가 시: 충돌 비활성화, 렌더링만
-		ProcMesh->SetSimulatePhysics(false);
-		ProcMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	}
+		// 로컬 메쉬 먼저 등록 
+		LocalDebrisMeshMap.Add(InDebrisId, Mesh);
+		UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] RegisterLocalDebris - DebrisId=%d"), InDebrisId);
+	} 
+}
 
-	// -------------------------------------------------------------------------
-	// 10. Debris 추적 등록 및 물리 동기화 타이머 설정
-	// -------------------------------------------------------------------------
-	// - ActiveDebrisActors에 등록하여 물리 동기화 시 참조
-	// - 서버에서만 동기화 타이머 시작 (이미 실행 중이면 스킵)
-	//
-	// TODO [리팩토링 예정]: 아래 중앙 관리 방식 → ADebrisActor 자체 관리 방식으로 변경
-	//   - 현재: Component가 모든 Debris를 Map으로 추적하고 타이머로 동기화
-	//   - 변경: ADebrisActor가 자체 Replication 설정으로 동기화 (bReplicates 등)
-
-	ActiveDebrisActors.Add(DebrisId, DebrisActor);
-
-	// 서버에서 물리 동기화 타이머 시작 (아직 실행 중이 아닐 때만)
-	if (GetOwner() && GetOwner()->HasAuthority())
+void URealtimeDestructibleMeshComponent::RegisterPendingDebrisActor(int32 InDebrisId, ADebrisActor* Actor)
+{
+	if (Actor && InDebrisId != INDEX_NONE)
 	{
-		if (!DebrisPhysicsSyncTimerHandle.IsValid())
-		{
-			GetWorld()->GetTimerManager().SetTimer(
-				DebrisPhysicsSyncTimerHandle,
-				this,
-				&URealtimeDestructibleMeshComponent::BroadcastDebrisPhysicsState,
-				DebrisPhysicsSyncInterval,
-				true  // bLoop
-			);
-		}
+		PendingDebrisActors.Add(InDebrisId, Actor);
+		UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] Actor registered as pending - DebrisId=%d"), InDebrisId);
+	}
+}
+
+UProceduralMeshComponent* URealtimeDestructibleMeshComponent::FindAndRemoveLocalDebris(int32 InDebrisId)
+{
+	TObjectPtr<UProceduralMeshComponent> Found = nullptr;
+
+	if (LocalDebrisMeshMap.RemoveAndCopyValue(InDebrisId, Found))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Debris Actor] Found DebridId=%d") , InDebrisId);
+		return Found;
 	}
 
-	// -------------------------------------------------------------------------
-	// 11. 수명 설정 및 로그
-	// -------------------------------------------------------------------------
-
-	// 10초 후 자동 삭제 (메모리 관리)
-	DebrisActor->SetLifeSpan(10.0f);
-
-	UE_LOG(LogTemp, Log, TEXT("SpawnDebrisActor: ID=%d, Spawned at %s, Sections=%d, Verts=%d, Physics=%s"),
-		DebrisId,
-		*SpawnLocation.ToString(),
-		SectionDataByMaterial.Num(),
-		Source.VertexCount(),
-		bCanUsePhysics ? TEXT("ON") : TEXT("OFF"));
+	UE_LOG(LogTemp, Error, TEXT("[Debris Actor] Not Found DebridId=%d") , InDebrisId);
+	return nullptr;
 }
 
 void URealtimeDestructibleMeshComponent::BroadcastDebrisPhysicsState()
@@ -4159,6 +4485,12 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// 서버에서 데디케이티드 서버 여부 설정 (클라이언트로 복제됨)
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		bServerIsDedicatedServer = IsRunningDedicatedServer();
+	}
+
 	// 1. 하드웨어 정보
 	int32 PhysicalCores = FPlatformMisc::NumberOfCores();
 	int32 LogicalCores = FPlatformMisc::NumberOfCoresIncludingHyperthreads();
@@ -4440,6 +4772,9 @@ void URealtimeDestructibleMeshComponent::GetLifetimeReplicatedProps(TArray<FLife
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME_CONDITION(URealtimeDestructibleMeshComponent, AppliedOpHistory, COND_InitialOnly);
 	DOREPLIFETIME_CONDITION(URealtimeDestructibleMeshComponent, LateJoinDestroyedCells, COND_InitialOnly);
+
+	// 서버 타입 복제 (클라이언트가 Listen/Dedicated 구분용)
+	DOREPLIFETIME(URealtimeDestructibleMeshComponent, bServerIsDedicatedServer);
 }
 
 void URealtimeDestructibleMeshComponent::OnRep_LateJoinOpHistory()
@@ -5552,6 +5887,116 @@ int32 URealtimeDestructibleMeshComponent::GetMaterialIDFromFaceIndex(int32 FaceI
 
 	return 0;
 }
+
+void URealtimeDestructibleMeshComponent::CreateDebrisMeshSections(UProceduralMeshComponent* Mesh,
+	const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
+	const TArray<UMaterialInterface*>& InMaterials)
+{
+	if (!Mesh)
+	{
+		return;
+	}
+	
+	for (const auto& Pair : SectionDataByMaterial)
+	{
+		int32 MaterialId = Pair.Key;
+		const FMeshSectionData& SectionData = Pair.Value;
+
+		if (SectionData.Vertices.Num() < 3 || SectionData.Triangles.Num() < 3)
+		{
+			continue;
+		}
+
+		Mesh->CreateMeshSection_LinearColor(
+			MaterialId,
+			SectionData.Vertices,
+			SectionData.Triangles,
+			SectionData.Normals,
+			SectionData.UVs,
+			TArray<FLinearColor>(),
+			TArray<FProcMeshTangent>(),
+			false
+		);
+
+		if (InMaterials.IsValidIndex(MaterialId) && InMaterials[MaterialId])
+		{
+			Mesh->SetMaterial(MaterialId, InMaterials[MaterialId]);
+		}
+	}
+}
+
+AActor* URealtimeDestructibleMeshComponent::CreateLocalOnlyDebrisActor(UWorld* World, const FVector& SpawnLocation,
+	const FVector& BoxExtent, const TMap<int32, FMeshSectionData>& SectionDataByMaterial,  const TArray<UMaterialInterface*>& InMaterials)
+{
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	AActor* LocalActor = World->SpawnActor<AActor>(AActor::StaticClass(), SpawnLocation, FRotator::ZeroRotator, SpawnParams);
+	if (!LocalActor) return nullptr;
+
+	// BoxComponent
+	UBoxComponent* CollisionBox = NewObject<UBoxComponent>(LocalActor, TEXT("CollisionBox"));
+	CollisionBox->SetBoxExtent(BoxExtent);
+	CollisionBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	CollisionBox->SetCollisionObjectType(ECC_PhysicsBody);
+	CollisionBox->SetCollisionResponseToAllChannels(ECR_Block);
+	CollisionBox->SetHiddenInGame(true);
+	LocalActor->SetRootComponent(CollisionBox);
+	CollisionBox->RegisterComponent();
+
+	// ProceduralMesh
+	UProceduralMeshComponent* Mesh = NewObject<UProceduralMeshComponent>(LocalActor, TEXT("DebrisMesh"));
+	Mesh->SetupAttachment(CollisionBox);
+	Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Mesh->SetMobility(EComponentMobility::Movable);
+
+	CreateDebrisMeshSections(Mesh, SectionDataByMaterial, InMaterials);
+	
+	Mesh->RegisterComponent();
+	LocalActor->AddInstanceComponent(Mesh);
+
+	// Transform
+	FTransform ComponentTransform = GetComponentTransform();
+	LocalActor->SetActorLocation(SpawnLocation);
+	LocalActor->SetActorRotation(ComponentTransform.GetRotation());
+	LocalActor->SetActorScale3D(ComponentTransform.GetScale3D());
+
+	// Physics
+	ApplyDebrisPhysics(CollisionBox, SpawnLocation, BoxExtent);
+
+	// Lifespan
+	LocalActor->SetLifeSpan(10.0f);
+
+	return LocalActor;
+}
+  
+void URealtimeDestructibleMeshComponent::ApplyDebrisPhysics(UBoxComponent* CollisionBox, const FVector& SpawnLocation, const FVector& BoxExtent)
+{
+	if (!CollisionBox)
+	{
+		return;
+	}
+	float Volume = 8.0f * BoxExtent.X * BoxExtent.Y * BoxExtent.Z;
+	float CalcMass = Volume * DebrisDensity;
+	float FinalMass = FMath::Clamp(CalcMass, 0.001, 100.0f); 
+	float MassRatio = FinalMass / MaxDebrisMass;
+
+	// 물리 설정
+	CollisionBox->SetEnableGravity(true);
+	CollisionBox->SetMassOverrideInKg(NAME_None, FinalMass, true);
+	CollisionBox->SetSimulatePhysics(true);
+
+	// 초기 속도  
+	FVector Impulse = -CachedToolForwardVector * 20.0f + FVector(0, 0, 10.0f); 
+	CollisionBox->AddImpulse(Impulse);
+
+	FVector RandomAngular(
+		FMath::RandRange(-45.0f, 45.0f) * MassRatio,
+		FMath::RandRange(-45.0f, 45.0f) * MassRatio,
+		FMath::RandRange(-45.0f, 45.0f) * MassRatio );
+	CollisionBox->SetPhysicsAngularVelocityInDegrees(RandomAngular);
+}
+
 
 #if WITH_EDITOR
 void URealtimeDestructibleMeshComponent::GenerateDestructibleChunks()

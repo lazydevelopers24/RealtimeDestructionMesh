@@ -12,12 +12,14 @@
 #include "CoreMinimal.h"
 #include "Components/DynamicMeshComponent.h"
 #include "GeometryScript/MeshBooleanFunctions.h"
-#include "DestructionTypes.h"
+#include "DestructionTypes.h" 
 #include "StructuralIntegrity/GridCellTypes.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "RealtimeDestructibleMeshComponent.generated.h"
 
+class UBoxComponent;
+class UProceduralMeshComponent;
 class UGeometryCollection;
 class UStaticMesh;
 class UStaticMeshComponent;
@@ -25,8 +27,8 @@ class UMaterialInterface;
 class FLifetimeProperty;
 class FRealtimeBooleanProcessor;
 class UBulletClusterComponent;
-class UDecalMaterialDataAsset;
-
+class UDecalMaterialDataAsset; 
+class ADebrisActor;
 
 //////////////////////////////////////////////////////////////////////////
 // Destruction Types
@@ -275,6 +277,16 @@ struct FCollisionChunkData
 
 	/** 재빌드 필요 여부 */
 	bool bDirty = false;
+};
+
+
+struct FMeshSectionData
+{
+	TArray<FVector> Vertices;           // 정점 위치 (상대 좌표)
+	TArray<int32> Triangles;            // 삼각형 인덱스
+	TArray<FVector> Normals;            // 정점 노말
+	TArray<FVector2D> UVs;              // UV 좌표
+	TMap<FVertexKey, int32> VertexRemap;     // 원본 VertexID → 섹션 내 새 인덱스
 };
 
 /**
@@ -737,6 +749,10 @@ protected:
 	/** 서버 Cell Collision 초기화 완료 여부 */
 	bool bServerCellCollisionInitialized = false;
 
+	/** 서버가 데디케이티드 서버인지 여부 (클라이언트 분기 처리용, 복제됨) */
+	UPROPERTY(Replicated)
+	bool bServerIsDedicatedServer = false;
+
 	/** 서버 Cell Box Collision 초기화 (BeginPlay에서 호출) */
 	void BuildServerCellCollision();
 
@@ -841,7 +857,7 @@ public:
 	 * @return 제거 성공 여부
 	 */
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds);
-	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellSize, double InBoxExpand = 1.0f );
+	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity")
 	bool bOnSmooth = false;;
@@ -851,22 +867,48 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float DestroyRatioThresholdForDebris = 0.5f;
 
-	//TODO: 적절한 값들을 찾고 없앨 예정
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "1", ClampMax = "8"))
+	/** Debris의 밀도 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
+	float DebrisDensity = 0.05f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
+	float MaxDebrisMass = 50;
+	
+	FVector CachedToolForwardVector = FVector::ForwardVector;
+	 
+ 	//TODO: 적절한 값들을 찾고 없앨 예정
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 DebrisSplitCount = 1;
 
 	//TODO: 적절한 값들을 찾고 없앨 예정
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
-	int32 MinCellsForDebris = 1;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
+	float MinDebrisSyncSize = 5.0f;
 	//TODO: 적절한 값들을 찾고 없앨 예정
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
+	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
+	//int32 MinCellsForDebris = 1;
+	//TODO: 적절한 값들을 찾고 없앨 예정
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
 	float DebrisExpandOffset = 1.2f;
 	//TODO: 적절한 값들을 찾고 없앨 예정
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
 	float DebrisSpawnOffset = 0.7f;
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials);
 
+	/** 데디서버용 Spawn Debris */
+	void SpawnDebrisActorForDedicatedServer(const TArray<int32>& DetachedCellIds);
+
+	/** DebrisId 생성 */
+	int32 GenerateDebrisId() { return NextDebrisId++; }
+
+	/** 로컬 Debris 등록 (클라이언트) */
+	void RegisterLocalDebris(int32 InDebrisId, UProceduralMeshComponent* Mesh);
+	
+	/** Actor가 먼저 도착했을 때 대기열에 등록 */
+	void RegisterPendingDebrisActor(int32 InDebrisId, ADebrisActor* Actor);
+	
+	/** 로컬 Debris 찾기 및 제거 (클라이언트) */
+	UProceduralMeshComponent* FindAndRemoveLocalDebris(int32 InDebrisId);
+	
 	/** 작은 파편(고립된 Connected Component) 정리 */
 	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells); 
 
@@ -910,8 +952,31 @@ public:
 	
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
-
+private:
+	/** ProceduralMeshComponent에 메시 섹션 생성 */
+	void CreateDebrisMeshSections(
+		UProceduralMeshComponent* Mesh,
+        const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
+        const TArray<UMaterialInterface*>& InMaterials);
+	
+	/** 로컬 전용 Debris Actor 생성 (동기화 X) */
+	AActor* CreateLocalOnlyDebrisActor(
+		UWorld* World,
+		const FVector& SpawnLocation,
+		const FVector& BoxExtent,
+		const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
+		const TArray<UMaterialInterface*>& InMaterials
+	);
+	
+	/** Debris에 물리 및 초기 속도 적용 */
+	void ApplyDebrisPhysics(
+		 UBoxComponent* CollisionBox,
+		 const FVector& SpawnLocation,
+		 const FVector& BoxExtent
+	 );
+	
 #if WITH_EDITOR
+public:
 	/**
 	 * SourceStaticMesh로부터 GC를 생성하고 Chunk 메시를 빌드합니다.
 	 * 내부적으로 CreateFracturedGC()와 BuildChunksFromGC()를 호출합니다.
@@ -959,6 +1024,12 @@ protected:
 	/** Mesh Island 제거 시 ToolMesh/Intersection 와이어프레임 디버그 표시 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugMeshIslandRemoval = false;
+	 
+	/** 동기화 안 되는 작은 Debris를 빨간 박스로 표시 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
+	bool bDebugDrawDebris = false;
+	UPROPERTY()
+	float DebugDrawDuration = 5.0f;
 
 	/** 최근 직접 파괴된 셀 ID (디버그 강조 표시용) */
 	TSet<int32> RecentDirectDestroyedCellIds;
@@ -1052,6 +1123,13 @@ private:
 	/** 활성 Debris Actor 추적 (DebrisID → Actor) */
 	TMap<int32, TWeakObjectPtr<AActor>> ActiveDebrisActors;
 
+	/** 로컬 Debris 메시 맵 ( 클라이언트 용 ) */
+	TMap<int32, TObjectPtr<UProceduralMeshComponent>> LocalDebrisMeshMap; 
+
+	/** 로컬 메쉬보다 Actor가 먼저 도착한 경우 대기 */
+	UPROPERTY()
+	TMap<int32, ADebrisActor*> PendingDebrisActors;
+	
 	/** Debris 물리 동기화 타이머 */
 	FTimerHandle DebrisPhysicsSyncTimerHandle;
 

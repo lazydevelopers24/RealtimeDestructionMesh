@@ -497,6 +497,8 @@ void FRealtimeBooleanProcessor::KickSubtractWorker(int32 SlotIndex)
 	else
 	{
 		SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
+		UE_LOG(LogTemp, Warning, TEXT("Re-enqueued due to ChunkBusy! ChunkIndex=%d, Context=%p"),
+			UnionResult.ChunkIndex, UnionResult.IslandContext.Get());
 		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(UnionResult));
 	}
 }
@@ -689,10 +691,13 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				          }
 			          }
 
-			          if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
-			          {
-				          Processor->KickSubtractWorker(SlotIndex);
-			          }
+					  for (int i = 0; i < Processor->SlotSubtractQueues.Num(); ++i)
+					  {
+						  if (!Processor->SlotSubtractQueues[i]->IsEmpty())
+						  {
+							  Processor->KickSubtractWorker(i);
+						  }
+					  }		
 		          });
 	};
 
@@ -911,7 +916,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 								          Materials.Add(ChunkMesh->GetMaterial(i));
 							          }
 						          }
-			          
+
 						          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
 					          	//Context->Owner->CleanupSmallFragments();
 					          }
@@ -929,11 +934,16 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          Processor->ChunkHoleCount[ChunkIndex] += UnionCount;
 
 		          	WeakOwner->ClearChunkBusy(ChunkIndex);
-				    // If queue has work, re-kick.
-				    if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
-				    {
-					    Processor->KickSubtractWorker(SlotIndex);
-				    }
+					UE_LOG(LogTemp, Warning, TEXT("ClearChunkBusy: ChunkIndex=%d, QueueEmpty=%d"),
+						ChunkIndex, Processor->SlotSubtractQueues[SlotIndex]->IsEmpty());
+				    // If queue has work, re-kick. 
+					for (int32 i = 0; i < Processor->SlotSubtractQueues.Num(); i++)
+					{
+						if (!Processor->SlotSubtractQueues[i]->IsEmpty())
+						{
+							Processor->KickSubtractWorker(i);
+						}
+					}
 				    // Next kick.
 					Processor->KickProcessIfNeededPerChunk();
 		          });
@@ -966,10 +976,13 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			// 	Processor->SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
 			// }
 
-			if (!Processor->SlotSubtractQueues[SlotIndex]->IsEmpty())
+			for (int32 i = 0; i < Processor->SlotSubtractQueues.Num(); i++)
 			{
-				Processor->KickSubtractWorker(SlotIndex);
-			}
+				if (!Processor->SlotSubtractQueues[i]->IsEmpty())
+				{
+					Processor->KickSubtractWorker(i);
+				} 
+			} 
 		});
 	}
 }
@@ -1735,132 +1748,149 @@ bool FRealtimeBooleanProcessor::ApplyMeshBooleanAsync(const UE::Geometry::FDynam
 
 void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynamicMesh3* TargetMesh, FGeometryScriptPlanarSimplifyOptions Options, bool bEnableDetail)
 {
+
 	if (!TargetMesh)
 	{
 		return;
 	}
+	using namespace UE::Geometry;
 
-	if (bEnableDetail)
-	{
-		if (!TargetMesh->HasAttributes())
-		{
-			TargetMesh->EnableAttributes();
-		}
-	
-		FDynamicMeshAttributeSet* Attributes = TargetMesh->Attributes();
-		const bool bHasMaterialID = Attributes && Attributes->HasMaterialID();
-	
-		const FDynamicMeshMaterialAttribute* MaterialID = bHasMaterialID ? Attributes->GetMaterialID() : nullptr;
-		const FDynamicMeshUVOverlay* PrimaryUV = (Attributes) ? Attributes->PrimaryUV() : nullptr;
-	
-		// Flag to protect seam/material boundaries on the surface (MaterialID = 0).
-		// Disabled when no material IDs exist (surface detection not possible).
-		const bool bSurfaceOnlyProtection = bHasMaterialID;
-		const int32 SurfacematerialID = 0;
-	
-		// Lambda to check whether an edge belongs to surface (MatID = 0) triangles.
-		// Assumes it is only called when bSurfaceOnlyProtection is true.
-		auto EdgeTouchesSurface = [&](int32 EdgeID) -> bool
-		{
-			const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-			if (EdgeTris.A >= 0 && MaterialID->GetValue(EdgeTris.A) == SurfacematerialID)
-			{
-				return true;
-			}
-	
-			if (EdgeTris.B >= 0 && MaterialID->GetValue(EdgeTris.B) == SurfacematerialID)
-			{
-				return true;
-			}
-	
-			return false;
-		};
+	FQEMSimplification Simplifier(TargetMesh);
 
-		/*
-		 * Constraint setup: protect the following edges on surface (MatID = 0).
-		 * - UV Seam Edge (Primary UV Seam)
-		 * - MaterialID Boundary Edge
-		 * - Boundary edges (open edges) are protected by the global Simplifier.MeshBoundaryConstraint flag
-		 * - Interior (MatID = 1) allows seam collapse
-		 */
-		TOptional<FMeshConstraints> ExternalConstraints;
-		ExternalConstraints.Emplace();
-		FMeshConstraints& Constraints = ExternalConstraints.GetValue();
-		const FEdgeConstraint NoCollapseEdge(EEdgeRefineFlags::NoCollapse);
-	
-		// Surface protection logic runs only when MatID exists.
-		if (bSurfaceOnlyProtection)
-		{
-			// Iterate all edges and select protected ones.
-			for (int32 EdgeID : TargetMesh->EdgeIndicesItr())
-			{
-				// Skip boundary edges; protected by global flag.
-				if (TargetMesh->IsBoundaryEdge(EdgeID))
-				{
-					continue;
-				}
-	
-				// Skip non-surface edges.
-				if (!EdgeTouchesSurface(EdgeID))
-				{
-					continue;
-				}
-	
-				// Protect UV seam edges.
-				if (PrimaryUV && PrimaryUV->IsSeamEdge(EdgeID))
-				{
-					Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
-					continue;
-				}
-	
-				// Protect edges with different materials (material boundary).
-				const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-				if (EdgeTris.A >= 0 && EdgeTris.B >= 0)
-				{
-					const int32 MatA = MaterialID->GetValue(EdgeTris.A);
-					const int32 MatB = MaterialID->GetValue(EdgeTris.B);
-					if (MatA != MatB)
-					{
-						Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
-					}
-				}
-			}
-		}	
-	
-		FQEMSimplification Simplifier(TargetMesh);
-
-		// Protect boundary edges.
-		// Boundary edge: edge with only one adjacent triangle.
-		Simplifier.MeshBoundaryConstraint = EEdgeRefineFlags::NoCollapse;
-	
-		// Allow global seam collapse for interior simplification; surface seams are constrained externally.
-		Simplifier.bAllowSeamCollapse = true;
-	
-		/*	 
-		 * Simplify merges two vertices and must choose a new vertex position.
-		 * MinimalExistingVertexError picks an existing vertex as the merged position.
-		 * Other modes create new positions; repeated use can drift away from the surface.
-		 * This drift is called positional drift.
-		 */
-		Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::MinimalExistingVertexError;
-	
-		Simplifier.SetExternalConstraints(MoveTemp(ExternalConstraints));
-	
-		Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
-	}
-	else
-	{
-		FQEMSimplification Simplifier(TargetMesh);
-
-		Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::AverageVertexPosition;
-
-		Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
-	}
+	Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::AverageVertexPosition;
+	Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
 
 	if (Options.bAutoCompact)
 	{
 		TargetMesh->CompactInPlace();
 	}
+
+	//if (!TargetMesh)
+	//{
+	//	return;
+	//}
+
+	//if (bEnableDetail)
+	//{
+	//	if (!TargetMesh->HasAttributes())
+	//	{
+	//		TargetMesh->EnableAttributes();
+	//	}
+	//
+	//	FDynamicMeshAttributeSet* Attributes = TargetMesh->Attributes();
+	//	const bool bHasMaterialID = Attributes && Attributes->HasMaterialID();
+	//
+	//	const FDynamicMeshMaterialAttribute* MaterialID = bHasMaterialID ? Attributes->GetMaterialID() : nullptr;
+	//	const FDynamicMeshUVOverlay* PrimaryUV = (Attributes) ? Attributes->PrimaryUV() : nullptr;
+	//
+	//	// Flag to protect seam/material boundaries on the surface (MaterialID = 0).
+	//	// Disabled when no material IDs exist (surface detection not possible).
+	//	const bool bSurfaceOnlyProtection = bHasMaterialID;
+	//	const int32 SurfacematerialID = 0;
+	//
+	//	// Lambda to check whether an edge belongs to surface (MatID = 0) triangles.
+	//	// Assumes it is only called when bSurfaceOnlyProtection is true.
+	//	auto EdgeTouchesSurface = [&](int32 EdgeID) -> bool
+	//	{
+	//		const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
+	//		if (EdgeTris.A >= 0 && MaterialID->GetValue(EdgeTris.A) == SurfacematerialID)
+	//		{
+	//			return true;
+	//		}
+	//
+	//		if (EdgeTris.B >= 0 && MaterialID->GetValue(EdgeTris.B) == SurfacematerialID)
+	//		{
+	//			return true;
+	//		}
+	//
+	//		return false;
+	//	};
+
+	//	/*
+	//	 * Constraint setup: protect the following edges on surface (MatID = 0).
+	//	 * - UV Seam Edge (Primary UV Seam)
+	//	 * - MaterialID Boundary Edge
+	//	 * - Boundary edges (open edges) are protected by the global Simplifier.MeshBoundaryConstraint flag
+	//	 * - Interior (MatID = 1) allows seam collapse
+	//	 */
+	//	TOptional<FMeshConstraints> ExternalConstraints;
+	//	ExternalConstraints.Emplace();
+	//	FMeshConstraints& Constraints = ExternalConstraints.GetValue();
+	//	const FEdgeConstraint NoCollapseEdge(EEdgeRefineFlags::NoCollapse);
+	//
+	//	// Surface protection logic runs only when MatID exists.
+	//	if (bSurfaceOnlyProtection)
+	//	{
+	//		// Iterate all edges and select protected ones.
+	//		for (int32 EdgeID : TargetMesh->EdgeIndicesItr())
+	//		{
+	//			// Skip boundary edges; protected by global flag.
+	//			if (TargetMesh->IsBoundaryEdge(EdgeID))
+	//			{
+	//				continue;
+	//			}
+	//
+	//			// Skip non-surface edges.
+	//			if (!EdgeTouchesSurface(EdgeID))
+	//			{
+	//				continue;
+	//			}
+	//
+	//			// Protect UV seam edges.
+	//			if (PrimaryUV && PrimaryUV->IsSeamEdge(EdgeID))
+	//			{
+	//				Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
+	//				continue;
+	//			}
+	//
+	//			// Protect edges with different materials (material boundary).
+	//			const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
+	//			if (EdgeTris.A >= 0 && EdgeTris.B >= 0)
+	//			{
+	//				const int32 MatA = MaterialID->GetValue(EdgeTris.A);
+	//				const int32 MatB = MaterialID->GetValue(EdgeTris.B);
+	//				if (MatA != MatB)
+	//				{
+	//					Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
+	//				}
+	//			}
+	//		}
+	//	}	
+	//
+	//	FQEMSimplification Simplifier(TargetMesh);
+
+	//	// Protect boundary edges.
+	//	// Boundary edge: edge with only one adjacent triangle.
+	//	Simplifier.MeshBoundaryConstraint = EEdgeRefineFlags::NoCollapse;
+	//
+	//	// Allow global seam collapse for interior simplification; surface seams are constrained externally.
+	//	Simplifier.bAllowSeamCollapse = true;
+	//
+	//	/*	 
+	//	 * Simplify merges two vertices and must choose a new vertex position.
+	//	 * MinimalExistingVertexError picks an existing vertex as the merged position.
+	//	 * Other modes create new positions; repeated use can drift away from the surface.
+	//	 * This drift is called positional drift.
+	//	 */
+	//	Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::MinimalExistingVertexError;
+	//
+	//	Simplifier.SetExternalConstraints(MoveTemp(ExternalConstraints));
+	//
+	//	Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
+	//}
+	//else
+	//{
+	//	FQEMSimplification Simplifier(TargetMesh);
+
+	//	Simplifier.CollapseMode = FQEMSimplification::ESimplificationCollapseModes::AverageVertexPosition;
+
+	//	Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.00001, Options.AngleThreshold));
+	//}
+
+	//if (Options.bAutoCompact)
+	//{
+	//	TargetMesh->CompactInPlace();
+	//}
 }
 
 void FRealtimeBooleanProcessor::ApplyUniformRemesh(FDynamicMesh3* TargetMesh, double TargetEdgeLength, int32 NumPasses)

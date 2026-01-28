@@ -8,8 +8,8 @@ public class RealtimeDestruction : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		// PCHUsage = PCHUsageMode.NoPCHs;
-		bEnforceIWYU = true;
-		bUseUnity = false;
+		//bEnforceIWYU = true;
+		//bUseUnity = false;
 
 		PublicIncludePaths.AddRange(
 			new string[] {
