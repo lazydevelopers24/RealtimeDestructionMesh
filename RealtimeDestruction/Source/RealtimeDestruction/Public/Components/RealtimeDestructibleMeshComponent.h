@@ -861,8 +861,7 @@ public:
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity")
-	bool bOnSmooth = false;;
-
+	bool bOnSmooth = false;
 
 	/** Supercell 이 임계치 비율이상 파괴 됐을 때*/
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -1079,6 +1078,8 @@ private:
 
 	/** 지연 파편 정리 타이머 핸들 */
 	FTimerHandle FragmentCleanupTimerHandle;
+
+	bool bPendingCleanup = false;
 
 	/** 마지막 파괴된 셀 영역 (CleanupSmallFragments용) */
 	TSet<FIntVector> LastOccupiedCells;

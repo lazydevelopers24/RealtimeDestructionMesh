@@ -1348,7 +1348,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		);
 		BaseCells.Add(GridPos);
 	}
-
+	
 
 	TArray<TArray<FIntVector>> FinalPieces;
 
@@ -1657,7 +1657,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			if (TargetDebrisActor)
 			{
 				Context->TargetDebrisActor = TargetDebrisActor;
-			}
+		}
 		}
 
 		if (BooleanProcessor.IsValid())
@@ -3998,6 +3998,7 @@ void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMes
 
 	// Boolean 완료 후 파편 정리 (스폰 제거로 가벼워짐)
 	//CleanupSmallFragments();
+	bPendingCleanup = true;
 }
 
 void URealtimeDestructibleMeshComponent::RequestDelayedCollisionUpdate(UDynamicMeshComponent* TargetComp)
@@ -4676,13 +4677,14 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 
 	// Standalone: 타이머 기반 분리 셀 처리
 	UWorld* World = GetWorld();
-	if (World && World->GetNetMode() == NM_Standalone && PendingDestructionResults.Num() > 0)
+	if (bPendingCleanup && World && World->GetNetMode() == NM_Standalone && PendingDestructionResults.Num() > 0)
 	{
 		StandaloneDetachTimer += DeltaTime;
 			DisconnectedCellStateLogic(PendingDestructionResults);
 			PendingDestructionResults.Empty();
 			StandaloneDetachTimer = 0.0f;
 		
+		bPendingCleanup = false;
 	}
 #if !UE_BUILD_SHIPPING
 	if (bShowDebugText)
@@ -5924,7 +5926,7 @@ int32 URealtimeDestructibleMeshComponent::GetMaterialIDFromFaceIndex(int32 FaceI
 	}
 
 	return 0;
-} 
+}
 void URealtimeDestructibleMeshComponent::CreateDebrisMeshSections(UProceduralMeshComponent* Mesh,
 	const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
 	const TArray<UMaterialInterface*>& InMaterials)
