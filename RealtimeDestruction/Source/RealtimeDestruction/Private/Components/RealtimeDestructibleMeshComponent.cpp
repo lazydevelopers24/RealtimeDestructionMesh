@@ -1608,7 +1608,6 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		}
 
 		// Smoothing 
-		if(bOnSmooth)
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth); 
 			ApplyHCLaplacianSmoothing(ToolMesh);
