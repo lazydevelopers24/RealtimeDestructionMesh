@@ -141,22 +141,28 @@ void FRealtimeBooleanProcessor::Shutdown()
 	ShutdownSlots();
 }
 
-void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh)
+void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh, int32 BatchId)
 {
 	if (!OwnerComponent.IsValid())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("OwnerComponent is invalid"));
+		if (auto Owner = OwnerComponent.Get())
+		{
+			Owner->NotifyBooleanSkipped(BatchId);
+		}
 		return;
 	}
 
 	if (!ChunkMesh)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Chunk is null"));
+		OwnerComponent->NotifyBooleanSkipped(BatchId);
 		return;
 	}
 
 	FBulletHole Op = {};
 	Op.ChunkIndex = Operation.Request.ChunkIndex;
+	Op.BatchId = BatchId;
 	Op.TargetMesh = ChunkMesh;
 	FTransform ComponentToWorld = Op.TargetMesh->GetComponentTransform();
 
@@ -624,6 +630,8 @@ void FRealtimeBooleanProcessor::ProcessSlotUnionWork(int32 SlotIndex, FBulletHol
 		Result.Decals = MoveTemp(Decals);
 		Result.UnionCount = UnionCount;
 		Result.ChunkIndex = ChunkIndex;
+		// 배치 완료 추적용 ID 배열 복사
+		Result.CompletionBatchIds = MoveTemp(Batch.CompletionBatchIds);
 
 		// Enqueue into subtract queue.
 		SlotSubtractQueues[SlotIndex]->Enqueue(MoveTemp(Result));
@@ -677,7 +685,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 		AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime,
 			          SlotIndex = SlotIndex,
 			          ChunkIndex = ChunkIndex,
-			          Context = UnionResult.IslandContext]()
+			          Context = UnionResult.IslandContext,
+			          CompletionBatchIds = UnionResult.CompletionBatchIds]()  // 배치 완료 추적용 캡처
 		          {
 			          if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 			          {
@@ -698,6 +707,12 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 
 			          // Release chunk busy bit
 			          Owner->ClearChunkBusy(ChunkIndex);
+
+			          // 실패해도 배치 완료 추적: 모든 BatchId에 대해 완료 알림
+			          for (int32 BatchId : CompletionBatchIds)
+			          {
+				          Owner->NotifyBooleanCompleted(BatchId);
+			          }
 
 			          if (Context.IsValid())
 			          {
@@ -726,6 +741,18 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
 				          }
 			          }
+
+					          // IslandRemoval 완료 후 작은 파편 정리
+					          if (Context->DisconnectedCellsForCleanup.Num() > 0 && Context->Owner.IsValid())
+					          {
+						          Context->Owner->CleanupSmallFragments(Context->DisconnectedCellsForCleanup);
+					          }
+				          }
+
+				          // IslandRemoval 카운터 감소 (Boolean 배치 완료와 조율용)
+				          if (Context->Owner.IsValid())
+				          {
+					          Context->Owner->DecrementIslandRemovalCount();
 				          }
 			          }
 
@@ -735,7 +762,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						  {
 							  Processor->KickSubtractWorker(i);
 						  }
-					  }		
+					  }
 		          });
 	};
 
@@ -921,7 +948,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          ResultMesh = MoveTemp(ResultMesh),
 			          Context = UnionResult.IslandContext,
 			          Decals = MoveTemp(UnionResult.Decals),
-			          UnionCount = UnionResult.UnionCount, 
+			          UnionCount = UnionResult.UnionCount,
+			          CompletionBatchIds = MoveTemp(UnionResult.CompletionBatchIds),
 			          bSuccess]() mutable
 		          {
 			          if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
@@ -952,6 +980,12 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				          WeakOwner->ApplyBooleanOperationResult(MoveTemp(ResultMesh), ChunkIndex, true);
 			          }
 
+			          // 배치 완료 추적: 모든 BatchId에 대해 완료 알림
+			          for (int32 BatchId : CompletionBatchIds)
+			          {
+				          WeakOwner->NotifyBooleanCompleted(BatchId);
+			          }
+
 			          double ExecutionDurationMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
 
 			          Processor->UpdateSimplifyInterval(ExecutionDurationMs, ChunkIndex);
@@ -965,7 +999,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					          Context->TargetDebrisActor.IsValid() ? 1 : 0);
 
 				          if (Context->RemainingTaskCount.fetch_sub(1) == 1)
-				          {					          
+				          {
 					          if (Context->AccumulatedDebrisMesh.TriangleCount() > 0)
 					          {
 						          TArray<UMaterialInterface*> Materials;
@@ -990,8 +1024,20 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
 						          }
 					          }
+
+					          // IslandRemoval 완료 후 작은 파편 정리
+					          if (Context->DisconnectedCellsForCleanup.Num() > 0 && Context->Owner.IsValid())
+					          {
+						          Context->Owner->CleanupSmallFragments(Context->DisconnectedCellsForCleanup);
+					          }
+
+					          // IslandRemoval 카운터 감소 (Boolean 배치 완료와 조율용)
+					          if (Context->Owner.IsValid())
+					          {
+						          Context->Owner->DecrementIslandRemovalCount();
+					          }
 				          }
-			          } 
+			          }
 
 			          // ===== Decrement counters (shutdown check) =====
 			          // if (Processor->SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
@@ -1021,7 +1067,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 	else
 	{
 		// Even on failure, re-kick if queue has work (GameThread).
-		AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime, SlotIndex, ChunkIndex = ChunkIndex]()
+		AsyncTask(ENamedThreads::GameThread, [LifeTimeToken = LifeTime, SlotIndex, ChunkIndex = ChunkIndex, CompletionBatchIds = MoveTemp(UnionResult.CompletionBatchIds)]()
 		{
 			if (!LifeTimeToken.IsValid() || !LifeTimeToken->bAlive.load())
 			{
@@ -1040,7 +1086,13 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				return;
 			}
 			WeakOwner->ClearChunkBusy(ChunkIndex);
-			
+
+			// 실패해도 배치 완료 추적: 모든 BatchId에 대해 완료 알림
+			for (int32 BatchId : CompletionBatchIds)
+			{
+				WeakOwner->NotifyBooleanCompleted(BatchId);
+			}
+
 			// if (Processor->SlotSubtractWorkerCounts.IsValidIndex(SlotIndex))
 			// {
 			// 	Processor->SlotSubtractWorkerCounts[SlotIndex]->fetch_sub(1);
@@ -1051,8 +1103,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				if (!Processor->SlotSubtractQueues[i]->IsEmpty())
 				{
 					Processor->KickSubtractWorker(i);
-				} 
-			} 
+				}
+			}
 		});
 	}
 }
@@ -1309,6 +1361,8 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			int32 AppliedCount = 0;
 			TArray<TWeakObjectPtr<UDecalComponent>> DecalsToRemove;
 			DecalsToRemove.Reserve(BatchCount);
+			// 배치 완료 추적용 ID 배열 (다른 데이터 move 전에 먼저 추출)
+			TArray<int32> CompletionBatchIds = MoveTemp(Batch.CompletionBatchIds);
 			TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = MoveTemp(Batch.TemporaryDecals);
 			TArray<FTransform> Transforms = MoveTemp(Batch.ToolTransforms);
 			TArray<TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = MoveTemp(Batch.ToolMeshPtrs);
@@ -1431,7 +1485,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 			}
 
 			AsyncTask(ENamedThreads::GameThread,
-				[OwnerComponent, LifeTimeToken, Gen, ChunkIndex, Result = MoveTemp(WorkMesh), AppliedCount, DecalsToRemove = MoveTemp(DecalsToRemove)]() mutable
+				[OwnerComponent, LifeTimeToken, Gen, ChunkIndex, Result = MoveTemp(WorkMesh), AppliedCount, DecalsToRemove = MoveTemp(DecalsToRemove), CompletionBatchIds = MoveTemp(CompletionBatchIds)]() mutable
 				{
 					if (!OwnerComponent.IsValid())
 					{
@@ -1458,7 +1512,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 #if !UE_BUILD_SHIPPING
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_ApplyGT");
 #endif
-					
+
 					if (AppliedCount > 0)
 					{
 						double CurrentSetMeshAvgCost = FPlatformTime::Seconds();
@@ -1480,6 +1534,13 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 							}
 						}
 					}
+
+					// 배치 완료 추적: 모든 BatchId에 대해 완료 알림
+					for (int32 BatchId : CompletionBatchIds)
+					{
+						OwnerComponent->NotifyBooleanCompleted(BatchId);
+					}
+
 					Processor->ChunkHoleCount[ChunkIndex] += AppliedCount;
 
 					Processor->KickProcessIfNeededPerChunk();

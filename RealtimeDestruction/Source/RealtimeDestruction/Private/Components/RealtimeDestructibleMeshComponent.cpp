@@ -269,11 +269,12 @@ void URealtimeDestructibleMeshComponent::ResetToSourceMesh()
 }
 
 // 현재는 RequestDestruction에서만 호출됨
-FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const FRealtimeDestructionRequest& Request, bool bIsPenetration, UDecalComponent* TemporaryDecal)
+FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const FRealtimeDestructionRequest& Request, bool bIsPenetration, UDecalComponent* TemporaryDecal, int32 BatchId)
 {
 	if (!BooleanProcessor.IsValid())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Boolean Processor is null"));
+		NotifyBooleanSkipped(BatchId);
 		return FDestructionOpId();
 	}
 	FRealtimeDestructionOp Op;
@@ -290,11 +291,12 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[EnqueueRequestLocal] ChunkIndex=%d → BooleanProcessor->EnqueueOp 호출"),
 			Op.Request.ChunkIndex);
-		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get());
+		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get(), BatchId);
 	}
 	else
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[EnqueueRequestLocal] ChunkIndex=INDEX_NONE → Boolean 연산 스킵!"));
+		NotifyBooleanSkipped(BatchId);
 	}
 
 	// if (!bEnableMultiWorkers)
@@ -754,6 +756,9 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 					RemoveTrianglesForDetachedCells(Group);
 				}
 			}
+
+			// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
+			// FIslandRemovalContext::DisconnectedCellsForCleanup 사용
 		}
 		CellState.MoveAllDetachedToDestroyed();
 
@@ -889,12 +894,14 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 		if (DebrisSize < MinDebrisSyncSize)
 		{
 			RemoveTrianglesForDetachedCells(AllCellsInSupercell);
+			// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
 		}
 		// else: 큰 것은 서버에서 복제된 DebrisActor가 처리
 	}
 	else
 	{
 		RemoveTrianglesForDetachedCells(AllCellsInSupercell);
+		// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
 	}
 
 	// cell state 업데이트 
@@ -1774,7 +1781,13 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			if (TargetDebrisActor)
 			{
 				Context->TargetDebrisActor = TargetDebrisActor;
-		}
+			}
+
+			// Cleanup용 분리된 셀 저장 (모든 작업 완료 시 사용)
+			Context->DisconnectedCellsForCleanup.Append(DetachedCellIds);
+
+			// 활성 IslandRemoval 카운터 증가 (Boolean 배치 완료 시 Cleanup 스킵 판단용)
+			IncrementIslandRemovalCount();
 		}
 
 		if (BooleanProcessor.IsValid())
@@ -2927,8 +2940,41 @@ void URealtimeDestructibleMeshComponent::MulticastSyncDebrisPhysics_Implementati
 	}
 }
 
+void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(CleanupSmallFragments_NoArg);
+
+	// 데디케이티드 서버에서는 파편 처리 스킵
+	if (IsRunningDedicatedServer())
+	{
+		return;
+	}
+
+	// GridCellLayout이 유효하지 않으면 빈 셋으로 처리
+	if (!GridCellLayout.IsValid())
+	{
+		CleanupSmallFragments(TSet<int32>());
+		return;
+	}
+
+	// BFS로 분리된 셀 계산
+	const ENetMode NetMode = GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone;
+	TSet<int32> DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
+		GridCellLayout,
+		SupercellState,
+		CellState,
+		bEnableSupercell && SupercellState.IsValid(),
+		bEnableSubcell && (NetMode == NM_Standalone),
+		CellContext);
+
+	UE_LOG(LogTemp, Log, TEXT("[CleanupSmallFragments] Computed %d disconnected cells"), DisconnectedCells.Num());
+
+	// 원본 함수 호출
+	CleanupSmallFragments(DisconnectedCells);
+}
+
 void URealtimeDestructibleMeshComponent::CleanupSmallFragments(const TSet<int32>& InDisconnectedCells)
-{ 
+{
 	// 데디케이티드 서버에서는 파편 처리 스킵 (물리 NaN 오류 방지)
 	if (IsRunningDedicatedServer())
 	{
@@ -3473,7 +3519,8 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 	// 분리된 셀들을 파괴됨 상태로 이동
 	CellState.MoveAllDetachedToDestroyed();
 
-	// CleanupSmallFragments();
+	// RemoveTriangles 후 작은 파편 정리는 IslandRemoval 완료 콜백에서 처리
+	// (비동기 완료 시 FIslandRemovalContext::DisconnectedCellsForCleanup 사용)
 
 	UE_LOG(LogTemp, Warning, TEXT("[Client] Detach processing complete"));
 }
@@ -3490,6 +3537,10 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 	{
 		return;
 	}
+
+	// === 배치 추적 시작 ===
+	const int32 BatchId = NextBatchId++;
+	int32 ActualEnqueuedCount = 0;
 
 	for (const FRealtimeDestructionOp& Op : Ops)
 	{
@@ -3537,8 +3588,28 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 			TempDecal = SpawnTemporaryDecal(ModifiableRequest);
 		}
 
-		// 비동기 경로로 처리 (워커 스레드 사용)
-		EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal);
+		// 비동기 경로로 처리 (워커 스레드 사용) - BatchId 전달
+		if (ModifiableRequest.ChunkIndex != INDEX_NONE && BooleanProcessor.IsValid())
+		{
+			EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal, BatchId);
+			ActualEnqueuedCount++;
+		}
+		else
+		{
+			// 큐잉 조건 불충족 시 기존처럼 호출 (BatchId 없이)
+			EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal);
+		}
+	}
+
+	// === 배치 트래커 등록 ===
+	if (ActualEnqueuedCount > 0)
+	{
+		FBooleanBatchTracker Tracker;
+		Tracker.TotalCount = ActualEnqueuedCount;
+		Tracker.CompletedCount = 0;
+		ActiveBatchTrackers.Add(BatchId, Tracker);
+
+		UE_LOG(LogTemp, Log, TEXT("[BatchTracking] Started BatchId=%d, TotalCount=%d"), BatchId, ActualEnqueuedCount);
 	}
 }
 
@@ -4071,10 +4142,11 @@ void URealtimeDestructibleMeshComponent::SetChunkBits(int32 ChunkIndex, int32& B
 	BitOffset = ChunkIndex % 64;
 }
 
-void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMesh3&& NewMesh, const int32 ChunkIndex, bool bDelayedCollisionUpdate)
+void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMesh3&& NewMesh, const int32 ChunkIndex, bool bDelayedCollisionUpdate, int32 BatchId)
 {
 	if (ChunkIndex == INDEX_NONE)
 	{
+		NotifyBooleanSkipped(BatchId);
 		return;
 	}
 
@@ -4082,6 +4154,7 @@ void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMes
 	if (!TargetComp)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("TargetComp is invalid"));
+		NotifyBooleanSkipped(BatchId);
 		return;
 	}
 
@@ -4093,7 +4166,7 @@ void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMes
 	// 수정된 청크 추적
 	ModifiedChunkIds.Add(ChunkIndex);
 #if !UE_BUILD_SHIPPING
-	// 디버그 텍스트 갱신 플래그는 기본적으로 구조적 무결성 갱신 후 업데이트되지만, 청크 없는 경우 여기에서 대신 갱신 
+	// 디버그 텍스트 갱신 플래그는 기본적으로 구조적 무결성 갱신 후 업데이트되지만, 청크 없는 경우 여기에서 대신 갱신
 		bShouldDebugUpdate = true;
 #endif
 	if (bDelayedCollisionUpdate)
@@ -4117,6 +4190,82 @@ void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMes
 	// Boolean 완료 후 파편 정리 (스폰 제거로 가벼워짐)
 	//CleanupSmallFragments();
 	bPendingCleanup = true;
+
+	// === 배치 완료 추적 ===
+	if (BatchId != INDEX_NONE)
+	{
+		if (FBooleanBatchTracker* Tracker = ActiveBatchTrackers.Find(BatchId))
+		{
+			Tracker->CompletedCount++;
+			UE_LOG(LogTemp, Log, TEXT("[BatchTracking] Completed BatchId=%d, Progress=%d/%d"),
+				BatchId, Tracker->CompletedCount, Tracker->TotalCount);
+
+			if (Tracker->IsComplete())
+			{
+				OnBooleanBatchCompleted(BatchId);
+			}
+		}
+	}
+}
+
+void URealtimeDestructibleMeshComponent::NotifyBooleanSkipped(int32 BatchId)
+{
+	if (BatchId == INDEX_NONE)
+	{
+		return;
+	}
+
+	if (FBooleanBatchTracker* Tracker = ActiveBatchTrackers.Find(BatchId))
+	{
+		Tracker->CompletedCount++;
+		UE_LOG(LogTemp, Log, TEXT("[BatchTracking] Skipped BatchId=%d, Progress=%d/%d"),
+			BatchId, Tracker->CompletedCount, Tracker->TotalCount);
+
+		if (Tracker->IsComplete())
+		{
+			OnBooleanBatchCompleted(BatchId);
+		}
+	}
+}
+
+void URealtimeDestructibleMeshComponent::NotifyBooleanCompleted(int32 BatchId)
+{
+	if (BatchId == INDEX_NONE)
+	{
+		return;
+	}
+
+	if (FBooleanBatchTracker* Tracker = ActiveBatchTrackers.Find(BatchId))
+	{
+		Tracker->CompletedCount++;
+		UE_LOG(LogTemp, Log, TEXT("[BatchTracking] Completed BatchId=%d, Progress=%d/%d"),
+			BatchId, Tracker->CompletedCount, Tracker->TotalCount);
+
+		if (Tracker->IsComplete())
+		{
+			OnBooleanBatchCompleted(BatchId);
+		}
+	}
+}
+
+void URealtimeDestructibleMeshComponent::OnBooleanBatchCompleted(int32 BatchId)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[BatchTracking] ★ Batch %d COMPLETED!"), BatchId);
+
+	// 트래커 제거
+	ActiveBatchTrackers.Remove(BatchId);
+
+	// IslandRemoval이 진행 중이면 Cleanup 스킵
+	// (IslandRemoval 완료 시점에 Cleanup이 호출되므로 중복 방지)
+	if (ActiveIslandRemovalCount.load() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[BatchTracking] Skipping CleanupSmallFragments - IslandRemoval in progress (Count: %d)"), ActiveIslandRemovalCount.load());
+		return;
+	}
+
+	// 파편 정리 실행
+	UE_LOG(LogTemp, Warning, TEXT("[BatchTracking] Calling CleanupSmallFragments"));
+	CleanupSmallFragments();
 }
 
 void URealtimeDestructibleMeshComponent::RequestDelayedCollisionUpdate(UDynamicMeshComponent* TargetComp)
@@ -4795,7 +4944,7 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 
 	// Standalone: 타이머 기반 분리 셀 처리
 	UWorld* World = GetWorld();
-	if (bPendingCleanup && World && World->GetNetMode() == NM_Standalone && PendingDestructionResults.Num() > 0)
+	if (bPendingCleanup && World && World->GetNetMode() == NM_Standalone )
 	{
 		StandaloneDetachTimer += DeltaTime;
 			DisconnectedCellStateLogic(PendingDestructionResults);

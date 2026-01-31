@@ -332,7 +332,7 @@ public:
 
 	// Destruction queue
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
-	FDestructionOpId EnqueueRequestLocal(const FRealtimeDestructionRequest& Request, bool bPenetration, UDecalComponent* TemporaryDecal = nullptr);
+	FDestructionOpId EnqueueRequestLocal(const FRealtimeDestructionRequest& Request, bool bPenetration, UDecalComponent* TemporaryDecal = nullptr, int32 BatchId = -1);
 
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	int32 EnqueueBatch(const TArray<FRealtimeDestructionRequest>& Requests);
@@ -596,7 +596,13 @@ public:
 	void SetChunkBits(int32 ChunkIndex, int32& BitIndex, int32& BitOffset);
 
 	// 변형된 메시의 시각적(렌더링) 처리 즉시 업데이트하는 함수
-	void ApplyBooleanOperationResult(FDynamicMesh3&& NewMesh, const int32 ChunkIndex, bool bDelayedCollisionUpdate);
+	void ApplyBooleanOperationResult(FDynamicMesh3&& NewMesh, const int32 ChunkIndex, bool bDelayedCollisionUpdate, int32 BatchId = -1);
+
+	/** Boolean 연산이 스킵/실패했을 때 배치 카운터 증가 */
+	void NotifyBooleanSkipped(int32 BatchId);
+
+	/** Boolean 연산 완료 시 배치 카운터 증가 */
+	void NotifyBooleanCompleted(int32 BatchId);
 	
 	// 타겟메시의 idle이나 원하는 딜레이를 주고 Async로 collision 갱신하는 함수
 	void RequestDelayedCollisionUpdate(UDynamicMeshComponent* TargetComp);		
@@ -925,7 +931,10 @@ public:
 	UProceduralMeshComponent* FindAndRemoveLocalDebris(int32 InDebrisId);
 	
 	/** 작은 파편(고립된 Connected Component) 정리 */
-	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells); 
+	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells);
+
+	/** 작은 파편 정리 (분리된 셀을 내부에서 계산) */
+	void CleanupSmallFragments(); 
 
 	/**
 	 * 분리된 셀들을 파편 액터로 스폰
@@ -1102,6 +1111,39 @@ private:
 	TArray<FCompactDestructionOp> PendingServerBatchOpsCompact;  // 압축용
 	float ServerBatchTimer = 0.0f;
 	int32 ServerBatchSequence = 0;  // 압축용 시퀀스
+
+	//////////////////////////////////////////////////////////////////////////
+	// 배치 완료 추적 (Boolean 연산 완료 시점 파악용)
+	//////////////////////////////////////////////////////////////////////////
+
+	/** 배치 완료 추적용 구조체 */
+	struct FBooleanBatchTracker
+	{
+		int32 TotalCount = 0;      // 큐에 들어간 총 Op 수
+		int32 CompletedCount = 0;  // 완료된 Op 수 (성공/실패 모두 포함)
+
+		bool IsComplete() const { return CompletedCount >= TotalCount && TotalCount > 0; }
+	};
+
+	/** 활성 배치 트래커 맵 (BatchId → Tracker) */
+	TMap<int32, FBooleanBatchTracker> ActiveBatchTrackers;
+
+	/** 다음 배치 ID */
+	int32 NextBatchId = 0;
+
+	/** Boolean 배치 완료 시 호출되는 함수 */
+	void OnBooleanBatchCompleted(int32 BatchId);
+
+public:
+	/** IslandRemoval 시작 시 호출 (BooleanProcessor에서 접근) */
+	void IncrementIslandRemovalCount() { ActiveIslandRemovalCount.fetch_add(1); }
+
+	/** IslandRemoval 완료 시 호출 (BooleanProcessor에서 접근) */
+	void DecrementIslandRemovalCount() { ActiveIslandRemovalCount.fetch_sub(1); }
+
+private:
+	/** 활성 IslandRemoval 카운터 (진행 중인 RemoveTriangles 작업 수) */
+	std::atomic<int32> ActiveIslandRemovalCount{0};
 
 	// Standalone 분리 셀 처리 타이머
 	float StandaloneDetachTimer = 0.0f;

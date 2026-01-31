@@ -53,6 +53,9 @@ struct FIslandRemovalContext
 
 	/** Client용: 이미 존재하는 DebrisActor에 메시 적용 (null이면 SpawnDebrisActor 호출) */
 	TWeakObjectPtr<ADebrisActor> TargetDebrisActor;
+
+	/** Cleanup용: 분리된 셀 ID들 (모든 작업 완료 시 CleanupSmallFragments에 전달) */
+	TSet<int32> DisconnectedCellsForCleanup;
 };
 
 /** Union result payload for a chunk, including the combined tool mesh and decals. */
@@ -72,6 +75,9 @@ struct FUnionResult
 	TSharedPtr<UE::Geometry::FDynamicMesh3> OutDebrisMesh = nullptr;
 	TSharedPtr<FIslandRemovalContext> IslandContext;
 	EBooleanWorkType WorkType = EBooleanWorkType::BulletHole;
+
+	/** 배치 완료 추적용 ID 배열 (여러 Op가 Union되어 한 번에 처리될 수 있음) */
+	TArray<int32> CompletionBatchIds;
 };
 
 /** A single tool impact request queued for boolean processing. */
@@ -94,6 +100,9 @@ struct FBulletHole
 
 	int32 ChunkIndex = INDEX_NONE;
 
+	/** 배치 완료 추적용 ID (INDEX_NONE이면 추적 안함) */
+	int32 BatchId = INDEX_NONE;
+
 	bool CanRetry() const { return Attempts <= MaxAttempts; }
 
 	void Reset()
@@ -105,6 +114,7 @@ struct FBulletHole
 		ToolMeshPtr = nullptr;
 		TargetMesh = nullptr;
 		ChunkIndex = INDEX_NONE;
+		BatchId = INDEX_NONE;
 	}
 };
 
@@ -116,6 +126,7 @@ struct FBulletHoleBatch
 	TArray<bool> bIsPenetrations = {};
 	TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = {};
 	TArray<TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = {};
+	TArray<int32> CompletionBatchIds = {};  // 배치 완료 추적용
 
 	int32 Count = 0;
 	int32 ChunkIndex = INDEX_NONE;
@@ -130,6 +141,7 @@ struct FBulletHoleBatch
 		bIsPenetrations.Reserve(Capacity);
 		TemporaryDecals.Reserve(Capacity);
 		ToolMeshPtrs.Reserve(Capacity);
+		CompletionBatchIds.Reserve(Capacity);
 	}
 
 	void Reset()
@@ -140,6 +152,7 @@ struct FBulletHoleBatch
 		bIsPenetrations.Reset();
 		TemporaryDecals.Reset();
 		ToolMeshPtrs.Reset();
+		CompletionBatchIds.Reset();
 	}
 
 	void Add(FBulletHole& Op)
@@ -149,6 +162,11 @@ struct FBulletHoleBatch
 		bIsPenetrations.Add(Op.bIsPenetration);
 		TemporaryDecals.Add(Op.TemporaryDecal);
 		ToolMeshPtrs.Add(Op.ToolMeshPtr);
+		// 유효한 BatchId만 추가 (INDEX_NONE이 아닌 경우)
+		if (Op.BatchId != INDEX_NONE)
+		{
+			CompletionBatchIds.AddUnique(Op.BatchId);
+		}
 		Count++;
 	}
 
@@ -159,6 +177,11 @@ struct FBulletHoleBatch
 		bIsPenetrations.Add(MoveTemp(Op.bIsPenetration));
 		TemporaryDecals.Add(MoveTemp(Op.TemporaryDecal));
 		ToolMeshPtrs.Add(MoveTemp(Op.ToolMeshPtr));
+		// 유효한 BatchId만 추가 (INDEX_NONE이 아닌 경우)
+		if (Op.BatchId != INDEX_NONE)
+		{
+			CompletionBatchIds.AddUnique(Op.BatchId);
+		}
 		Count++;
 	}
 
@@ -271,7 +294,7 @@ public:
 	void Shutdown();
 
 	/** Enqueues a boolean operation request. */
-	void EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh = nullptr);
+	void EnqueueOp(FRealtimeDestructionOp&& Operation, UDecalComponent* TemporaryDecal, UDynamicMeshComponent* ChunkMesh = nullptr, int32 BatchId = -1);
 	/** Re-enqueues remaining requests (including retries). */
 	void EnqueueRemaining(FBulletHole&& Operation);
 	void EnqueueIslandRemoval(int32 ChunkIndex, TSharedPtr<UE::Geometry::FDynamicMesh3> ToolMesh, TSharedPtr<UE::Geometry::FDynamicMesh3> DebrisToolMesh, TSharedPtr<FIslandRemovalContext> Context);
