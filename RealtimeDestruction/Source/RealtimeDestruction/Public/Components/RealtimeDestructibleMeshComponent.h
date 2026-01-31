@@ -883,11 +883,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float DestroyRatioThresholdForDebris = 0.5f;
 
-	/** Debris의 밀도 */
+	/**
+	 * Density of debris. (g/cm^3)
+	 * For realistic behavior, it is recommended to set this higher than the actual material density.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
-	float DebrisDensity = 0.05f;
+	float DebrisDensity = 1.0f;
+
+	/** Maximum mass that debris can have. (kg) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
-	float MaxDebrisMass = 50;
+	float MaxDebrisMass = 1000;
 	
 	FVector CachedToolForwardVector = FVector::ForwardVector;
 	 
@@ -898,15 +903,20 @@ public:
 	//TODO: 적절한 값들을 찾고 없앨 예정
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
 	float MinDebrisSyncSize = 5.0f;
-	//TODO: 적절한 값들을 찾고 없앨 예정
-	//UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0"))
-	//int32 MinCellsForDebris = 1;
-	//TODO: 적절한 값들을 찾고 없앨 예정
+
+	/**
+	 * Expands the removal region by this ratio when removing floating mesh islands. (1.2 = 120% of original size)
+	 * Adjusting this based on grid cell size can help remove debris cleanly without leaving residual fragments.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
-	float DebrisExpandOffset = 1.2f;
-	//TODO: 적절한 값들을 찾고 없앨 예정
+	float DebrisExpandRatio = 1.2f;
+
+	/**
+	 * Scale ratio for the debris mesh. (0.7 = 70% of original size)
+	 * Smaller values may look unnatural, but can reduce debris getting stuck in the original mesh.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
-	float DebrisSpawnOffset = 0.7f;
+	float DebrisScaleRatio = 0.9f;
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials, ADebrisActor* TargetActgor = nullptr);
 

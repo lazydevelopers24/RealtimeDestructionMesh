@@ -576,6 +576,12 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_DisconnectedCellStateLogic);
 
+	// Structural Integrity 비활성화 시 분리 셀 처리 스킵
+	if (!bEnableStructuralIntegrity)
+	{
+		return;
+	}
+
 	UE_LOG(LogTemp, Warning, TEXT("[DisconnectedCellStateLogic] ENTER: AllResults=%d, DestroyedCells=%d, bForceRun=%d"),
 		AllResults.Num(), CellState.DestroyedCells.Num(), bForceRun ? 1 : 0);
 
@@ -1712,8 +1718,8 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			{
 				FVector3d Pos = ToolMesh.GetVertex(Vid);
 
-				ToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * DebrisExpandOffset);
-				DebrisToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * DebrisSpawnOffset);
+				ToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * DebrisExpandRatio);
+				DebrisToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * DebrisScaleRatio);
 			}
 		}
 		ToolMesh.ReverseOrientation();
@@ -3459,13 +3465,17 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 		return;
 	}
 
+	// Structural Integrity 비활성화 시 분리 셀 처리 스킵
+	if (!bEnableStructuralIntegrity)
+	{
+		return;
+	}
+
 	const ENetMode NetMode = World->GetNetMode();
 
 	// DedicatedServer는 스킵 (렌더링 없음)
 	if (NetMode == NM_DedicatedServer)
 	{
-
-		
 		return;
 	}
 
@@ -6286,13 +6296,14 @@ void URealtimeDestructibleMeshComponent::ApplyDebrisPhysics(UBoxComponent* Colli
 		return;
 	}
 	float Volume = 8.0f * BoxExtent.X * BoxExtent.Y * BoxExtent.Z;
-	float CalcMass = Volume * DebrisDensity;
-	float FinalMass = FMath::Clamp(CalcMass, 0.001, 100.0f); 
-	float MassRatio = FinalMass / MaxDebrisMass;
-
+	float CalcMassKg = 0.001f * Volume * DebrisDensity;
+	float FinalMassKg = FMath::Clamp(CalcMassKg, 0.001, MaxDebrisMass); 
+	float MassRatio = 1.0f - (FinalMassKg / MaxDebrisMass);
+	MassRatio = std::max(MassRatio, 0.1f);
+	
 	// 물리 설정
 	CollisionBox->SetEnableGravity(true);
-	CollisionBox->SetMassOverrideInKg(NAME_None, FinalMass, true);
+	CollisionBox->SetMassOverrideInKg(NAME_None, FinalMassKg, true);
 	CollisionBox->SetSimulatePhysics(true);
 
 	// 초기 속도  

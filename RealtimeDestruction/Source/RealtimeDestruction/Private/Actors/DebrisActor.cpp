@@ -406,30 +406,10 @@ void ADebrisActor::EnablePhysics()
 		return;
 	}
 
-	// 디버그: BodyInstance 상태 확인
-	FBodyInstance* BodyInst = CollisionBox->GetBodyInstance();
-	UE_LOG(LogTemp, Warning, TEXT("[Debris] EnablePhysics - BoxComponent BodyInstance: %s"),
-		BodyInst ? TEXT("EXISTS") : TEXT("NULL"));
-
-	if (BodyInst)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Debris] EnablePhysics - IsValidBodyInstance: %s"),
-			BodyInst->IsValidBodyInstance() ? TEXT("YES") : TEXT("NO"));
-	}
-
-	// 중력 활성화
+	// 물리 시뮬레이션 준비만 수행 (실제 시작은 ApplyDebrisPhysics에서)
+	// Mass 설정과 SimulatePhysics는 ApplyDebrisPhysics()에서 처리하여
+	// 질량 적용 → 물리 시작 → Impulse 적용 순서를 보장
 	CollisionBox->SetEnableGravity(true);
-
-	// Mass 설정
-	CollisionBox->SetMassOverrideInKg(NAME_None, 10.0f, true);
-
-	// 물리 시뮬레이션 활성화
-	CollisionBox->SetSimulatePhysics(true);
-
-	// 디버그: 활성화 후 상태 확인
-	UE_LOG(LogTemp, Warning, TEXT("[Debris] EnablePhysics - After SetSimulatePhysics: IsSimulating=%s, Gravity=%s"),
-		CollisionBox->IsSimulatingPhysics() ? TEXT("YES") : TEXT("NO"),
-		CollisionBox->IsGravityEnabled() ? TEXT("YES") : TEXT("NO"));
 }
 
 void ADebrisActor::ApplyLocalMesh(UProceduralMeshComponent* LocalMesh)
