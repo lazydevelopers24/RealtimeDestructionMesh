@@ -1,4 +1,4 @@
-/ Copyright (c) 2026 LazyDevelopers <lazydeveloper24@gmail.com>. All rights reserved.
+// Copyright (c) 2026 LazyDevelopers <lazydeveloper24@gmail.com>. All rights reserved.
 // This plugin is distributed under the Fab Standard License.
 //
 // This product was independently developed by us while participating in the Epic Project, a developer-support
