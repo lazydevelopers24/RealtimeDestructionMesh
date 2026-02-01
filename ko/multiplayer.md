@@ -13,8 +13,8 @@ parent: 한국어
 ![][image17]  
 ![][image18]
 
-[image18]: /images/image18.png
+[image18]: ../images/image18.png
 
 
-[image17]: /images/image17.png
+[image17]: ../images/image17.png
 

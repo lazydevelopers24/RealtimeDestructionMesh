@@ -25,12 +25,12 @@ The picture below shows the result of spawning an Anchor Volume, moving the anch
 
 
 
-[image22]: /images/image22.png
-[image19]: /images/image19.png
+[image22]: ../images/image22.png
+[image19]: ../images/image19.png
 
 
-[image20]: /images/image20.png
+[image20]: ../images/image20.png
 
 
-[image21]: /images/image21.png
+[image21]: ../images/image21.png
 

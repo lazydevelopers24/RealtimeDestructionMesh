@@ -33,29 +33,29 @@ Realtime Destructible Mesh 플러그인은 연산 속도 향상을 위해 원본
 Hitscan 방식을 채택하여 별도의 투사체가 없는 경우 DestructionProjectile을 플레이어 액터에 추가하고, ProcessProjectileHit을 직접 호출하거나 GAS를 통해 호출하는 방식 등을 고려할 수 있습니다.   
 ![][image9]
 
-[image4]: /images/image4.png
+[image4]: ../images/image4.png
 
 
-[image8]: /images/image8.png
+[image8]: ../images/image8.png
 
 
-[image1]: /images/image1.png
+[image1]: ../images/image1.png
 
 
-[image3]: /images/image3.png
+[image3]: ../images/image3.png
 
 
-[image5]: /images/image5.png
+[image5]: ../images/image5.png
 
 
-[image2]: /images/image2.png
+[image2]: ../images/image2.png
 
 
-[image6]: /images/image6.png
+[image6]: ../images/image6.png
 
 
-[image9]: /images/image9.png
+[image9]: ../images/image9.png
 
 
-[image7]: /images/image7.png
+[image7]: ../images/image7.png
 

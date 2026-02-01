@@ -39,23 +39,23 @@ Finally, set the **Decal Config ID** of the Destruction Projectile Component and
 ![][image16]  
 ▲ Surface Type property in the Hole Decal category of the Realtime Destructible Component.
 
-[image13]: /images/image13.png
+[image13]: ../images/image13.png
 
 
-[image11]: /images/image11.png
+[image11]: ../images/image11.png
 
 
-[image12]: /images/image12.png
+[image12]: ../images/image12.png
 
 
-[image15]: /images/image15.png
+[image15]: ../images/image15.png
 
 
-[image10]: /images/image10.png
+[image10]: ../images/image10.png
 
 
-[image16]: /images/image16.png
+[image16]: ../images/image16.png
 
 
-[image14]: /images/image14.png
+[image14]: ../images/image14.png
 

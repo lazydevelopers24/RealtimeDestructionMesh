@@ -39,23 +39,23 @@ Surface Configs는 메시에 정의된 Surface Type에 따라 사용할 파괴 �
 ![][image16]  
 ▲Realtime Destructible Mesh컴포넌트의 Hole Decal 카테고리에서 Surface Type을 찾을 수 있습니다.
 
-[image13]: /images/image13.png
+[image13]: ../images/image13.png
 
 
-[image11]: /images/image11.png
+[image11]: ../images/image11.png
 
 
-[image12]: /images/image12.png
+[image12]: ../images/image12.png
 
 
-[image15]: /images/image15.png
+[image15]: ../images/image15.png
 
 
-[image10]: /images/image10.png
+[image10]: ../images/image10.png
 
 
-[image16]: /images/image16.png
+[image16]: ../images/image16.png
 
 
-[image14]: /images/image14.png
+[image14]: ../images/image14.png
 

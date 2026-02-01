@@ -32,29 +32,29 @@ The most common method of use is to add the Destruction Projectile Component as 
 If you adopt a Hitscan method and there is no separate projectile, you can consider adding DestructionProjectile to the Player Actor and calling ProcessProjectileHit directly or through the Gameplay Ability System (GAS).  
 ![][image9]
 
-[image4]: /images/image4.png
+[image4]: ../images/image4.png
 
 
-[image8]: /images/image8.png
+[image8]: ../images/image8.png
 
 
-[image1]: /images/image1.png
+[image1]: ../images/image1.png
 
 
-[image3]: /images/image3.png
+[image3]: ../images/image3.png
 
 
-[image5]: /images/image5.png
+[image5]: ../images/image5.png
 
 
-[image2]: /images/image2.png
+[image2]: ../images/image2.png
 
 
-[image6]: /images/image6.png
+[image6]: ../images/image6.png
 
 
-[image9]: /images/image9.png
+[image9]: ../images/image9.png
 
 
-[image7]: /images/image7.png
+[image7]: ../images/image7.png
 

@@ -26,12 +26,12 @@ Spawn Anchor Plane 또는 Spawn Anchor Volume 버튼을 누르면 앵커 영역�
 
 
 
-[image22]: /images/image22.png
-[image19]: /images/image19.png
+[image22]: ../images/image22.png
+[image19]: ../images/image19.png
 
 
-[image20]: /images/image20.png
+[image20]: ../images/image20.png
 
 
-[image21]: /images/image21.png
+[image21]: ../images/image21.png
 
