@@ -11,5 +11,5 @@ Welcome to the RealTime Destructible Mesh Plugin documentation.
 
 ## Select Language / 언어 선택
 
-- [English](/english/)
-- [한국어](/한국어/)
+- [English](/RealtimeDestructibleMesh/english/)
+- [한국어](/RealtimeDestructibleMesh/한국어/)
