@@ -71,6 +71,7 @@ void FRealtimeDestructibleMeshComponentDetails::CustomizeDetails(IDetailLayoutBu
 				[
 					SNew(SButton)
 						.Text(FText::FromString("Generate Chunks"))
+						.ToolTipText(FText::FromString("Creates a GeometryCollection from SourceStaticMesh and builds chunk meshes."))
 						.OnClicked(this, &FRealtimeDestructibleMeshComponentDetails::OnGenerateChunksClicked)
 				]
 				+ SHorizontalBox::Slot()
@@ -79,6 +80,7 @@ void FRealtimeDestructibleMeshComponentDetails::CustomizeDetails(IDetailLayoutBu
 				[
 					SNew(SButton)
 						.Text(FText::FromString("Revert Chunks"))
+						.ToolTipText(FText::FromString("Destroys all ChunkMeshComponents and reverts to the state before chunk meshes were generated."))
 						.OnClicked(this, &FRealtimeDestructibleMeshComponentDetails::OnRevertChunksClicked)
 				]
 				+ SHorizontalBox::Slot()
@@ -87,6 +89,12 @@ void FRealtimeDestructibleMeshComponentDetails::CustomizeDetails(IDetailLayoutBu
 				[
 					SNew(SButton)
 						.Text(FText::FromString("Build Grid Cells"))
+						.ToolTipText(FText::FromString(
+							"Generates grid cells from SourceStaticMesh.\n\n"
+							"WARNING: The Grid Cell system is generated based on world coordinates. "
+							"If you change the world scale of this component at runtime, there will be "
+							"a mismatch between grid cells and the actual mesh, causing inaccurate destruction detection. "
+							"If you need to change the scale, you must call BuildGridCells() again."))
 						.OnClicked(this, &FRealtimeDestructibleMeshComponentDetails::OnBuildGridCellsClicked)
 				]
 		]; 

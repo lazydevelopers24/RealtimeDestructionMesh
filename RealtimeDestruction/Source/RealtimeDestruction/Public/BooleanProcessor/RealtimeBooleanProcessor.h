@@ -33,7 +33,7 @@ class URealtimeDestructibleMeshComponent;
 class UDecalComponent;
 class URDMThreadManagerSubsystem;
 ////////////////////////////////////////
-///
+
 enum class EBooleanWorkType : uint8
 {
 	BulletHole,
@@ -51,10 +51,10 @@ struct FIslandRemovalContext
 	FCriticalSection MeshLock;
 	TWeakObjectPtr<URealtimeDestructibleMeshComponent> Owner;
 
-	/** Client용: 이미 존재하는 DebrisActor에 메시 적용 (null이면 SpawnDebrisActor 호출) */
+	/** For client: Apply mesh to existing DebrisActor (calls SpawnDebrisActor if null) */
 	TWeakObjectPtr<ADebrisActor> TargetDebrisActor;
 
-	/** Cleanup용: 분리된 셀 ID들 (모든 작업 완료 시 CleanupSmallFragments에 전달) */
+	/** For cleanup: Disconnected cell IDs (passed to CleanupSmallFragments when all tasks complete) */
 	TSet<int32> DisconnectedCellsForCleanup;
 };
 
@@ -76,7 +76,7 @@ struct FUnionResult
 	TSharedPtr<FIslandRemovalContext> IslandContext;
 	EBooleanWorkType WorkType = EBooleanWorkType::BulletHole;
 
-	/** 배치 완료 추적용 ID 배열 (여러 Op가 Union되어 한 번에 처리될 수 있음) */
+	/** Batch completion tracking ID array (multiple Ops may be unioned and processed together) */
 	TArray<int32> CompletionBatchIds;
 };
 
@@ -100,7 +100,7 @@ struct FBulletHole
 
 	int32 ChunkIndex = INDEX_NONE;
 
-	/** 배치 완료 추적용 ID (INDEX_NONE이면 추적 안함) */
+	/** Batch completion tracking ID (no tracking if INDEX_NONE) */
 	int32 BatchId = INDEX_NONE;
 
 	bool CanRetry() const { return Attempts <= MaxAttempts; }
@@ -126,7 +126,7 @@ struct FBulletHoleBatch
 	TArray<bool> bIsPenetrations = {};
 	TArray<TWeakObjectPtr<UDecalComponent>> TemporaryDecals = {};
 	TArray<TSharedPtr<UE::Geometry::FDynamicMesh3, ESPMode::ThreadSafe>> ToolMeshPtrs = {};
-	TArray<int32> CompletionBatchIds = {};  // 배치 완료 추적용
+	TArray<int32> CompletionBatchIds = {};  // For batch completion tracking
 
 	int32 Count = 0;
 	int32 ChunkIndex = INDEX_NONE;
@@ -162,7 +162,7 @@ struct FBulletHoleBatch
 		bIsPenetrations.Add(Op.bIsPenetration);
 		TemporaryDecals.Add(Op.TemporaryDecal);
 		ToolMeshPtrs.Add(Op.ToolMeshPtr);
-		// 유효한 BatchId만 추가 (INDEX_NONE이 아닌 경우)
+		// Only add valid BatchId (not INDEX_NONE)
 		if (Op.BatchId != INDEX_NONE)
 		{
 			CompletionBatchIds.AddUnique(Op.BatchId);
@@ -177,7 +177,7 @@ struct FBulletHoleBatch
 		bIsPenetrations.Add(MoveTemp(Op.bIsPenetration));
 		TemporaryDecals.Add(MoveTemp(Op.TemporaryDecal));
 		ToolMeshPtrs.Add(MoveTemp(Op.ToolMeshPtr));
-		// 유효한 BatchId만 추가 (INDEX_NONE이 아닌 경우)
+		// Only add valid BatchId (not INDEX_NONE)
 		if (Op.BatchId != INDEX_NONE)
 		{
 			CompletionBatchIds.AddUnique(Op.BatchId);
@@ -309,9 +309,6 @@ public:
 	/** Returns whether the owning URealtimeDestructibleMeshComponent is valid. */
 	bool IsOwnerCompValid() const { return OwnerComponent.IsValid(); }
 
-	/** Returns the current accumulated hole count. */
-	int32 GetCurrentHoleCount() const { return CurrentHoleCount; }
-
 	/** Clears pending work and resets accumulated counters. */
 	void CancelAllOperations();
 	
@@ -420,7 +417,6 @@ private:
 	TArray<uint8> MaxUnionCount;
 
 	TArray<int32> ChunkHoleCount = {};
-	int32 CurrentHoleCount = 0;
 
 	bool bEnableMultiWorkers;
 	std::atomic<int32> ActiveChunkCount{ 0 };

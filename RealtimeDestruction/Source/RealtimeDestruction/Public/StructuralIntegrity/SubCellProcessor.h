@@ -13,9 +13,9 @@
 #include "StructuralIntegrity/GridCellTypes.h"
 
 /**
- * SubCell 처리기
- * Tool mesh와의 충돌을 기반으로 subcell을 dead 처리하고
- * 구조적 무결성 검사를 위한 데이터를 준비하는 유틸 클래스
+ * SubCell Processor
+ * Utility class that marks subcells as dead based on collision with tool mesh
+ * and prepares data for structural integrity checks
  */
 class REALTIMEDESTRUCTION_API FSubCellProcessor
 {
@@ -23,15 +23,15 @@ public:
 	FSubCellProcessor() = default;
 
 	/**
-	 * 파괴 형태와 겹치는 subcell들을 dead 처리
+	 * Mark subcells overlapping the destruction shape as dead
 	 *
-	 * @param QuantizedShape - 양자화된 파괴 형태 (네트워크 결정론적)
-	 * @param MeshTransform - 메시의 월드 트랜스폼
-	 * @param GridLayout - 격자 셀 레이아웃 (읽기 전용)
-	 * @param InOutCellState - 셀 상태 (subcell 상태 업데이트)
-	 * @param OutAffectedCells - 영향받은 cell ID 목록 (출력)
-	 * @param OutNewlyDeadSubCells - 새로 dead된 subcell 정보 (출력, 선택적)
-	 * @return 처리 성공 여부
+	 * @param QuantizedShape - Quantized destruction shape (network deterministic)
+	 * @param MeshTransform - Mesh world transform
+	 * @param GridLayout - Grid cell layout (read-only)
+	 * @param InOutCellState - Cell state (subcell state updated)
+	 * @param OutAffectedCells - Affected cell ID list (output)
+	 * @param OutNewlyDeadSubCells - Newly dead subcell info (output, optional)
+	 * @return Whether processing succeeded
 	 */
 	static bool ProcessSubCellDestruction(
 		const FQuantizedDestructionInput& QuantizedShape,
@@ -42,45 +42,45 @@ public:
 		TMap<int32, TArray<int32>>* OutNewlyDeadSubCells = nullptr);
 	
 	/**
-	 * 특정 cell의 살아있는 subcell 개수 반환
+	 * Return the number of alive subcells in a specific cell
 	 *
-	 * @param CellId - 셀 ID
-	 * @param CellState - 셀 상태
-	 * @return 살아있는 subcell 개수
+	 * @param CellId - Cell ID
+	 * @param CellState - Cell state
+	 * @return Number of alive subcells
 	 */
 	static int32 CountLiveSubCells(int32 CellId, const FCellState& CellState);
 
 	/**
-	 * 특정 cell이 완전히 파괴되었는지 확인
-	 * (모든 subcell이 dead)
+	 * Check if a specific cell is fully destroyed
+	 * (all subcells are dead)
 	 *
-	 * @param CellId - 셀 ID
-	 * @param CellState - 셀 상태
-	 * @return 완전 파괴 여부
+	 * @param CellId - Cell ID
+	 * @param CellState - Cell state
+	 * @return Whether fully destroyed
 	 */
 	static bool IsCellFullyDestroyed(int32 CellId, const FCellState& CellState);
 
 	/**
-	 * 특정 방향 경계면의 subcell ID 목록 반환
+	 * Return list of subcell IDs on the boundary face for a given direction
 	 *
-	 * @param Direction - 방향 (0-5: -X, +X, -Y, +Y, -Z, +Z)
-	 * @return 해당 방향 경계면의 subcell ID 배열
+	 * @param Direction - Direction (0-5: -X, +X, -Y, +Y, -Z, +Z)
+	 * @return Subcell ID array on the boundary face for that direction
 	 */
 	static TArray<int32> GetBoundarySubCellIds(int32 Direction);
 
 	/**
-	 * 특정 방향 경계면의 살아있는 subcell 비트마스크 반환
+	 * Return bitmask of alive subcells on the boundary face for a given direction
 	 *
-	 * @param CellId - 셀 ID
-	 * @param Direction - 방향 (0-5)
-	 * @param CellState - 셀 상태
-	 * @return 경계면 subcell 비트마스크 (최대 25비트 사용)
+	 * @param CellId - Cell ID
+	 * @param Direction - Direction (0-5)
+	 * @param CellState - Cell state
+	 * @return Boundary subcell bitmask (max 4 bits used with 2x2 subdivision)
 	 */
 	static uint32 GetBoundaryLiveSubCellMask(int32 CellId, int32 Direction, const FCellState& CellState);
 
 private:
 	/**
-	 * 양자화된 Shape의 AABB 계산
+	 * Compute AABB of a quantized shape
 	 */
 	static FBox ComputeShapeAABB(const FQuantizedDestructionInput& Shape);
 };

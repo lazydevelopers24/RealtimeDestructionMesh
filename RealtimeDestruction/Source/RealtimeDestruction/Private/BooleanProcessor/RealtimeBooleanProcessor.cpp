@@ -1537,10 +1537,7 @@ void FRealtimeBooleanProcessor::CancelAllOperations()
 	DebugNormalQueueCount = 0;
 
 	// Reset hole count and caches.
-	CurrentHoleCount = 0;
-
 	ChunkStates.Reset();
-	
 	ChunkHoleCount.Init(OwnerComponent->GetChunkNum(), 0);
 }
 

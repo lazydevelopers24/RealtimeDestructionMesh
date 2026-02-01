@@ -16,10 +16,10 @@
 class FStructuralIntegritySystem;
 
 /**
- * 비동기 Cell 파괴 Task
+ * Async Cell Destruction Task
  *
- * Cell 수가 많을 때 (>1000) 연결성 계산을 백그라운드에서 수행
- * FNonAbandonableTask를 사용하여 Task가 완료될 때까지 보장
+ * Performs connectivity calculation in background when cell count is high (>1000)
+ * Uses FNonAbandonableTask to guarantee task completion
  */
 class REALTIMEDESTRUCTION_API FStructuralIntegrityAsyncTask : public FNonAbandonableTask
 {
@@ -34,36 +34,36 @@ public:
 	{
 	}
 
-	/** Task 실행 */
+	/** Execute task */
 	void DoWork();
 
-	/** 결과 조회 */
+	/** Get result */
 	const FStructuralIntegrityResult& GetResult() const { return Result; }
 
-	/** Task 식별자 (디버깅용) */
+	/** Task identifier (for debugging) */
 	FORCEINLINE TStatId GetStatId() const
 	{
 		RETURN_QUICK_DECLARE_CYCLE_STAT(FStructuralIntegrityAsyncTask, STATGROUP_ThreadPoolAsyncTasks);
 	}
 
 private:
-	// 입력 데이터
+	// Input data
 	FStructuralIntegritySystem* System;
 	TArray<int32> CellIdsToDestroy;
 
-	// 결과 데이터
+	// Result data
 	FStructuralIntegrityResult Result;
 };
 
 /**
- * 비동기 파괴 결과 콜백 타입
+ * Async destruction result callback type
  */
 DECLARE_DELEGATE_OneParam(FOnStructuralDestroyCompleteDelegate, const FStructuralIntegrityResult&);
 
 /**
- * 비동기 작업 관리자
+ * Async Task Manager
  *
- * 여러 비동기 Cell 파괴 처리를 관리하고 완료 시 콜백 호출
+ * Manages multiple async cell destruction operations and invokes callbacks on completion
  */
 class REALTIMEDESTRUCTION_API FStructuralIntegrityAsyncManager
 {
@@ -71,16 +71,16 @@ public:
 	FStructuralIntegrityAsyncManager() = default;
 	~FStructuralIntegrityAsyncManager();
 
-	// 복사/이동 금지
+	// Non-copyable and non-movable
 	FStructuralIntegrityAsyncManager(const FStructuralIntegrityAsyncManager&) = delete;
 	FStructuralIntegrityAsyncManager& operator=(const FStructuralIntegrityAsyncManager&) = delete;
 
 	/**
-	 * 비동기 Cell 파괴 처리 시작
-	 * @param System - 구조적 무결성 시스템
-	 * @param CellIds - 파괴할 Cell ID 목록
-	 * @param OnComplete - 완료 시 콜백
-	 * @return Task ID (추적용)
+	 * Start async cell destruction processing
+	 * @param System - Structural integrity system
+	 * @param CellIds - Cell ID list to destroy
+	 * @param OnComplete - Callback on completion
+	 * @return Task ID (for tracking)
 	 */
 	int32 DestroyCellsAsync(
 		FStructuralIntegritySystem* System,
@@ -88,30 +88,30 @@ public:
 		FOnStructuralDestroyCompleteDelegate OnComplete);
 
 	/**
-	 * 대기 중인 작업 완료 체크 (Tick에서 호출)
-	 * 완료된 Task의 콜백을 GameThread에서 실행
+	 * Check pending task completion (called from Tick)
+	 * Executes completed task callbacks on GameThread
 	 */
 	void CheckPendingTasks();
 
 	/**
-	 * 모든 작업 완료 대기 (소멸자, EndPlay 등에서)
+	 * Wait for all tasks to complete (in destructor, EndPlay, etc.)
 	 */
 	void WaitForAllTasks();
 
 	/**
-	 * 특정 Task 취소 (가능한 경우)
-	 * FNonAbandonableTask이므로 실제로는 완료될 때까지 대기
-	 * @param TaskId - 취소할 Task ID
+	 * Cancel a specific task (if possible)
+	 * Since FNonAbandonableTask, actually waits until completion
+	 * @param TaskId - Task ID to cancel
 	 */
 	void CancelTask(int32 TaskId);
 
 	/**
-	 * 대기 중인 Task 수
+	 * Number of pending tasks
 	 */
 	int32 GetPendingTaskCount() const;
 
 	/**
-	 * 모든 Task가 완료되었는지
+	 * Whether all tasks are complete
 	 */
 	bool IsAllTasksComplete() const;
 
@@ -130,20 +130,20 @@ private:
 };
 
 /**
- * 동기/비동기 처리 유틸리티
+ * Sync/Async Processing Utilities
  *
- * Cell 수에 따라 자동으로 동기/비동기 선택
+ * Automatically selects sync/async based on cell count
  */
 namespace StructuralIntegrityUtils
 {
 	/**
-	 * Cell 수에 따라 동기/비동기 자동 선택하여 파괴 처리
-	 * @param System - 구조적 무결성 시스템
-	 * @param AsyncManager - 비동기 매니저 (nullptr이면 항상 동기)
-	 * @param CellIds - 파괴할 Cell ID 목록
-	 * @param OnComplete - 완료 시 콜백 (비동기 시에만 사용)
-	 * @param OutResult - 동기 처리 시 결과 (출력)
-	 * @return true면 동기 처리됨, false면 비동기 처리 시작됨
+	 * Process destruction with automatic sync/async selection based on cell count
+	 * @param System - Structural integrity system
+	 * @param AsyncManager - Async manager (always sync if nullptr)
+	 * @param CellIds - Cell ID list to destroy
+	 * @param OnComplete - Callback on completion (used only for async)
+	 * @param OutResult - Result for sync processing (output)
+	 * @return true if processed synchronously, false if async processing started
 	 */
 	REALTIMEDESTRUCTION_API bool DestroyCellsAutomatic(
 		FStructuralIntegritySystem* System,

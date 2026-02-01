@@ -28,8 +28,8 @@ public:
 	ADebrisActor();
 
 	// Components
-	// Root: BoxComponent(물리 담당)
-	// ProceduralMesh는 Rendering 담당
+	// Root: BoxComponent (handles physics)
+	// ProceduralMesh handles rendering only
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Debris")
 	TObjectPtr<UBoxComponent> CollisionBox;
 
@@ -38,36 +38,35 @@ public:
 
 	// Replicated Properties
 
-	/** 매칭용 고유 ID */
+	/** Unique ID for matching */
 	UPROPERTY(ReplicatedUsing = OnRep_DebrisParams)
 	int32 DebrisId;
 
-	/** 로컬용 CellIds (복제 안 함, 디코딩 결과 저장) */
+	/** Local CellIds (not replicated, stores decoded result) */
 	UPROPERTY()
 	TArray<int32> CellIds;
 
-	/** 압축된 셀 바운딩 박스 Min (복제용) */
+	/** Compressed cell bounding box Min (for replication) */
 	UPROPERTY(Replicated)
 	FIntVector CellBoundsMin;
 
-	/** 압축된 셀 바운딩 박스 Max (복제용) */
+	/** Compressed cell bounding box Max (for replication) */
 	UPROPERTY(Replicated)
 	FIntVector CellBoundsMax;
 
-	/** 압축된 셀 비트맵 (복제용) */
+	/** Compressed cell bitmap (for replication) */
 	UPROPERTY(Replicated)
 	TArray<uint8> CellBitmap;
-
-
-	/** 원본 메시 소유 Actor (CellID로 debirs 생성할 때 필요) */
+	
+	/** Owner actor of source mesh (required for generating debris from CellIDs) */
 	UPROPERTY(Replicated)
 	TObjectPtr<AActor> SourceMeshOwner;
 
-	/** 원본 청크 인덱스 */
+	/** Source chunk index */
 	UPROPERTY(Replicated)
 	int32 SourceChunkIndex;
-	
-	/** 머티리얼 */
+
+	/** Material */
 	UPROPERTY(Replicated)
 	TObjectPtr<UMaterialInterface> DebrisMaterial;
 
@@ -78,19 +77,19 @@ public:
 
 	// public Methods
 	
-	/** 서버에서 호출: Debris 초기화 */
+	/** Server-only: Initialize debris */
 	void InitializeDebris(int32 InDebrisId, const TArray<int32>& InCellIds, int32 InChunkIndex, URealtimeDestructibleMeshComponent* InSourcMesh, UMaterialInterface* InMaterial);
 
-	/** 서버에서 호출: 물리 활성화 */
+	/** Server-only: Enable physics */
 	void EnablePhysics();
 
-	/** 로컬 메시 데이터를 적용 (클라이언트에서 호출) */
+	/** Apply local mesh data (called from client) */
 	void ApplyLocalMesh(UProceduralMeshComponent* LocalMesh);
 
-	/** Box Collision 크기 설정 */
+	/** Set box collision extent */
 	void SetCollisionBoxExtent(const FVector& Extent);
-	
-	/** 서버에서 호출: 직접 메시 설정 (이미 생성된 메시 데이터 사용) */
+
+	/** Server-only: Set mesh directly using pre-generated mesh data */
 	void SetMeshDirectly(const TArray<FVector>& Vertices,
 		const TArray<int32>& Triangles,
 		const TArray<FVector>& Normals,
@@ -104,22 +103,22 @@ protected:
 	void OnRep_DebrisParams();
 	
 private:
-	/** DebrisId로 로컬 메쉬 찾기 */
+	/** Find local mesh by DebrisId */
 	UProceduralMeshComponent* FindLocalDebrisMesh(int32 InDebrisId);
 
-	/** CellIds로 메시 생성 (fallback) */
+	/** Generate mesh from CellIds (fallback) */
 	void GenerateMeshFromCells();
 
-	/** SourceMeshOwner에서 컴포넌트 가져오기 */
+	/** Get component from SourceMeshOwner */
 	URealtimeDestructibleMeshComponent* GetSourceMeshComponent() const;
 
-	/** 수명 타이머 */
+	/** Lifetime expiration callback */
 	void OnLifetimeExpired();
 
-	/** CellIds를 비트맵으로 인코딩 (서버에서 호출) */
+	/** Encode CellIds to bitmap (called from server) */
 	void EncodeCellsToBitmap(const TArray<int32>& InCellIds, const struct FGridCellLayout& GridLayout);
 
-	/** 비트맵을 CellIds로 디코딩 (클라이언트에서 호출) */
+	/** Decode bitmap to CellIds (called from client) */
 	void DecodeBitmapToCells(const struct FGridCellLayout& GridLayout);
 
 	bool bMeshReady;

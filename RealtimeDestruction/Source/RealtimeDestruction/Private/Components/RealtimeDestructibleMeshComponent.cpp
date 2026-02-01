@@ -264,7 +264,6 @@ void URealtimeDestructibleMeshComponent::ResetToSourceMesh()
 		BooleanProcessor->CancelAllOperations();
 	}
 	
-	CurrentHoleCount = 0;
 	bIsInitialized = false;
 	InitializeFromStaticMeshInternal(SourceStaticMesh, true);
 }
@@ -3713,7 +3712,6 @@ bool URealtimeDestructibleMeshComponent::InitializeFromStaticMeshInternal(UStati
 	SetMesh(MoveTemp(ResultMesh->GetMeshRef()));
 
 	// 상태값 갱신
-	CurrentHoleCount = 0;
 	bIsInitialized = true; // Construction Script에서 중복 실행 방지
 	OnInitialized.Broadcast();
 

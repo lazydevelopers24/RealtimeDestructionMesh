@@ -19,8 +19,7 @@ USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FImpactProfileConfig
 {
 	GENERATED_BODY()
- 
-	/** Decal Material */
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
 	FString VariantName;
 	
@@ -85,7 +84,7 @@ struct REALTIMEDESTRUCTION_API FImpactProfileConfigArray
 	}
 
 	/** 개수 출력 */
-	int32 Num() { return Configs.Num(); }
+	int32 Num() const { return Configs.Num(); }
 
 	/** 유효성 검사 */
 	bool IsValid() const { return (Configs.Num() > 0) && (Configs[0].IsValid()); }
@@ -141,7 +140,6 @@ public:
 	UPROPERTY()
 	FName CurrentEditingKey = NAME_None;
 	
-	// Tool Shape
 	UPROPERTY()
 	FVector ToolShapeLocationInEditor = FVector::ZeroVector;
 	

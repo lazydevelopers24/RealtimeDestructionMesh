@@ -72,10 +72,10 @@ public:
 	UBulletClusterComponent();
 
 	// ===============================================
-	// 기본 변수 
+	// Properties
 	// ===============================================
 
-	// 군집화 시간 
+	// Clustering time window
 	UPROPERTY()
 	float ClusterWindowTime = 0.3f;
 
@@ -90,15 +90,15 @@ public:
 
 	UPROPERTY()
 	float ClusterRadiusOffset = 1.0f;
-	
+
 	// ===============================================
-	// 기본 함수
+	// Functions
 	// ===============================================
 	void Init(float InMergeDistance, float InMaxCluserRadius, int InClusterCountThreshold, float InClusterRadiusOffset);
 
 	void SetOwnerMesh(URealtimeDestructibleMeshComponent* InOwnerMesh);
 
-	// 요청 등록
+	// Register request
 	UFUNCTION()
 	void RegisterRequest(const FRealtimeDestructionRequest& Request);
 
@@ -108,11 +108,11 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	// 소유자 메쉬 
+	// Owner mesh
 	UPROPERTY()
 	TWeakObjectPtr<URealtimeDestructibleMeshComponent> OwnerMesh;
 
-	// 대기 중인 요청들
+	// Pending requests
 	UPROPERTY()
 	TArray<FPendingClusteringRequest> PendingRequests;
 
@@ -123,12 +123,12 @@ private:
 	// Timer Callback
 	void OnClusterWindowExpired();
 
-	// 군집화 수행
+	// Perform clustering
 	TArray<FBulletCluster> ProcessClustering();
 
-	// 파괴 실행
+	// Execute destruction
 	void ExecuteDestruction(const TArray<FBulletCluster>& Clusters);
 
-	// 버퍼 클리어
+	// Clear buffer
 	void ClearPendingRequests();
 };

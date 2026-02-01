@@ -44,21 +44,17 @@ public:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
-
-	//Setting 접근자
+	
 	static URDMSetting* Get();
 
-	///** ConfigID 변경 시 Entry의 ConfigID도 업데이트 */
+	///** Sync Entry's ConfigID when ConfigID changed*/
 	void UpdateEntryConfigID(FName OldConfigID, FName NewConfigID);
-
-	// 카테고리 설정
+	
 	virtual FName GetCategoryName() const override {return TEXT("Plugins"); }
-
-	// 섹션 이름
+	
 	virtual FName GetSectionName() const override { return TEXT("Realtime Destructible Mesh"); }
 	
 public:
-	// thread 설정 모드
 	UPROPERTY(config, EditAnywhere, Category = "Thread Settings" , meta = (DisplayName =  "Thread Mode"))
 	ERDMThreadMode ThreadMode = ERDMThreadMode::Absolute; 
 
@@ -67,15 +63,15 @@ public:
 		EditCondition = "ThreadMode == ERDMThreadMode::Absolute", EditConditionHides))
 	int32 MaxThreadCount = 8;
 
-	// Percetage Mode
+	// Percentage Mode
 	UPROPERTY(config, EditAnywhere, Category = "Thread Settings", meta = (DisplayName = "Thread Usage Rate", ClampMin ="0", ClampMax = "100", UIMin ="0", UIMax ="100",
 		EditCondition = "ThreadMode == ERDMThreadMode::Percentage", EditConditionHides))
 	int32 ThreadPercentage = 50;
 
-	// 계산된 실제 thread 수 반환
+	// Returns calculated available threads depends on thread mode
 	int32 GetEffectiveThreadCount() const ;
 	
-	// 시스템 thread 수 반환
+	// Returns system total threads
 	static int32 GetSystemThreadCount();
 
 public:

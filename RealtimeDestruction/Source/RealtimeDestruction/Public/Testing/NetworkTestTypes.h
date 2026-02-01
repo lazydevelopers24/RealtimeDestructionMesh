@@ -8,7 +8,7 @@
 // the use of this product.
 
 // NetworkTestTypes.h
-// 네트워크 테스트용 타입 정의
+// Type definitions for network testing
 
 #pragma once
 
@@ -16,54 +16,54 @@
 #include "NetworkTestTypes.generated.h"
 
 /**
- * 네트워크 테스트 프리셋 열거형
+ * Network Test Preset Enumeration
  *
- * 다양한 네트워크 환경을 시뮬레이션하기 위한 프리셋
+ * Presets for simulating various network environments
  */
 UENUM(BlueprintType)
 enum class ENetworkTestPreset : uint8
 {
-	/** 시뮬레이션 없음 */
+	/** No simulation */
 	Off		UMETA(DisplayName = "Off - No Simulation"),
 
-	/** 좋은 연결 (20ms) - 일반 사용자 */
+	/** Good connection (20ms) - Regular users */
 	Good	UMETA(DisplayName = "Good - 20ms"),
 
-	/** 보통 연결 (50ms) - 대다수 사용자 */
+	/** Normal connection (50ms) - Majority of users */
 	Normal	UMETA(DisplayName = "Normal - 50ms"),
 
-	/** 나쁜 연결 (100ms) - 와이파이 */
+	/** Bad connection (100ms) - WiFi */
 	Bad		UMETA(DisplayName = "Bad - 100ms"),
 
-	/** 최악 환경 (200ms + 5% 손실) - 모바일/해외 */
+	/** Worst environment (200ms + 5% loss) - Mobile/Overseas */
 	Worst	UMETA(DisplayName = "Worst - 200ms + 5% Loss")
 };
 
 /**
- * 네트워크 프리셋 설정값 구조체
+ * Network Preset Configuration Struct
  */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FNetworkTestPresetConfig
 {
 	GENERATED_BODY()
 
-	/** 패킷 지연 (ms) - Net.PktLag */
+	/** Packet latency (ms) - Net.PktLag */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NetworkTest")
 	int32 PktLag = 0;
 
-	/** 패킷 지연 변동 (ms) - Net.PktLagVariance */
+	/** Packet latency variance (ms) - Net.PktLagVariance */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NetworkTest")
 	int32 PktLagVariance = 0;
 
-	/** 패킷 손실률 (%) - Net.PktLoss */
+	/** Packet loss rate (%) - Net.PktLoss */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NetworkTest")
 	int32 PktLoss = 0;
 
-	/** 프리셋 이름 */
+	/** Preset name */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NetworkTest")
 	FString PresetName;
 
-	/** 기본 생성자 */
+	/** Default constructor */
 	FNetworkTestPresetConfig()
 		: PktLag(0)
 		, PktLagVariance(0)
@@ -72,7 +72,7 @@ struct REALTIMEDESTRUCTION_API FNetworkTestPresetConfig
 	{
 	}
 
-	/** 값 초기화 생성자 */
+	/** Value initialization constructor */
 	FNetworkTestPresetConfig(int32 InLag, int32 InVariance, int32 InLoss, const FString& InName)
 		: PktLag(InLag)
 		, PktLagVariance(InVariance)
@@ -81,13 +81,13 @@ struct REALTIMEDESTRUCTION_API FNetworkTestPresetConfig
 	{
 	}
 
-	/** 설정이 활성화되어 있는지 (시뮬레이션 중인지) */
+	/** Check if configuration is active (simulation running) */
 	bool IsActive() const
 	{
 		return PktLag > 0 || PktLoss > 0;
 	}
 
-	/** 문자열로 변환 */
+	/** Convert to string */
 	FString ToString() const
 	{
 		return FString::Printf(TEXT("%s (Lag:%dms Var:%dms Loss:%d%%)"),

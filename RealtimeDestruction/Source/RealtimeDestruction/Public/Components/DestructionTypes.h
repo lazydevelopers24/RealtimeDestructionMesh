@@ -20,18 +20,18 @@ enum class EDestructionToolShape : uint8
     Cylinder    UMETA(DisplayName = "Cylinder")
 };
 /**
- * 서버 파괴 요청 거부 사유
+ * Server destruction request rejection reason
  */
 UENUM(BlueprintType)
 enum class EDestructionRejectReason : uint8
 {
     None               UMETA(DisplayName = "None"),
-    OutOfRange         UMETA(DisplayName = "Out of Range"),          // 사거리 초과
-    LineOfSightBlocked UMETA(DisplayName = "Line of Sight Blocked"), // 시야 차단
-    RateLimited        UMETA(DisplayName = "Rate Limited"),          // 연사 제한
-    InvalidPosition    UMETA(DisplayName = "Invalid Position"),      // 유효하지 않은 위치
-    Indestructible     UMETA(DisplayName = "Indestructible"),        // 파괴 불가
-    MaxHoleReached     UMETA(DisplayName = "Max Hole Reached")       // 최대 구멍 수 도달
+    OutOfRange         UMETA(DisplayName = "Out of Range"),          // Range exceeded
+    LineOfSightBlocked UMETA(DisplayName = "Line of Sight Blocked"), // Line of sight blocked
+    RateLimited        UMETA(DisplayName = "Rate Limited"),          // Rate limited
+    InvalidPosition    UMETA(DisplayName = "Invalid Position"),      // Invalid position
+    Indestructible     UMETA(DisplayName = "Indestructible"),        // Indestructible
+    MaxHoleReached     UMETA(DisplayName = "Max Hole Reached")       // Max hole count reached
 };
 
 
@@ -64,7 +64,7 @@ struct REALTIMEDESTRUCTION_API FDestructionToolShapeParams
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shape|Box")
     FVector BoxSize = FVector(20.0f, 20.0f, 20.0f);
 
-    // 네트워크 전송을 위해 UPROPERTY 추가
+    // Added UPROPERTY for network serialization
     UPROPERTY()
     float SurfaceMargin = 0.0f;
 };
@@ -253,7 +253,7 @@ struct REALTIMEDESTRUCTION_API FBulletCluster
             AverageForwardVector += ForwardSum.GetSafeNormal();
         }
 
-        // Center, Radius 확장 
+        // Expand Center, Radius
         float Dist = FVector::Dist(Center, Point);
 
         if (Dist + InRadius <= Radius)

@@ -20,22 +20,22 @@
 //////////////////////////////////////////////////////////////////////////
 
 /**
- * 파편 타입 분류
+ * Debris type classification
  */
 UENUM(BlueprintType)
 enum class EDebrisType : uint8
 {
-	Cosmetic,    // 로컬 전용, 짧은 수명, 게임플레이 영향 없음
-	Gameplay     // 서버 권한, 복제됨, 물리 상호작용 가능
+	Cosmetic,    // Local only, short lifespan, no gameplay impact
+	Gameplay     // Server authoritative, replicated, physics interaction enabled
 };
 
 /**
- * 파편 크기 티어
+ * Debris size tier
  */
 UENUM(BlueprintType)
 enum class EDebrisTier : uint8
 {
-	Tiny,      // < 100 cm³ - 파티클로 대체
+	Tiny,      // < 100 cm³ - Replaced with particles
 	Small,     // 100-500 cm³ - Sphere collision
 	Medium,    // 500-2000 cm³ - Box collision
 	Large,     // 2000-10000 cm³ - Convex Hull
@@ -47,26 +47,26 @@ enum class EDebrisTier : uint8
 //////////////////////////////////////////////////////////////////////////
 
 /**
- * 파편 티어별 설정
+ * Per-tier debris settings
  */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FDebrisTierConfig
 {
 	GENERATED_BODY()
 
-	// 이 티어의 볼륨 상한 (cm³)
+	// Volume upper limit for this tier (cm³)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DebrisTier")
 	float VolumeThreshold = 0.0f;
 
-	// 파편 수명 (초, 0이면 영구)
+	// Debris lifespan (seconds, 0 for permanent)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DebrisTier")
 	float Lifespan = 3.0f;
 
-	// 최대 파편 개수
+	// Maximum debris count
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DebrisTier", meta = (ClampMin = "1"))
 	int32 MaxCount = 50;
 
-	// Cosmetic 여부 (false면 Gameplay - 네트워크 복제)
+	// Whether cosmetic (false = Gameplay - network replicated)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DebrisTier")
 	bool bIsCosmetic = true;
 
@@ -82,58 +82,58 @@ struct REALTIMEDESTRUCTION_API FDebrisTierConfig
 };
 
 /**
- * 파편 스폰 설정
+ * Debris spawn settings
  */
 USTRUCT(BlueprintType)
 struct REALTIMEDESTRUCTION_API FDebrisSpawnSettings
 {
 	GENERATED_BODY()
 
-	// 파편 스폰 활성화
+	// Enable debris spawn
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris")
 	bool bEnableDebrisSpawn = true;
 
-	// Gameplay 파편 볼륨 임계값 (cm³) - 이 값 초과 시 Gameplay 타입
+	// Gameplay debris volume threshold (cm³) - Gameplay type if exceeded
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris")
 	float GameplayVolumeThreshold = 2000.0f;
 
-	// Cosmetic 파편 기본 수명 (초)
+	// Cosmetic debris default lifespan (seconds)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris|Cosmetic")
 	float CosmeticLifespan = 3.0f;
 
-	// Cosmetic 파편 최대 개수
+	// Maximum cosmetic debris count
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris|Cosmetic", meta = (ClampMin = "1"))
 	int32 MaxCosmeticDebris = 50;
 
-	// Gameplay 파편 기본 수명 (초, 0이면 영구)
+	// Gameplay debris default lifespan (seconds, 0 for permanent)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris|Gameplay")
 	float GameplayLifespan = 0.0f;
 
-	// Gameplay 파편 최대 개수
+	// Maximum gameplay debris count
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris|Gameplay", meta = (ClampMin = "1"))
 	int32 MaxGameplayDebris = 20;
 
-	// 파편 초기 임펄스 수평 강도
+	// Debris initial impulse horizontal strength
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris|Physics")
 	float InitialImpulseHorizontal = 100.0f;
 
-	// 파편 초기 임펄스 수직 강도
+	// Debris initial impulse vertical strength
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debris|Physics")
 	float InitialImpulseVertical = 150.0f;
 
-	// 볼륨으로 Debris 타입 결정
+	// Determine debris type by volume
 	EDebrisType GetDebrisType(float Volume) const
 	{
 		return (Volume <= GameplayVolumeThreshold) ? EDebrisType::Cosmetic : EDebrisType::Gameplay;
 	}
 
-	// 타입별 수명 반환
+	// Return lifespan by type
 	float GetLifespanForType(EDebrisType Type) const
 	{
 		return (Type == EDebrisType::Cosmetic) ? CosmeticLifespan : GameplayLifespan;
 	}
 
-	// 타입별 최대 개수 반환
+	// Return max count by type
 	int32 GetMaxCountForType(EDebrisType Type) const
 	{
 		return (Type == EDebrisType::Cosmetic) ? MaxCosmeticDebris : MaxGameplayDebris;
@@ -141,37 +141,37 @@ struct REALTIMEDESTRUCTION_API FDebrisSpawnSettings
 };
 
 /**
- * 압축된 파편 동기화 Op (네트워크 전송용)
- * 기존 FCompactDestructionOp 패턴 따름
+ * Compressed debris sync Op (for network transmission)
+ * Follows existing FCompactDestructionOp pattern
  */
 USTRUCT()
 struct REALTIMEDESTRUCTION_API FCompactDebrisOp
 {
 	GENERATED_BODY()
 
-	// Cell Key 압축 배열: (ChunkId << 16) | CellId
+	// Packed Cell Key array: (ChunkId << 16) | CellId
 	UPROPERTY()
 	TArray<int32> PackedCellKeys;
 
-	// 그룹 ID
+	// Group ID
 	UPROPERTY()
 	int32 GroupId = INDEX_NONE;
 
-	// 질량 중심 (1cm 정밀도)
+	// Center of mass (1cm precision)
 	UPROPERTY()
 	FVector_NetQuantize CenterOfMass;
 
-	// 대략적 볼륨 (cm³, 압축)
+	// Approximate volume (cm³, compressed)
 	UPROPERTY()
 	float ApproximateVolume = 0.0f;
 
-	// 시퀀스 번호
+	// Sequence number
 	UPROPERTY()
 	uint16 Sequence = 0;
 
 	FCompactDebrisOp() = default;
 
-	// Cell Key 압축
+	// Pack Cell Keys
 	static void PackCellKeys(const TArray<FCellKey>& Keys, TArray<int32>& OutPacked)
 	{
 		OutPacked.Reset();
@@ -182,7 +182,7 @@ struct REALTIMEDESTRUCTION_API FCompactDebrisOp
 		}
 	}
 
-	// Cell Key 압축 해제
+	// Unpack Cell Keys
 	static void UnpackCellKeys(const TArray<int32>& Packed, TArray<FCellKey>& OutKeys)
 	{
 		OutKeys.Reset();
@@ -193,7 +193,7 @@ struct REALTIMEDESTRUCTION_API FCompactDebrisOp
 		}
 	}
 
-	// FDetachedCellGroup으로부터 생성
+	// Create from FDetachedCellGroup
 	static FCompactDebrisOp FromDetachedGroup(const FDetachedCellGroup& Group, uint16 InSequence)
 	{
 		FCompactDebrisOp Op;
@@ -205,7 +205,7 @@ struct REALTIMEDESTRUCTION_API FCompactDebrisOp
 		return Op;
 	}
 
-	// FDetachedCellGroup으로 복원
+	// Restore to FDetachedCellGroup
 	FDetachedCellGroup ToDetachedGroup() const
 	{
 		FDetachedCellGroup Group;
@@ -222,30 +222,30 @@ struct REALTIMEDESTRUCTION_API FCompactDebrisOp
 //////////////////////////////////////////////////////////////////////////
 
 /**
- * Gameplay 파편 추적 데이터 (PMC → DMC 전환용)
+ * Gameplay debris tracking data (for PMC → DMC conversion)
  *
- * UDynamicMeshComponent는 TriMesh(Complex) 충돌만 지원하여 동적 물리 시뮬레이션 불가.
- * 따라서 물리 시뮬레이션 중에는 UProceduralMeshComponent(PMC)를 사용하고,
- * 안정화 후 UDynamicMeshComponent(DMC)로 전환하여 2차 파괴를 지원함.
+ * UDynamicMeshComponent only supports TriMesh(Complex) collision, making dynamic physics simulation impossible.
+ * Therefore, UProceduralMeshComponent(PMC) is used during physics simulation,
+ * then converted to UDynamicMeshComponent(DMC) after stabilization to support secondary destruction.
  */
 struct REALTIMEDESTRUCTION_API FGameplayDebrisTracker
 {
-	/** PMC 컴포넌트 (물리 시뮬레이션용) */
+	/** PMC component (for physics simulation) */
 	TWeakObjectPtr<UProceduralMeshComponent> PMC;
 
-	/** 원본 메시 데이터 (DMC 전환용 보존) */
+	/** Original mesh data (preserved for DMC conversion) */
 	TSharedPtr<UE::Geometry::FDynamicMesh3> OriginalMesh;
 
-	/** 안정 상태 지속 시간 (초) */
+	/** Stable state duration (seconds) */
 	float StableTime = 0.0f;
 
-	/** 파편 타입 */
+	/** Debris type */
 	EDebrisType DebrisType = EDebrisType::Gameplay;
 
-	/** 안정화 판정 임계 속도 (cm/s) */
+	/** Stabilization velocity threshold (cm/s) */
 	static constexpr float StableVelocityThreshold = 5.0f;
 
-	/** 안정화 필요 지속 시간 (초) */
+	/** Required stabilization duration (seconds) */
 	static constexpr float StableTimeRequired = 0.5f;
 
 	FGameplayDebrisTracker() = default;
@@ -258,15 +258,15 @@ struct REALTIMEDESTRUCTION_API FGameplayDebrisTracker
 	{
 	}
 
-	/** PMC가 유효한지 확인 */
+	/** Check if PMC is valid */
 	bool IsValid() const { return PMC.IsValid(); }
 
-	/** 안정화 완료 여부 */
+	/** Whether stabilization is complete */
 	bool IsStabilized() const { return StableTime >= StableTimeRequired; }
 
-	/** 안정화 타이머 리셋 */
+	/** Reset stabilization timer */
 	void ResetStableTime() { StableTime = 0.0f; }
 
-	/** 안정화 시간 누적 */
+	/** Accumulate stabilization time */
 	void AccumulateStableTime(float DeltaTime) { StableTime += DeltaTime; }
 };

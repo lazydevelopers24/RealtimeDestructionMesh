@@ -18,7 +18,7 @@ struct FRDMWorkerRequest
 {
 	TFunction<void()> WorkFunc;
 	int32 Priority = 0;
-	TWeakObjectPtr<UObject> Requester; // 요청한 컴포넌트 추적용
+	TWeakObjectPtr<UObject> Requester; // For tracking the requesting component
 };
 
 UCLASS(ClassGroup = (RealtimeDestruction))
@@ -27,48 +27,48 @@ class REALTIMEDESTRUCTION_API URDMThreadManagerSubsystem : public UGameInstanceS
 	GENERATED_BODY()
 
 public:
-	// Subsystem 인터페이스 
+	// Subsystem Interface
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override {return true;}
 
-	// 정적 접근자 Worker Thread에서 안전하게 접근하기 위함
+	// Static accessor for safe access from Worker Thread
 	static URDMThreadManagerSubsystem* Get(UWorld* World);
 
-	// Thread 요청 인터페이스 
+	// Thread Request Interface
 	void RequestWork(TFunction<void()>&& WorkFunc, UObject* Requester);
 
-	// 설정 
+	// Settings
 	void SetMaxTotalWorkers(int32 Max) { MaxTotalWorkers = FMath::Max(1, Max); }
 	int32 GetMaxTotalWorkers() const { return MaxTotalWorkers; }
 	int32 GetActiveWorkerCount() const { return ActiveWorkers.load(); }
 	int32 GetPendingCount() const { return PendingCount.load(); }
 
 	int32 GetSlotCount () const {return (MaxTotalWorkers >= 8) ? 2 : 1; }
-	// 로그
+	// Logging
 	void LogStatus() const;
 private:
-	// 실제 실행
+	// Actual execution
 	void LaunchWork(TFunction<void()>&& WorkFunc);
 
-	// 완료 처리
+	// Completion handling
 	void OnWorkComplete();
 
-	// 대기 큐에서 다음 작업 실행
+	// Execute next task from pending queue
 	void TryDispatchPending();
 	
 private:
-	// 전역 Thread 제한
-	int32 MaxTotalWorkers = 4;  // 전체 게임에서 최대 4개
+	// Global thread limit
+	int32 MaxTotalWorkers = 4;  // Maximum 4 workers for the entire game
 
-	// 현재 활성 Worker 수
+	// Current active worker count
 	std::atomic<int32> ActiveWorkers{ 0 };
 
-	// 대기 큐
+	// Pending queue
 	TQueue<TFunction<void()>, EQueueMode::Mpsc> PendingQueue;
 	std::atomic<int32> PendingCount{ 0 };
 
-	// 종료 플래그
+	// Shutdown flag
 	std::atomic<bool> bIsShuttingDown{ false };
 
 	

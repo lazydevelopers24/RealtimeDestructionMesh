@@ -9,7 +9,7 @@
 
 #include "StructuralIntegrity/SubCellProcessor.h"
 
-// SubCell 디버그 로그 활성화
+// SubCell debug log enable
 #define SUBCELL_DEBUG_LOG 0
 
 #if SUBCELL_DEBUG_LOG
@@ -31,7 +31,7 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 		return false;
 	}
 
-	// 1. Tool shape의 AABB로 후보 cell 필터링 (월드 공간)
+	// 1. Filter candidate cells by tool shape AABB (world space)
 	const FBox ShapeAABB = ComputeShapeAABB(QuantizedShape);
 	const TArray<int32> CandidateCells = GridLayout.GetCellsInAABB(ShapeAABB, MeshTransform);
 
@@ -45,16 +45,16 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 		return false;
 	}
 
-	// 2. 각 후보 cell의 subcell 검사 (월드 공간 OBB 교차 검사)
+	// 2. Check subcells of each candidate cell (world space OBB intersection test)
 	for (int32 CellId : CandidateCells)
 	{
-		// 이미 완전히 파괴된 cell은 스킵
+		// Skip already fully destroyed cells
 		if (InOutCellState.DestroyedCells.Contains(CellId))
 		{
 			continue;
 		}
 
-		// SubCell 상태 가져오기 (없으면 생성)
+		// Get SubCell state (create if not exists)
 		FSubCell& SubCellState = InOutCellState.SubCellStates.FindOrAdd(CellId);
 
 		bool bAnySubCellNewlyDead = false;
@@ -65,19 +65,19 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 		UE_LOG(LogSubCellDebug, Log, TEXT("  Checking CellId=%d (Coord: %d,%d,%d)"), CellId, CellCoord.X, CellCoord.Y, CellCoord.Z);
 #endif
 
-		// 3. 각 subcell이 tool shape과 교차하는지 검사 (월드 공간 OBB)
+		// 3. Check if each subcell intersects the tool shape (world space OBB)
 		for (int32 SubCellId = 0; SubCellId < SUBCELL_COUNT; ++SubCellId)
 		{
-			// 이미 dead인 subcell은 스킵
+			// Skip already dead subcells
 			if (!SubCellState.IsSubCellAlive(SubCellId))
 			{
 				continue;
 			}
 
-			// SubCell의 월드 공간 OBB (메시의 회전과 비균일 스케일 정확히 반영)
+			// SubCell world space OBB (accurately reflects mesh rotation and non-uniform scale)
 			const FCellOBB SubCellOBB = GridLayout.GetSubCellWorldOBB(CellId, SubCellId, MeshTransform);
 
-			// 월드 공간에서 Shape-OBB 교차 검사
+			// Shape-OBB intersection test in world space
 			const bool bIntersects = QuantizedShape.IntersectsOBB(SubCellOBB);
 
 #if SUBCELL_DEBUG_LOG
@@ -96,7 +96,7 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 			}
 		}
 
-		// 4. 영향받은 cell 기록
+		// 4. Record affected cell
 		if (bAnySubCellNewlyDead)
 		{
 			OutAffectedCells.Add(CellId);
@@ -115,7 +115,7 @@ bool FSubCellProcessor::ProcessSubCellDestruction(
 				OutNewlyDeadSubCells->Add(CellId, MoveTemp(NewlyDeadSubCells));
 			}
 
-			// 모든 subcell이 파괴되었으면 cell 자체를 파괴 상태로
+			// If all subcells are destroyed, mark the cell itself as destroyed
 			if (SubCellState.IsFullyDestroyed())
 			{
 				InOutCellState.DestroyedCells.Add(CellId);

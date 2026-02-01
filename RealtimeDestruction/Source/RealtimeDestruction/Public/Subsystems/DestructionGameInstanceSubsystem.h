@@ -16,8 +16,8 @@
 class UImpactProfileDataAsset;
 
 /**
- * 파괴 시스템용 GameInstance Subsystem
- * DecalDataAsset 등 전역 설정을 관리
+ * GameInstance Subsystem for Destruction System
+ * Manages global settings such as DecalDataAsset
  */
 UCLASS(ClassGroup = (RealtimeDestruction))
 class REALTIMEDESTRUCTION_API UDestructionGameInstanceSubsystem : public UGameInstanceSubsystem
@@ -37,7 +37,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Destruction")
 	UImpactProfileDataAsset* FindDataAssetByConfigID(FName ConfigID) const;
 
-	/** ConfigID 변경 시 Map의 Key도 업데이트 */
+	/** Updates the Map key when ConfigID changes */
 	UFUNCTION(BlueprintCallable, Category = "Destruction")
 	void RenameConfigID(FName OldConfigID, FName NewConfigID);
 	

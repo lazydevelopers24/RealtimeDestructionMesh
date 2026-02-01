@@ -13,17 +13,17 @@
 #include "StructuralIntegrity/StructuralIntegrityTypes.h"
 
 /**
- * 구조적 무결성 시스템 초기화 데이터
+ * Structural Integrity System Initialization Data
  *
- * CellGraph로부터 변환된 연결성 그래프 정보만 포함.
- * Cell의 기하학적 정보(위치, 삼각형)는 CellGraph가 보유.
+ * Contains only connectivity graph info converted from CellGraph.
+ * Geometric info (position, triangles) of cells is held by CellGraph.
  */
 struct REALTIMEDESTRUCTION_API FStructuralIntegrityInitData
 {
-	// Cell별 이웃 Cell ID 목록 (그래프 연결성)
+	// Neighbor cell ID list per cell (graph connectivity)
 	TArray<TArray<int32>> CellNeighbors;
 
-	// Anchor로 지정할 Cell ID 목록 (CellGraph에서 판정)
+	// Cell ID list to designate as anchors (determined by CellGraph)
 	TArray<int32> AnchorCellIds;
 
 	int32 GetCellCount() const { return CellNeighbors.Num(); }
@@ -35,18 +35,18 @@ struct REALTIMEDESTRUCTION_API FStructuralIntegrityInitData
 };
 
 /**
- * 구조적 무결성 코어 시스템
+ * Structural Integrity Core System
  *
- * 특징:
- * - 순수 C++ (UObject 아님)
- * - 스레드 안전 (읽기/쓰기 락)
- * - 결정론적 (같은 입력 -> 같은 출력)
+ * Features:
+ * - Pure C++ (not UObject)
+ * - Thread-safe (read/write locks)
+ * - Deterministic (same input -> same output)
  *
- * 사용법:
- * 1. FStructuralIntegrityInitData로 Initialize()
- * 2. AutoDetectFloorAnchors() 또는 SetAnchor()로 Anchor 설정
- * 3. DestroyCells() 호출하여 Cell 파괴
- * 4. FStructuralIntegrityResult의 DetachedGroups로 파편 처리
+ * Usage:
+ * 1. Initialize() with FStructuralIntegrityInitData
+ * 2. Set anchors via AutoDetectFloorAnchors() or SetAnchor()
+ * 3. Call DestroyCells() to destroy cells
+ * 4. Process debris via DetachedGroups in FStructuralIntegrityResult
  */
 class REALTIMEDESTRUCTION_API FStructuralIntegritySystem
 {
@@ -54,225 +54,225 @@ public:
 	FStructuralIntegritySystem() = default;
 	~FStructuralIntegritySystem() = default;
 
-	// 복사/이동 금지 (내부 상태 보호)
+	// Non-copyable and non-movable (protect internal state)
 	FStructuralIntegritySystem(const FStructuralIntegritySystem&) = delete;
 	FStructuralIntegritySystem& operator=(const FStructuralIntegritySystem&) = delete;
 
 	//=========================================================================
-	// 초기화
+	// Initialization
 	//=========================================================================
 
 	/**
-	 * 초기화 데이터로부터 시스템 초기화
-	 * @param InitData - Cell 연결성 그래프 및 Anchor 정보
-	 * @param Settings - 구조적 무결성 설정
+	 * Initialize system from initialization data
+	 * @param InitData - Cell connectivity graph and anchor info
+	 * @param Settings - Structural integrity settings
 	 */
 	void Initialize(const FStructuralIntegrityInitData& InitData, const FStructuralIntegritySettings& Settings);
 
-	/** 리셋 */
+	/** Reset */
 	void Reset();
 
-	/** 초기화 여부 */
+	/** Whether initialized */
 	bool IsInitialized() const { return bInitialized; }
 
-	/** Cell 개수 */
+	/** Cell count */
 	int32 GetCellCount() const;
 
 	//=========================================================================
-	// Anchor 관리
+	// Anchor Management
 	//=========================================================================
 
 	/**
-	 * 특정 Cell을 Anchor로 설정/해제
+	 * Set/unset a specific cell as anchor
 	 * @param CellId - Cell ID
-	 * @param bIsAnchor - true면 Anchor로 설정
+	 * @param bIsAnchor - Set as anchor if true
 	 */
 	void SetAnchor(int32 CellId, bool bIsAnchor);
 
 	/**
-	 * 여러 Cell을 Anchor로 설정
-	 * @param CellIds - Cell ID 목록
-	 * @param bIsAnchor - true면 Anchor로 설정
+	 * Set multiple cells as anchors
+	 * @param CellIds - Cell ID list
+	 * @param bIsAnchor - Set as anchor if true
 	 */
 	void SetAnchors(const TArray<int32>& CellIds, bool bIsAnchor);
 
-	/** Anchor 목록 조회 (스레드 안전) */
+	/** Get anchor list (thread-safe) */
 	TArray<int32> GetAnchorCellIds() const;
 
-	/** Cell이 Anchor인지 확인 (스레드 안전) */
+	/** Check if cell is anchor (thread-safe) */
 	bool IsAnchor(int32 CellId) const;
 
-	/** Anchor 개수 */
+	/** Anchor count */
 	int32 GetAnchorCount() const;
 
 	//=========================================================================
-	// Cell 파괴
+	// Cell Destruction
 	//=========================================================================
 
 	/**
-	 * 지정된 Cell들을 파괴하고 연결성 업데이트
-	 * @param CellIds - 파괴할 Cell ID 목록
-	 * @return 처리 결과 (파괴된 Cell, 분리된 그룹 등)
+	 * Destroy specified cells and update connectivity
+	 * @param CellIds - Cell ID list to destroy
+	 * @return Processing result (destroyed cells, detached groups, etc.)
 	 */
 	FStructuralIntegrityResult DestroyCells(const TArray<int32>& CellIds);
 
 	/**
-	 * 단일 Cell 파괴
-	 * @param CellId - 파괴할 Cell ID
-	 * @return 처리 결과
+	 * Destroy single cell
+	 * @param CellId - Cell ID to destroy
+	 * @return Processing result
 	 */
 	FStructuralIntegrityResult DestroyCell(int32 CellId);
 
 	//=========================================================================
-	// 상태 조회 (스레드 안전)
+	// State Query (Thread-safe)
 	//=========================================================================
 
-	/** Cell 상태 조회 */
+	/** Get cell state */
 	ECellStructuralState GetCellState(int32 CellId) const;
 
-	/** Cell이 Anchor에 연결되어 있는지 확인 */
+	/** Check if cell is connected to anchor */
 	bool IsCellConnectedToAnchor(int32 CellId) const;
 
-	/** 파괴된 Cell 개수 */
+	/** Destroyed cell count */
 	int32 GetDestroyedCellCount() const;
 
-	/** 파괴된 Cell ID 목록 (네트워크 동기화용) */
+	/** Destroyed cell ID list (for network sync) */
 	TArray<int32> GetDestroyedCellIds() const;
 
 	//=========================================================================
-	// 강제 상태 설정 (네트워크 동기화용)
+	// Force State Setting (For Network Sync)
 	//=========================================================================
 
 	/**
-	 * 늦게 접속한 클라이언트를 위한 상태 동기화
-	 * @param DestroyedIds - 파괴된 Cell ID 목록
-	 * @return 분리된 그룹 목록
+	 * State sync for late-joining clients
+	 * @param DestroyedIds - Destroyed cell ID list
+	 * @return Detached group list
 	 */
 	TArray<FDetachedCellGroup> ForceSetDestroyedCells(const TArray<int32>& DestroyedIds);
 
 	//=========================================================================
-	// 설정 접근
+	// Settings Access
 	//=========================================================================
 
 	const FStructuralIntegritySettings& GetSettings() const { return Settings; }
 	void SetSettings(const FStructuralIntegritySettings& NewSettings);
 
 	//=========================================================================
-	// 그래프 동기화 API (신규)
+	// Graph Sync API (New)
 	//=========================================================================
 
 	/**
-	 * 그래프 스냅샷으로 내부 상태 동기화
-	 * - 새 Key: 새 ID 할당, Intact 상태
-	 * - 스냅샷에 없는 Key: Destroyed로 마킹 (ID 유지)
-	 * - 이웃 리스트 재구축
-	 * @param Snapshot - CellGraph로부터 생성된 스냅샷
+	 * Sync internal state with graph snapshot
+	 * - New key: Allocate new ID, Intact state
+	 * - Key not in snapshot: Mark as Destroyed (keep ID)
+	 * - Rebuild neighbor lists
+	 * @param Snapshot - Snapshot generated from CellGraph
 	 */
 	void SyncGraph(const FStructuralIntegrityGraphSnapshot& Snapshot);
 
 	/**
-	 * BFS로 연결성 재계산, Detached 그룹 반환
-	 * @return 분리된 그룹 정보를 포함한 결과
+	 * Recalculate connectivity via BFS, return detached groups
+	 * @return Result containing detached group info
 	 */
 	FStructuralIntegrityResult RefreshConnectivity();
 
 	/**
-	 * 셀들을 Destroyed로 마킹 (파편 스폰 후 호출)
-	 * @param Keys - Destroyed로 마킹할 Cell Key 목록
+	 * Mark cells as Destroyed (call after debris spawn)
+	 * @param Keys - Cell key list to mark as Destroyed
 	 */
 	void MarkCellsAsDestroyed(const TArray<FCellKey>& Keys);
 
 	//=========================================================================
-	// Key 기반 조회 API
+	// Key-based Query API
 	//=========================================================================
 
-	/** Key로 내부 ID 조회 (없으면 INDEX_NONE) */
+	/** Get internal ID by key (INDEX_NONE if not found) */
 	int32 GetCellIdForKey(const FCellKey& Key) const;
 
-	/** 내부 ID로 Key 조회 */
+	/** Get key by internal ID */
 	FCellKey GetKeyForCellId(int32 CellId) const;
 
-	/** 파괴된 Cell의 Key 목록 */
+	/** Key list of destroyed cells */
 	TArray<FCellKey> GetDestroyedCellKeys() const;
 
 private:
 	//=========================================================================
-	// 내부 알고리즘
+	// Internal Algorithms
 	//=========================================================================
 
 	/**
-	 * 단일 Cell 파괴 처리 (내부용)
-	 * @param CellId - 파괴할 Cell
-	 * @return 파괴 성공 여부 (이미 파괴됨 또는 유효하지 않으면 false)
+	 * Single cell destruction processing (internal)
+	 * @param CellId - Cell to destroy
+	 * @return Whether destruction succeeded (false if already destroyed or invalid)
 	 */
 	bool DestroyCellInternal(int32 CellId);
 
 	/**
-	 * 연결성 업데이트 후 분리된 그룹 찾기
-	 * @return 분리된 그룹 목록
+	 * Find detached groups after connectivity update
+	 * @return Detached group list
 	 */
 	TArray<FDetachedCellGroup> UpdateConnectivityAndFindDetached();
 
 	/**
-	 * Anchor로부터 연결된 모든 Cell 찾기 (BFS)
-	 * Lock 내에서 호출되어야 함
-	 * @return 연결된 Cell 집합
+	 * Find all cells connected from anchors (BFS)
+	 * Must be called within lock
+	 * @return Connected cell set
 	 */
 	TSet<int32> FindAllConnectedToAnchors_Internal() const;
 
 	/**
-	 * 분리된 Cell들을 연결 그룹으로 묶기
-	 * @param DetachedCellIds - 분리된 Cell ID 목록
-	 * @return 그룹 목록 (CellIds만 포함, 기하학적 정보는 CellGraph에서 조회)
+	 * Group detached cells into connected groups
+	 * @param DetachedCellIds - Detached cell ID list
+	 * @return Group list (contains only CellIds, geometric info from CellGraph)
 	 */
 	TArray<FDetachedCellGroup> BuildDetachedGroups(const TArray<int32>& DetachedCellIds);
 
 	/**
-	 * Key에 대한 내부 ID 조회/할당
-	 * @param Key - Cell Key
-	 * @param bCreateIfNotFound - true면 없을 때 새 ID 할당
-	 * @return 내부 ID (없고 생성 안 하면 INDEX_NONE)
+	 * Get/allocate internal ID for key
+	 * @param Key - Cell key
+	 * @param bCreateIfNotFound - Allocate new ID if not found when true
+	 * @return Internal ID (INDEX_NONE if not found and not creating)
 	 */
 	int32 FindOrAllocateCellId(const FCellKey& Key, bool bCreateIfNotFound = true);
 
 	/**
-	 * 스냅샷 기반으로 이웃 리스트 재구축
-	 * @param Snapshot - 그래프 스냅샷
+	 * Rebuild neighbor lists based on snapshot
+	 * @param Snapshot - Graph snapshot
 	 */
 	void RebuildNeighborLists(const FStructuralIntegrityGraphSnapshot& Snapshot);
 
 	//=========================================================================
-	// 데이터
+	// Data
 	//=========================================================================
 
-	// 설정
+	// Settings
 	FStructuralIntegritySettings Settings;
 
-	// 런타임 데이터
+	// Runtime data
 	FStructuralIntegrityData Data;
 
-	// Cell 연결성 (Initialize 시 복사, DisconnectCells로 동적 수정 가능)
+	// Cell connectivity (copied on Initialize, can be dynamically modified via DisconnectCells)
 	TArray<TArray<int32>> CellNeighbors;
 
-	// 초기화 상태
+	// Initialization state
 	bool bInitialized = false;
 
-	// 스레드 동기화
+	// Thread synchronization
 	mutable FRWLock DataLock;
 
-	// 분리 그룹 ID 카운터
+	// Detached group ID counter
 	int32 NextGroupId = 0;
 
 	//=========================================================================
-	// Key <-> ID 매핑 (신규)
+	// Key <-> ID Mapping (New)
 	//=========================================================================
 
-	// Key -> 내부 ID
+	// Key -> Internal ID
 	TMap<FCellKey, int32> KeyToId;
 
-	// 내부 ID -> Key
+	// Internal ID -> Key
 	TArray<FCellKey> IdToKey;
 
-	// 다음에 할당할 내부 ID (단조 증가, 재사용 없음)
+	// Next internal ID to allocate (monotonically increasing, no reuse)
 	int32 NextInternalId = 0;
 };

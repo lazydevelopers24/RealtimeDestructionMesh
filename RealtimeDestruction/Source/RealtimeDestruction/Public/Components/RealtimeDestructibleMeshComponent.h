@@ -71,11 +71,11 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	FRotator DecalRotationOffset = FRotator::ZeroRotator;
 	
-	/** Tool Shape 파라미터 (네트워크 직렬화용) */
+	/** Tool Shape Parameters (for network serialization) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	FDestructionToolShapeParams ShapeParams;
-	  
-	/** RTT 측정용 클라이언트 전송 시간 (클라이언트에서만 설정) */
+
+	/** Client send time for RTT measurement (set only on client) */
 	UPROPERTY()
 	double ClientSendTime = 0.0;
 
@@ -94,17 +94,17 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	bool bSpawnDecal = true;
 
-	/** Decal Material (Projectile에서 조회한 결과) */
+	/** Decal Material (retrieved from Projectile or ImpactProfile) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	TObjectPtr<UMaterialInterface> DecalMaterial = nullptr;
-	
+
 	UPROPERTY(EditAnywhere, Category = "RealtimeDestructibleMesh")
 	FName SurfaceType = FName("Default");
 
 	UPROPERTY()
 	bool bRandomRotation = false;
-	
-	/** Decal 설정 조회용 ID (네트워크 전송용) */
+
+	/** Decal config lookup ID (for network transmission) */
 	UPROPERTY()
 	FName DecalConfigID = FName("Default");
 	
@@ -122,46 +122,46 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionOp
 	FRealtimeDestructionRequest Request;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
-	int32 Sequence = 0; // Destruction Operation 순서. 서버에서 정하며, 0, 1, 2, 3, ... 순서로 수행해야 합니다.
+	int32 Sequence = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	bool bIsPenetration = false;
 };
 
 /**
- * 압축된 파괴 요청 데이터 (언리얼 내장 NetQuantize 사용)
+ * Compressed destruction request data (using Unreal's built-in NetQuantize)
  *
- * 기존 FRealtimeDestructionRequest: ~320 bits
- * 압축 FCompactDestructionOp: ~102 bits (직렬화 시)
+ * Original FRealtimeDestructionRequest: ~320 bits
+ * Compressed FCompactDestructionOp: ~102 bits (when serialized)
  *
- * 네트워크 대역폭 ~70% 절감
+ * ~70% network bandwidth reduction
  */
 USTRUCT()
 struct REALTIMEDESTRUCTION_API FCompactDestructionOp
 {
 	GENERATED_BODY()
 
-	// 위치: 1cm 정밀도 (직렬화 시 ~6 bytes)
+	// Position: 1cm precision (~6 bytes when serialized)
 	UPROPERTY()
 	FVector_NetQuantize ImpactPoint;
 
-	// 노말: 0.1cm 정밀도 - 방향이므로 더 정밀하게 (직렬화 시 ~6 bytes)
+	// Normal: 0.1cm precision - higher precision for direction (~6 bytes when serialized)
 	UPROPERTY()
 	FVector_NetQuantize10 ImpactNormal;
 
-	// Tool mesh의 원점 (Origin)
+	// Tool mesh origin
 	UPROPERTY()
 	FVector_NetQuantize10 ToolOriginWorld;
 
-	// 총알 진행 방향 (직렬화 시 ~6 bytes)
+	// Bullet direction (~6 bytes when serialized)
 	UPROPERTY()
 	FVector_NetQuantize10 ToolForwardVector;
 
-	// 반지름: 1-255 cm (1 byte)
+	// Radius: 1-255 cm (1 byte)
 	UPROPERTY()
 	uint8 Radius = 10;
 
-	// 시퀀스: 롤오버 허용 (2 bytes)
+	// Sequence: allows rollover (2 bytes)
 	UPROPERTY()
 	uint16 Sequence = 0;
 
@@ -169,29 +169,29 @@ struct REALTIMEDESTRUCTION_API FCompactDestructionOp
 	UPROPERTY()
 	EDestructionToolShape ToolShape = EDestructionToolShape::Cylinder;
 
-	// Shape 파라미터 (네트워크 직렬화용)
+	// Shape parameters (for network serialization)
 	UPROPERTY()
 	FDestructionToolShapeParams ShapeParams;
 
-	// Chunk Index (클라이언트가 계산, 1 byte)
+	// Chunk Index (calculated by client, 1 byte)
 	UPROPERTY()
 	uint8 ChunkIndex = 0;
 
 	UPROPERTY()
 	FVector_NetQuantize DecalSize;
 
-	// Decal 설정 조회용 ID
+	// Decal config lookup ID
 	UPROPERTY()
 	FName DecalConfigID = FName("Default");
 
-	// SurfaceType (데칼 조회용)
+	// SurfaceType (for decal lookup)
 	UPROPERTY()
 	FName SurfaceType = FName("Default");
 
-	// 압축
+	// Compress
 	static FCompactDestructionOp Compress(const FRealtimeDestructionRequest& Request, int32 Seq);
 
-	// 압축 해제
+	// Decompress
 	FRealtimeDestructionRequest Decompress() const;
 };
 
@@ -220,8 +220,7 @@ public:
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> SavedSourceStaticMesh;
-
-	// 필요한 다른 프로퍼티도 저장 가능
+	
 	UPROPERTY()
 	bool bSavedIsInitialized = false;
 
@@ -234,8 +233,8 @@ public:
 	UPROPERTY()
 	bool bSavedShowGridCellDebug = false;
 
+	// Store component names instead of pointers (to find by name during PIE duplication)
 	UPROPERTY()
-	// 포인터 대신 컴포넌트 이름 저장 (PIE 복제 시 이름으로 찾기 위함)
 	TArray<FString> SavedChunkComponentNames;
 };
 
@@ -253,40 +252,38 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDestructionRejected, int32, Sequ
 // Class Declaration
 //////////////////////////////////////////////////////////////////////////
 
-/**
- * 서버 Cell Box Collision용 청크 데이터
- */
+/** Chunk data for server Cell Box Collision */
 USTRUCT()
 struct FCollisionChunkData
 {
 	GENERATED_BODY()
 
-	/** 이 청크의 BodySetup */
+	/** BodySetup for this chunk */
 	UPROPERTY()
 	TObjectPtr<UBodySetup> BodySetup = nullptr;
 
-	/** 이 청크가 사용하는 컴포넌트 (GC 방지 및 접근용) */
+	/** Component used by this chunk (prevents GC and provides access) */
 	UPROPERTY()
 	TObjectPtr<UPrimitiveComponent> ChunkComponent = nullptr;
 
-	/** 이 청크에 속한 셀 ID들 */
+	/** Cell IDs belonging to this chunk */
 	TArray<int32> CellIds;
 
-	/** 이 청크의 표면 셀 ID들 (실제 충돌 박스가 있는 셀) */
+	/** Surface cell IDs of this chunk (cells that have actual collision boxes) */
 	TArray<int32> SurfaceCellIds;
 
-	/** 재빌드 필요 여부 */
+	/** Whether rebuild is needed */
 	bool bDirty = false;
 };
 
 
 struct FMeshSectionData
 {
-	TArray<FVector> Vertices;           // 정점 위치 (상대 좌표)
-	TArray<int32> Triangles;            // 삼각형 인덱스
-	TArray<FVector> Normals;            // 정점 노말
-	TArray<FVector2D> UVs;              // UV 좌표
-	TMap<FVertexKey, int32> VertexRemap;     // 원본 VertexID → 섹션 내 새 인덱스
+	TArray<FVector> Vertices;           // Vertex positions (relative to MeshCenter)
+	TArray<int32> Triangles;            // Triangle indices
+	TArray<FVector> Normals;            // Vertex normals
+	TArray<FVector2D> UVs;              // UV coordinates
+	TMap<FVertexKey, int32> VertexRemap;     // Original VertexID → New index within section
 };
 
 /**
@@ -317,9 +314,9 @@ public:
 	virtual UMaterialInterface* GetMaterial(int32 ElementIndex) const override;
 
 	/**
-	 * 인자로 전달받은 UStaticMesh를 이용해 SourceStaticMesh 필드와 DynamicMesh 필드를 채웁니다.
-	 * SourceStaticMesh는 ChunkMeshComponents를 생성하는 재료로 사용됩니다.
-	 * DynamicMesh 필드는 Chunk 생성 전 메시 프리뷰를 제공하는 역할만을 수행합니다.
+	 * Populates the SourceStaticMesh and DynamicMesh fields using the provided UStaticMesh.
+	 * SourceStaticMesh is used as the material for creating ChunkMeshComponents.
+	 * The DynamicMesh field only serves to provide a mesh preview before chunk generation.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh",meta = (DeprecatedFunction))
 	bool InitializeFromStaticMesh(UStaticMesh* InMesh);
@@ -345,33 +342,32 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh")
 	bool ExecuteDestructionInternal(const FRealtimeDestructionRequest& Request);
 	
-	// Replication
 	UFUNCTION(Server, Reliable, WithValidation)
 	void ServerEnqueueOps(const TArray<FRealtimeDestructionRequest>& Requests);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastApplyOps(const TArray<FRealtimeDestructionOp>& Ops);
 
-	/** 압축된 Multicast RPC (서버 → 클라이언트) */
+	/** Compressed multicast RPC (Server -> Client) */
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastApplyOpsCompact(const TArray<FCompactDestructionOp>& CompactOps);
 
 	/**
-	 * 파괴된 셀 ID 전송 RPC (서버 → 클라이언트)
-	 * 파괴 발생 시 즉시 전송하여 클라이언트 CellState 동기화
-	 * @param DestroyedCellIds - 새로 파괴된 셀 ID들
+	 * Destroyed cell ID broadcast RPC (Server → Client)
+	 * Sent immediately upon destruction to synchronize client CellState
+	 * @param DestroyedCellIds - Newly destroyed cell IDs
 	 */
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastDestroyedCells(const TArray<int32>& DestroyedCellIds);
 
 	/**
-	 * Detach 발생 신호 RPC (서버 → 클라이언트)
-	 * 클라이언트가 자체 BFS를 실행하여 Detached 셀 계산
+	 * Detach signal RPC (Server → Client)
+	 * Clients run their own BFS to calculate detached cells
 	 */
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastDetachSignal();
 
-	/** 파괴 요청 거부 RPC (서버 → 요청한 클라이언트) */
+	/** Destruction request rejection RPC (Server → Requesting client) */
 	UFUNCTION(Client, Reliable)
 	void ClientDestructionRejected(uint16 Sequence, EDestructionRejectReason Reason);
 
@@ -379,104 +375,104 @@ public:
 	void ApplyOpsDeterministic(const TArray<FRealtimeDestructionOp>& Ops);
 
 	/**
-	 * 서버 배칭: 요청을 대기열에 추가
-	 * 서버에서만 호출됨
+	 * Server batching: Add request to queue
+	 * Called only on server
 	 */
 	void EnqueueForServerBatch(const FRealtimeDestructionOp& Op);
 
 	/**
-	 * 서버 배칭: 대기열을 비우면서 Multicast
-	 * 서버에서만 호출됨
+	 * Server batching: Flush queue and multicast
+	 * Called only on server
 	 */
 	void FlushServerBatch();
 
 	//////////////////////////////////////////////////////////////////////////
-	// Server Validation (서버 검증)
+	// Server Validation
 	//////////////////////////////////////////////////////////////////////////
 
 	/**
-	 * 파괴 요청 검증 (서버에서 호출)
-	 * @param Request 파괴 요청
-	 * @param RequestingPlayer 요청한 플레이어 (nullptr이면 검증 스킵)
-	 * @param OutReason 거부 사유 (실패 시)
-	 * @return 검증 통과 여부
+	 * Validate destruction request (called on server)
+	 * @param Request Destruction request
+	 * @param RequestingPlayer Requesting player (validation skipped if nullptr)
+	 * @param OutReason Rejection reason (on failure)
+	 * @return Whether validation passed
 	 */
 	bool ValidateDestructionRequest(const FRealtimeDestructionRequest& Request, APlayerController* RequestingPlayer, EDestructionRejectReason& OutReason);
 
 	FConnectivityContext CellContext;
 
-	/** 서버 검증: 사거리 설정 */
+	/** Server validation: Range limit */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
 	float MaxDestructionRange = 5000.0f;
 
-	/** 서버 검증: 연사 제한 (초당 최대 파괴 횟수) */
+	/** Server validation: Rate limit (max destructions per second) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
 	float MaxDestructionsPerSecond = 10.0f;
 
-	/** 서버 검증: 단일 RPC 최대 요청 수 (초과 시 킥) */
+	/** Server validation: Max requests per single RPC (kick if exceeded) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation", meta = (ClampMin = "1", ClampMax = "200"))
 	int32 MaxRequestsPerRPC = 50;
 
-	/** 서버 검증: 최대 허용 파괴 반경 (초과 시 킥) */
+	/** Server validation: Max allowed destruction radius (kick if exceeded) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation", meta = (ClampMin = "1.0"))
 	float MaxAllowedRadius = 500.0f;
 
-	/** 서버 검증: 시야 체크 활성화 */
+	/** Server validation: Enable line of sight check */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Validation")
 	bool bEnableLineOfSightCheck = true;
 
-	/** 연사 제한 추적 정보 */
+	/** Rate limit tracking info */
 	struct FRateLimitInfo
 	{
 		double WindowStartTime = 0.0;
 		int32 RequestCount = 0;
 	};
 
-	/** 플레이어별 연사 제한 추적 (서버에서만 사용) */
+	/** Per-player rate limit tracking (server only) */
 	TMap<TWeakObjectPtr<APlayerController>, FRateLimitInfo> PlayerRateLimits;
 
-	/** 연사 제한 체크 (서버에서 호출) */
+	/** Rate limit check (called on server) */
 	bool CheckRateLimit(APlayerController* Player);
 
 	//////////////////////////////////////////////////////////////////////////
-	// Server Batching Settings (서버 → 클라이언트 배칭)
+	// Server Batching Settings (Server → Client Batching)
 	//////////////////////////////////////////////////////////////////////////
 
 	/**
-	 * 서버 배칭 사용 여부
-	 * true: 여러 클라이언트의 요청을 모아서 한 번에 Multicast (헤더 오버헤드 절감)
-	 * false: 요청마다 개별 Multicast
+	 * Whether to use server batching
+	 * true: Collect requests from multiple clients and multicast at once (reduces header overhead)
+	 * false: Individual multicast per request
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerBatching")
 	bool bUseServerBatching = true;
 
-	/** 서버 배치 전송 간격 (초) */
+	/** Server batch transmission interval (seconds) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerBatching", meta = (ClampMin = "0.008", ClampMax = "0.5"))
-	float ServerBatchInterval = 0.016f;  // 16ms = 1프레임 (60fps 기준)
+	float ServerBatchInterval = 0.016f;  // 16ms = 1 frame (at 60fps)
 
-	/** 최대 서버 배치 크기 (이 개수에 도달하면 즉시 전송) */
+	/** Max server batch size (transmit immediately when this count is reached) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerBatching", meta = (ClampMin = "1", ClampMax = "100"))
 	int32 MaxServerBatchSize = 20;
 
 	/**
-	 * Multicast 압축 사용 여부
-	 * true: 압축된 FCompactDestructionOp 사용 (~102 bits/요청)
-	 * false: 기존 FRealtimeDestructionOp 사용 (~320 bits/요청)
+	 * Whether to use multicast compression
+	 * true: Use compressed FCompactDestructionOp (~102 bits/request)
+	 * false: Use original FRealtimeDestructionOp (~320 bits/request)
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerBatching")
 	bool bUseCompactMulticast = true;
 
 	//////////////////////////////////////////////////////////////////////////
-	// Late Join: Op 히스토리 기반 동기화
+	// Late Join: Op History-based Synchronization
 	//////////////////////////////////////////////////////////////////////////
 
-	/** Op 히스토리 가져오기 (Late Join 동기화용, 서버에서만 유효) */
+	/** Get Op history (for Late Join sync, valid on server only) */
 	const TArray<FCompactDestructionOp>& GetAppliedOpHistory() const { return AppliedOpHistory; }
 
-	/** Op 히스토리 초기화 (메시 리셋 시 호출) */
+	/** Clear Op history (called on mesh reset) */
 	void ClearOpHistory() { AppliedOpHistory.Empty(); LateJoinDestroyedCells.Empty(); }
 
-	/** Late Join 데이터 적용 (TickComponent에서 조건 충족 시 호출) */
+	/** Apply Late Join data (called from TickComponent when conditions are met) */
 	void ApplyLateJoinData();
 
 	UFUNCTION()
@@ -498,11 +494,11 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "RealtimeDestructibleMesh|Events")
 	FOnDestructError OnError;
 
-	/** 파괴 요청이 서버에서 거부되었을 때 (클라이언트에서만 호출됨) */
+	/** Called when destruction request is rejected by server (client only) */
 	UPROPERTY(BlueprintAssignable, Category = "RealtimeDestructibleMesh|Events")
 	FOnDestructionRejected OnDestructionRejected;
 
-	/** Clustering 변수 */
+	/** Clustering variables */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Clustering")
 	TObjectPtr<UBulletClusterComponent> BulletClusterComponent;
 	
@@ -537,38 +533,37 @@ public:
 	bool bEnableSubcell = true;
 
 	/**
-	 * SuperCell 기반 Hierarchical BFS 최적화 사용 여부
-	 * true: 2-Level Hierarchical BFS 사용 (대규모 Grid에서 성능 향상)
-	 * false: 기존 Cell 단위 BFS 사용
+	 * Whether to use SuperCell-based Hierarchical BFS optimization
+	 * true: Use 2-Level Hierarchical BFS (performance improvement for large grids)
+	 * false: Use original Cell-level BFS
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|StructuralIntegrity")
 	bool bEnableSupercell = true;
-	
-	/** 데이터 유지를 위한 함수 */
+
+	/** Function for preserving data */
 	virtual TStructOnScope<FActorComponentInstanceData> GetComponentInstanceData() const override;
 
 	/*
-	 * 에디터에 노출하지 않는 함수
+	 * Functions not exposed to editor
 	 */
 	FGeometryScriptMeshBooleanOptions GetBooleanOptions() const { return BooleanOptions; }
 	FRealtimeBooleanProcessor* GetBooleanProcessor() const { return BooleanProcessor.Get(); }
 	TSharedPtr<FRealtimeBooleanProcessor, ESPMode::ThreadSafe> GetBooleanProcessorShared() { return BooleanProcessor; }
 
-	/** ShapeParams로 ToolMeshPtr 재생성 (네트워크 수신 시 사용) */
+	/** Recreate ToolMeshPtr from ShapeParams (used when receiving over network) */
 	TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> CreateToolMeshPtrFromShapeParams(
 		EDestructionToolShape ToolShape,
 		const FDestructionToolShapeParams& ShapeParams);
 	float GetAngleThreshold() const { return AngleThreshold; }
 	double GetSubtractDurationLimit() const { return SubtractDurationLimit; }
 	int32 GetInitInterval() const { return InitInterval; }
-	void SetCurrentHoleCount(int32 Count) { CurrentHoleCount = Count; }
 	bool IsHighDetailMode() const { return bEnableHighDetail;}
 
 	void ApplyRenderUpdate();
 	void ApplyCollisionUpdate(UDynamicMeshComponent* TargetComp);
 	void ApplyCollisionUpdateAsync(UDynamicMeshComponent* TargetComp);
 
-	/** 연산시 대상 청크가 관통되었는지 검사합니다. */
+	/** Check if target chunk is penetrated during operation */
 	bool IsChunkPenetrated(const FRealtimeDestructionRequest& Request) const;
 	
 	void SettingAsyncOption(bool& OutMultiWorker);
@@ -591,23 +586,23 @@ public:
 	
 	void FindChunksAlongLine(const FVector& WorldStart, const FVector& WorldEnd, float Radius, TArray<int32>& OutChunkIndices, bool bAppend = false);
 
-	// 비트 연산은 원자적이지 않아서 GT 외에 호출할 때는 로직 수정 필요함
+	// Bit operations are not atomic, logic modification needed when calling outside GT
 	void ClearChunkBusy(int32 ChunkIndex);
 
-	void ClearAllChunkBusyBits(); 
+	void ClearAllChunkBusyBits();
 
 	void SetChunkBits(int32 ChunkIndex, int32& BitIndex, int32& BitOffset);
 
-	// 변형된 메시의 시각적(렌더링) 처리 즉시 업데이트하는 함수
+	// Function to immediately update visual (rendering) processing of modified mesh
 	void ApplyBooleanOperationResult(FDynamicMesh3&& NewMesh, const int32 ChunkIndex, bool bDelayedCollisionUpdate, int32 BatchId = -1);
 
-	/** Boolean 연산이 스킵/실패했을 때 배치 카운터 증가 */
+	/** Increment batch counter when Boolean operation is skipped/failed */
 	void NotifyBooleanSkipped(int32 BatchId);
 
-	/** Boolean 연산 완료 시 배치 카운터 증가 */
+	/** Increment batch counter when Boolean operation completes */
 	void NotifyBooleanCompleted(int32 BatchId);
-	
-	// 타겟메시의 idle이나 원하는 딜레이를 주고 Async로 collision 갱신하는 함수
+
+	// Function to update collision async with target mesh idle or desired delay
 	void RequestDelayedCollisionUpdate(UDynamicMeshComponent* TargetComp);		
 
 	/*************************************************/
@@ -634,8 +629,8 @@ protected:
 	TObjectPtr<UStaticMesh> SourceStaticMesh;
 
 	/**
-	 * 캐쉬된 GeometryCollection 에셋
-	 * Chunk 빌드에 사용됨
+	 * Cached GeometryCollection asset
+	 * Used for chunk building
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	TObjectPtr<UGeometryCollection> CachedGeometryCollection;
@@ -646,7 +641,7 @@ protected:
 	// Destruction Settings
 	//////////////////////////////////////////////////////////////////////////
 
-	/** 관통 처리가 늦어진다면, 눈속임용 데칼*/
+	/** Decoy decal for when penetration processing is delayed */
 
 	UDecalComponent* SpawnTemporaryDecal(const FRealtimeDestructionRequest& Request);
 
@@ -659,21 +654,7 @@ protected:
 	TMap<int32, FManagedDecal> ActiveDecals;
 
 	TMap<int32, TArray<int32>> CellToDecalMap;
- 
-	/**
-	 * 현재까지 생성된 구멍 개수
-	 *
-	 * CreateBulletHole()이 성공할 때마다 1씩 증가합니다.
-	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|Status")
-	int32 CurrentHoleCount = 0;
-
-	/**
-	 * Dynamic Mesh 초기화 완료 여부
-	 *
-	 * true: Static Mesh → Dynamic Mesh 변환 완료, 구멍 생성 가능
-	 * false: 아직 초기화 안 됨, CreateBulletHole() 호출 시 실패
-	 */
+	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|Status")
 	bool bIsInitialized = false;
 
@@ -702,105 +683,105 @@ protected:
 	// Chunk Mesh Parallel Processing
 	//////////////////////////////////////////////////////////////////////////
 
-	/** Cell별 분리된 메시 */
+	/** Chunk meshes created by slicing the source static mesh */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	TArray<TObjectPtr<UDynamicMeshComponent>> ChunkMeshComponents;
 
-	// PrimComp으로 Key값 설정, FHitResult의 GetComponent는 PrimitiveComp* 반환
+	// Key set with PrimComp, FHitResult's GetComponent returns PrimitiveComp*
 	TMap<TObjectPtr<UPrimitiveComponent>, int32> ChunkIndexMap;
 
-	/** 그리드 인덱스 -> ChunkId(ChunkMeshComponents 배열 인덱스) 매핑 테이블
-	 *  슬라이싱 후 고정되며, BuildChunksFromGC에서 계산됨 */
+	/** Grid index -> ChunkId (ChunkMeshComponents array index) mapping table
+	 *  Fixed after slicing, calculated in BuildChunksFromGC */
 	UPROPERTY()
 	TArray<int32> GridToChunkMap;
 
 	TArray<uint64> ChunkBusyBits;
 
-	/** Multi Worker, Subtract 체크용 */
+	/** For Multi Worker, Subtract checking */
 	TArray<uint64> ChunkSubtractBusyBits;
 
-	/** Chunk 메시가 유효한지 (빌드 완료 여부) */
+	/** Whether chunk meshes are valid (build complete) */
 	UPROPERTY()
 	bool bChunkMeshesValid = false;
 
-	/** 격자 셀 캐시 (에디터에서 생성, 런타임 변경 없음) */
+	/** Grid cell cache (created in editor, no runtime changes) */
 	UPROPERTY()
 	FGridCellLayout GridCellLayout;
 
-	/** 런타임 셀 상태 */
+	/** Runtime cell state */
 	UPROPERTY()
 	FCellState CellState;
 
-	/** SuperCell 상태 (BFS 최적화용, GridCellLayout 빌드 후 생성) */
+	/** SuperCell state (for BFS optimization, created after GridCellLayout build) */
 	UPROPERTY()
 	FSuperCellState SupercellState;
 
 	//=========================================================================
-	// Cell 기반 구조적 무결성 시스템
+	// Cell-based Structural Integrity System
 	//=========================================================================
 
-	/** 구조적 무결성 시스템 활성화 여부 */
+	/** Whether structural integrity system is enabled */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity")
 	bool bEnableStructuralIntegrity = true;
 
-	/** 양자화된 파괴 입력 히스토리 (NarrowPhase용) */
+	/** Quantized destruction input history (for NarrowPhase) */
 	UPROPERTY()
 	TArray<FQuantizedDestructionInput> DestructionInputHistory;
 
-	/** 현재 배치에서 변경된 청크 ID 집합 */
+	/** Set of chunk IDs modified in current batch */
 	TSet<int32> ModifiedChunkIds;
 
 	//=========================================================================
-	// 서버 Cell Box Collision (Chunked BodySetup + Surface Voxel)
-	// Boolean 연산 대신 사용하여 서버 히칭 방지
+	// Server Cell Box Collision (Chunked BodySetup + Surface Voxel)
+	// Used instead of Boolean operations to prevent server hitching
 	//=========================================================================
 
-	/** 서버 충돌 청크 데이터 배열 */
+	/** Server collision chunk data array */
 	UPROPERTY()
 	TArray<FCollisionChunkData> CollisionChunks;
 
-	/** 서버 Cell Box Collision 사용 여부 (false면 원본 메시 콜리전 사용) */
+	/** Whether to use Server Cell Box Collision (uses original mesh collision if false) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerCollision")
 	bool bEnableServerCellCollision = true;
 
-	/** 청크당 목표 셀 수 (이 값을 기준으로 분할 수 자동 계산) */
+	/** Target cells per chunk (division count auto-calculated based on this value) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ServerCollision", meta = (ClampMin = "100", ClampMax = "2000"))
 	int32 TargetCellsPerCollisionChunk = 500;
 
-	/** 실제 적용된 충돌 청크 분할 수 (각 축당, 런타임에 자동 계산) */
+	/** Actual applied collision chunk divisions (per axis, auto-calculated at runtime) */
 	int32 CollisionChunkDivisions = 4;
 
-	/** 셀 ID → 충돌 청크 인덱스 매핑 */
+	/** Cell ID → Collision chunk index mapping */
 	TMap<int32, int32> CellToCollisionChunkMap;
 
-	/** 서버 Cell Collision 초기화 완료 여부 */
+	/** Whether server Cell Collision is initialized */
 	bool bServerCellCollisionInitialized = false;
 
-	/** 서버가 데디케이티드 서버인지 여부 (클라이언트 분기 처리용, 복제됨) */
+	/** Whether server is dedicated server (for client branching, replicated) */
 	UPROPERTY(Replicated)
 	bool bServerIsDedicatedServer = false;
 
-	/** 서버 Cell Box Collision 초기화 (BeginPlay에서 호출) */
+	/** Initialize server Cell Box Collision (called from BeginPlay) */
 	void BuildServerCellCollision();
 
-	/** Dirty 청크들의 충돌 재빌드 (TickComponent에서 호출) */
+	/** Rebuild collision for dirty chunks (called from TickComponent) */
 	void UpdateDirtyCollisionChunks();
 
-	/** 청크를 Dirty로 마킹 */
+	/** Mark chunk as dirty */
 	void MarkCollisionChunkDirty(int32 ChunkIndex);
 
-	/** 셀이 표면인지 판정 (이웃이 파괴되었거나 경계면) */
+	/** Determine if cell is exposed (neighbor destroyed or at boundary) */
 	bool IsCellExposed(int32 CellId) const;
 
-	/** 셀 ID로 충돌 청크 인덱스 계산 */
+	/** Calculate collision chunk index from cell ID */
 	int32 GetCollisionChunkIndexForCell(int32 CellId) const;
 
-	/** 단일 청크의 콜리전 컴포넌트 및 BodySetup 빌드 */
+	/** Build collision component and BodySetup for a single chunk */
 	void BuildCollisionChunkBodySetup(int32 ChunkIndex);
 
 public:
 
-	/** Cell 메시 유효 여부 */
+	/** Whether cell mesh is valid */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	bool IsChunkMeshesValid() const { return bChunkMeshesValid; }
 
@@ -815,41 +796,41 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|GridCell")
 	bool BuildGridCells();
 	
-	/** 격자 셀 레이아웃 유효 여부 */
+	/** Whether grid cell layout is valid */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|GridCell")
 	bool IsGridCellLayoutValid() const { return GridCellLayout.IsValid(); }
 
 private:
 	/**
-	 * GeometryCollection에서 DynamicMesh 추출 (실제 구현)
-	 * @param InGC 변환할 GeometryCollection
-	 * @return 추출된 메시 개수
+	 * Extract DynamicMesh from GeometryCollection (actual implementation)
+	 * @param InGC GeometryCollection to convert
+	 * @return Number of meshes extracted
 	 */
 	int32 BuildChunksFromGC(UGeometryCollection* InGC);
 
 	/**
-	 * GridToChunkMap 구축 (그리드 인덱스 -> ChunkId 매핑)
-	 * 각 프래그먼트의 공간 위치를 기반으로 그리드 셀에 매핑
-	 * BuildChunksFromGC에서 호출됨
+	 * Build GridToChunkMap (grid index -> ChunkId mapping)
+	 * Maps to grid cells based on spatial position of each fragment
+	 * Called from BuildChunksFromGC
 	 */
 	void BuildGridToChunkMap();
 
 	void FindChunksAlongLineInternal(const FVector& WorldStart, const FVector& WorldEnd, TArray<int32>& OutChunkIndices);
 
 public:
-	/** GridCellLayout 조회 (읽기 전용) */
+	/** Get GridCellLayout (read-only) */
 	const FGridCellLayout& GetGridCellLayout() const { return GridCellLayout; }
 
 	FGridCellLayout& GetGridCellLayout() { return GridCellLayout; }
 
-	/** CellState 조회 (읽기 전용) */
+	/** Get CellState (read-only) */
 	const FCellState& GetCellState() const { return CellState; }
 
 	/**
-	 * 파괴 요청에 의해 영향받은 셀 상태 업데이트
-	 * Boolean 파괴 처리와 함께 호출되어 Cell 파괴 판정 수행
+	 * Update cell state affected by destruction request
+	 * Called along with Boolean destruction processing to perform cell destruction determination
 	 *
-	 * @param Request - 파괴 요청 정보
+	 * @param Request - Destruction request information
 	 */
 	void UpdateCellStateFromDestruction(const FRealtimeDestructionRequest& Request);
 	FDestructionResult DestructionLogic(const FRealtimeDestructionRequest& Request);
@@ -858,30 +839,30 @@ public:
 	float CalculateDebrisBoundsExtent(const TArray<int32>& CellIds) const;
 
 	/**
-	 * 임의적으로 파괴를 할 때 사용하는 함수 ( Supercell에서 총알 수 카운트 한 것을 기반으로 호출 중 ) 
+	 * Function used for arbitrary destruction (currently called based on bullet count in Supercell)
 	 */
 	void ForceRemoveSupercell(int32 SuperCellId);
-	
-	UFUNCTION(NetMulticast, Reliable)  
+
+	UFUNCTION(NetMulticast, Reliable)
 	void MulticastForceRemoveSupercell(int32 SuperCellId);
 
 	/**
-	 * GridCellId를 ChunkId로 변환
-	 * @param GridCellId - 격자 셀 ID
-	 * @return 해당하는 ChunkId, 없으면 INDEX_NONE
+	 * Convert GridCellId to ChunkId
+	 * @param GridCellId - Grid cell ID
+	 * @return Corresponding ChunkId, INDEX_NONE if not found
 	 */
 	int32 GridCellIdToChunkId(int32 GridCellId) const;
 
 	/**
-	 * 분리된 셀들의 메시를 Boolean Subtract로 제거
-	 * @param DetachedCellIds - 분리된 셀 ID 배열
-	 * @param OutRemovedMeshIsland - 제거 성공시 원본 메시에서 잘려나간 부분 (OriginalMesh ∩ ToolMesh)
-	 * @return 제거 성공 여부
+	 * Remove mesh of detached cells via Boolean Subtract
+	 * @param DetachedCellIds - Array of detached cell IDs
+	 * @param OutRemovedMeshIsland - On success, the portion cut from original mesh (OriginalMesh ∩ ToolMesh)
+	 * @return Whether removal succeeded
 	 */
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr);
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 
-	/** Supercell 이 임계치 비율이상 파괴 됐을 때*/
+	/** When Supercell is destroyed beyond threshold ratio */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float DestroyRatioThresholdForDebris = 0.8f;
 
@@ -898,11 +879,11 @@ public:
 	
 	FVector CachedToolForwardVector = FVector::ForwardVector;
 	 
-	//TODO: 적절한 값들을 찾고 없앨 예정
+	//TODO: Find appropriate values and remove this
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 DebrisSplitCount = 1;
 
-	//TODO: 적절한 값들을 찾고 없앨 예정
+	//TODO: Find appropriate values and remove this
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris")
 	float MinDebrisSyncSize = 5.0f;
 
@@ -922,37 +903,37 @@ public:
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials, ADebrisActor* TargetActgor = nullptr);
 
-	/** 데디서버용 Spawn Debris */
+	/** Spawn Debris for dedicated server */
 	void SpawnDebrisActorForDedicatedServer(const TArray<int32>& DetachedCellIds);
 
-	/** Boolean Intersection 방식으로 Debris 추출이 가능한지 확인
-	 *  BooleanProcessor가 유효하고 ChunkMesh가 있어야 사용 가능
+	/** Check if debris extraction via Boolean Intersection is possible
+	 *  Requires valid BooleanProcessor and ChunkMesh
 	 */
 	bool CanExtractDebrisForClient() const;
-	 
-	/** DebrisId 생성 */
+
+	/** Generate DebrisId */
 	int32 GenerateDebrisId() { return NextDebrisId++; }
 
-	/** 로컬 Debris 등록 (클라이언트) */
+	/** Register local debris (client) */
 	void RegisterLocalDebris(int32 InDebrisId, UProceduralMeshComponent* Mesh);
-	
-	/** Actor가 먼저 도착했을 때 대기열에 등록 */
-	void RegisterPendingDebrisActor(int32 InDebrisId, ADebrisActor* Actor);
-	
-	/** 로컬 Debris 찾기 및 제거 (클라이언트) */
-	UProceduralMeshComponent* FindAndRemoveLocalDebris(int32 InDebrisId);
-	
-	/** 작은 파편(고립된 Connected Component) 정리 */
-	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells); 
 
-	/** 작은 파편 정리 (분리된 셀을 내부에서 계산) */
-	void CleanupSmallFragments(); 
+	/** Register to pending queue when Actor arrives first */
+	void RegisterPendingDebrisActor(int32 InDebrisId, ADebrisActor* Actor);
+
+	/** Find and remove local debris (client) */
+	UProceduralMeshComponent* FindAndRemoveLocalDebris(int32 InDebrisId);
+
+	/** Cleanup small fragments (isolated Connected Components) */
+	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells);
+
+	/** Cleanup small fragments (calculates detached cells internally) */
+	void CleanupSmallFragments();
 
 	/**
-	 * 분리된 셀들을 파편 액터로 스폰
-	 * @param DetachedCellIds - 분리된 셀 ID 배열
-	 * @param InitialLocation - 파편 그룹 중심 위치
-	 * @param InitialVelocity - 초기 속도 (폭발 방향)
+	 * Spawn detached cells as debris actors
+	 * @param DetachedCellIds - Array of detached cell IDs
+	 * @param InitialLocation - Center position of debris group
+	 * @param InitialVelocity - Initial velocity (explosion direction)
 	 */
 	void SpawnDebrisFromCells(const TArray<int32>& DetachedCellIds, const FVector& InitialLocation, const FVector& InitialVelocity);
 
@@ -962,45 +943,45 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	FIntVector SliceCount = FIntVector(2.0f, 2.0f, 2.0f);
 
-	/** 격자 셀 크기 (cm). 값이 작을수록 해상도가 높아지지만 성능 비용 증가 */
+	/** Grid cell size (cm). Smaller values increase resolution but cost more performance */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "1.0"))
 	FVector GridCellSize = FVector(10.0f);
-	
-	/** 바닥 Anchor 감지 Z 높이 임계값 (cm, MeshBounds.Min.Z 기준 상대값) */
+
+	/** Floor anchor detection Z height threshold (cm, relative to MeshBounds.Min.Z) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "0.0"))
 	float FloorHeightThreshold = 10.0f;
 
 	//////////////////////////////////////////////////////////////////////////
-	// Detached Cell Smoothing (계단 현상 완화)
+	// Detached Cell Smoothing (Staircase Artifact Reduction)
 	//////////////////////////////////////////////////////////////////////////
 
-	/** Detached Cell 제거 시 Laplacian Smoothing 반복 횟수 (0이면 비활성화) */
+	/** Laplacian Smoothing iterations when removing detached cells (0 to disable) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0", ClampMax = "10"))
 	int32 SmoothingIterations = 4;
 
-	/** Laplacian Smoothing 강도 (0~1) */
+	/** Laplacian Smoothing strength (0~1) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SmoothingStrength = 0.2f;
 
-	/** HC Laplacian 보정 강도 (0~1, 수축 방지) */
+	/** HC Laplacian correction strength (0~1, prevents shrinkage) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HCBeta = 0.5f;
 
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetMaterialIDFromFaceIndex(int32 FaceIndex);
 
-	/** Detached Cell 제거 시 HC Laplacian Smoothing (Vollmer et al., 1999) 적용 (계단 현상 완화)
- * @param Mesh - 스무딩할 ToolMesh
- */
+	/** Apply HC Laplacian Smoothing (Vollmer et al., 1999) when removing detached cells (staircase artifact reduction)
+	 * @param Mesh - ToolMesh to smooth
+	 */
 	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh);
 private:
-	/** ProceduralMeshComponent에 메시 섹션 생성 */
+	/** Create mesh sections on ProceduralMeshComponent */
 	void CreateDebrisMeshSections(
 		UProceduralMeshComponent* Mesh,
         const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
         const TArray<UMaterialInterface*>& InMaterials);
-	
-	/** 로컬 전용 Debris Actor 생성 (동기화 X) */
+
+	/** Create local-only Debris Actor (no sync) */
 	AActor* CreateLocalOnlyDebrisActor(
 		UWorld* World,
 		const FVector& SpawnLocation,
@@ -1008,8 +989,8 @@ private:
 		const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
 		const TArray<UMaterialInterface*>& InMaterials
 	);
-	
-	/** Debris에 물리 및 초기 속도 적용 */
+
+	/** Apply physics and initial velocity to Debris */
 	void ApplyDebrisPhysics(
 		 UBoxComponent* CollisionBox,
 		 const FVector& SpawnLocation,
@@ -1029,9 +1010,9 @@ public:
 	void RevertChunksToSourceMesh();
 private:
 	/**
-	 * SourceStaticMesh로부터 GeometryCollection을 생성하고 슬라이싱합니다.
-	 * @param InSourceMesh 원본 StaticMesh
-	 * @return 생성된 GeometryCollection, 실패 시 nullptr
+	 * Create and slice GeometryCollection from SourceStaticMesh.
+	 * @param InSourceMesh Source StaticMesh
+	 * @return Created GeometryCollection, nullptr on failure
 	 */
 	TObjectPtr<UGeometryCollection> CreateFracturedGC(TObjectPtr<UStaticMesh> InSourceMesh);
 
@@ -1039,14 +1020,14 @@ private:
 protected:
 
 	//////////////////////////////////////////////////////////////////////////
-	// Debug Display Settings (액터 위 디버그 텍스트 표시)
+	// Debug Display Settings (Debug text above actor)
 	//////////////////////////////////////////////////////////////////////////
 
-	/** 액터 위에 디버그 정보 텍스트 표시 여부 */
+	/** Whether to show debug info text above actor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowDebugText = false;
 
-	/** GridCell 디버그 표시 (격자 셀 시스템) */
+	/** GridCell debug display (grid cell system) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowGridCellDebug = false;
 
@@ -1056,39 +1037,39 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowCellSpawnPosition = false;
 
-	/** 서버 콜리전 박스 디버그 시각화 (리슨 서버용) */
+	/** Server collision box debug visualization (for listen server) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowServerCollisionDebug = false;
 
-	/** Mesh Island 제거 시 ToolMesh/Intersection 와이어프레임 디버그 표시 */
+	/** Show ToolMesh/Intersection wireframe debug when removing mesh islands */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugMeshIslandRemoval = false;
 
-	/** 동기화 안 되는 작은 Debris를 빨간 박스로 표시 */
+	/** Show small non-synced debris as red boxes */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugDrawDebris = false;
 	UPROPERTY()
 	float DebugDrawDuration = 5.0f;
 
-	/** 최근 직접 파괴된 셀 ID (디버그 강조 표시용) */
+	/** Recently directly destroyed cell IDs (for debug highlighting) */
 	TSet<int32> RecentDirectDestroyedCellIds;
-	
-	/** 디버그 텍스트 갱신. 메시 업데이트시에만 수행하는 식으로 업데이트 빈도 제어 */
+
+	/** Update debug text. Controls update frequency by only performing on mesh update */
 	void UpdateDebugText();
 
 	void DrawDebugText() const;
 
-	/** 격자 셀 디버그 시각화 */
+	/** Grid cell debug visualization */
 	void DrawGridCellDebug();
 
-	/** SuperCell 디버그 표시 */
+	/** SuperCell debug display */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowSupercellDebug = false;
 
-	/** SuperCell 디버그 시각화 */
+	/** SuperCell debug visualization */
 	void DrawSupercellDebug();
 
-	/** 서버 콜리전 박스 디버그 시각화 */
+	/** Server collision box debug visualization */
 	void DrawServerCollisionDebug();
 
 	bool bShouldDebugUpdate = true;
@@ -1104,118 +1085,118 @@ private:
 	
 	FTimerHandle CollisionUpdateTimerHandle;
 
-	/** 지연 파편 정리 타이머 핸들 */
+	/** Delayed fragment cleanup timer handle */
 	FTimerHandle FragmentCleanupTimerHandle;
 
 public:
 	bool bPendingCleanup = false;
 
 private:
-	/** 마지막 파괴된 셀 영역 (CleanupSmallFragments용) */
+	/** Last destroyed cell region (for CleanupSmallFragments) */
 	TSet<FIntVector> LastOccupiedCells;
 	FVector LastCellSizeVec;
 
 	int64 NextOpId = 1;
 	int32 NextSequence = 0;
 
-	// 서버 배칭용 변수
+	// Server batching variables
 	TArray<FRealtimeDestructionOp> PendingServerBatchOps;
-	TArray<FCompactDestructionOp> PendingServerBatchOpsCompact;  // 압축용
+	TArray<FCompactDestructionOp> PendingServerBatchOpsCompact;  // For compression
 	float ServerBatchTimer = 0.0f;
-	int32 ServerBatchSequence = 0;  // 압축용 시퀀스
+	int32 ServerBatchSequence = 0;  // For compression sequence
 
 	//////////////////////////////////////////////////////////////////////////
-	// 배치 완료 추적 (Boolean 연산 완료 시점 파악용)
+	// Batch Completion Tracking (for determining Boolean operation completion time)
 	//////////////////////////////////////////////////////////////////////////
 
-	/** 배치 완료 추적용 구조체 */
+	/** Struct for batch completion tracking */
 	struct FBooleanBatchTracker
 	{
-		int32 TotalCount = 0;      // 큐에 들어간 총 Op 수
-		int32 CompletedCount = 0;  // 완료된 Op 수 (성공/실패 모두 포함)
+		int32 TotalCount = 0;      // Total Ops enqueued
+		int32 CompletedCount = 0;  // Completed Ops (includes both success and failure)
 
 		bool IsComplete() const { return CompletedCount >= TotalCount && TotalCount > 0; }
 	};
 
-	/** 활성 배치 트래커 맵 (BatchId → Tracker) */
+	/** Active batch tracker map (BatchId → Tracker) */
 	TMap<int32, FBooleanBatchTracker> ActiveBatchTrackers;
 
-	/** 다음 배치 ID */
+	/** Next batch ID */
 	int32 NextBatchId = 0;
 
-	/** Boolean 배치 완료 시 호출되는 함수 */
+	/** Function called when Boolean batch completes */
 	void OnBooleanBatchCompleted(int32 BatchId);
 
 public:
-	/** IslandRemoval 시작 시 호출 (BooleanProcessor에서 접근) */
+	/** Called when IslandRemoval starts (accessed from BooleanProcessor) */
 	void IncrementIslandRemovalCount() { ActiveIslandRemovalCount.fetch_add(1); }
 
-	/** IslandRemoval 완료 시 호출 (BooleanProcessor에서 접근) */
+	/** Called when IslandRemoval completes (accessed from BooleanProcessor) */
 	void DecrementIslandRemovalCount() { ActiveIslandRemovalCount.fetch_sub(1); }
 
 private:
-	/** 활성 IslandRemoval 카운터 (진행 중인 RemoveTriangles 작업 수) */
+	/** Active IslandRemoval counter (number of RemoveTriangles operations in progress) */
 	std::atomic<int32> ActiveIslandRemovalCount{0};
 
-	// Standalone 분리 셀 처리 타이머
+	// Standalone detached cell processing timer
 	float StandaloneDetachTimer = 0.0f;
 	static constexpr float StandaloneDetachInterval = 0.1f;
 
 	//////////////////////////////////////////////////////////////////////////
-	// Late Join: Op 히스토리 (서버에서만 유지)
+	// Late Join: Op History (maintained on server only)
 	//////////////////////////////////////////////////////////////////////////
 
-	/** 적용된 모든 Op 히스토리 (Late Join 동기화용, COND_InitialOnly) */
+	/** All applied Op history (for Late Join sync, COND_InitialOnly) */
 	UPROPERTY(ReplicatedUsing=OnRep_LateJoinOpHistory)
 	TArray<FCompactDestructionOp> AppliedOpHistory;
 
-	/** Late Join: 현재까지 파괴된 모든 셀 ID (COND_InitialOnly) */
+	/** Late Join: All cell IDs destroyed so far (COND_InitialOnly) */
 	UPROPERTY(ReplicatedUsing=OnRep_LateJoinDestroyedCells)
 	TArray<int32> LateJoinDestroyedCells;
 
 	TArray<FDestructionResult> PendingDestructionResults;
 
-	/** Op 히스토리 최대 크기 (메모리 제한) */
+	/** Max Op history size (memory limit) */
 	static constexpr int32 MaxOpHistorySize = 10000;
 
-	/** Late Join 데이터 수신/적용 플래그 */
+	/** Late Join data received/applied flags */
 	bool bLateJoinOpsReceived = false;
 	bool bLateJoinCellsReceived = false;
 	bool bLateJoinApplied = false;
 
 	//////////////////////////////////////////////////////////////////////////
-	// Debris 물리 동기화
+	// Debris Physics Synchronization
 	//////////////////////////////////////////////////////////////////////////
-	// TODO [리팩토링 예정]: 현재 Component가 모든 Debris의 동기화를 중앙 관리하는 방식
-	//   → 각 Debris Actor가 자신의 동기화를 직접 책임지는 방식으로 변경 예정
-	//   - ADebrisActor 커스텀 클래스 생성
-	//   - bReplicates, bReplicateMovement 등 Unreal 기본 Replication 활용
-	//   - 관심사 분리 및 Component 책임 경감
+	// TODO [Refactoring planned]: Currently Component centrally manages all Debris sync
+	//   → Planning to change so each Debris Actor handles its own sync
+	//   - Create custom ADebrisActor class
+	//   - Utilize Unreal's built-in Replication (bReplicates, bReplicateMovement, etc.)
+	//   - Separation of concerns and reduced Component responsibility
 	//////////////////////////////////////////////////////////////////////////
 
-	/** Debris ID 카운터 (서버/클라이언트 동일하게 증가) */
+	/** Debris ID counter (increments identically on server/client) */
 	int32 NextDebrisId = 0;
 
-	/** 활성 Debris Actor 추적 (DebrisID → Actor) */
+	/** Active Debris Actor tracking (DebrisID → Actor) */
 	TMap<int32, TWeakObjectPtr<AActor>> ActiveDebrisActors;
 
-	/** 로컬 Debris 메시 맵 ( 클라이언트 용 ) */
-	TMap<int32, TObjectPtr<UProceduralMeshComponent>> LocalDebrisMeshMap; 
+	/** Local Debris mesh map (for client) */
+	TMap<int32, TObjectPtr<UProceduralMeshComponent>> LocalDebrisMeshMap;
 
-	/** 로컬 메쉬보다 Actor가 먼저 도착한 경우 대기 */
+	/** Pending queue when Actor arrives before local mesh */
 	UPROPERTY()
 	TMap<int32, TObjectPtr<ADebrisActor>> PendingDebrisActors;
-	
-	/** Debris 물리 동기화 타이머 */
+
+	/** Debris physics sync timer */
 	FTimerHandle DebrisPhysicsSyncTimerHandle;
 
-	/** Debris 물리 동기화 간격 (초) */
+	/** Debris physics sync interval (seconds) */
 	static constexpr float DebrisPhysicsSyncInterval = 0.1f;
 
-	/** 서버: 모든 Debris의 물리 상태를 클라이언트에 브로드캐스트 */
+	/** Server: Broadcast physics state of all Debris to clients */
 	void BroadcastDebrisPhysicsState();
 
-	/** Multicast RPC: Debris 물리 상태 동기화 */
+	/** Multicast RPC: Debris physics state synchronization */
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastSyncDebrisPhysics(int32 DebrisId, FVector Location, FRotator Rotation, FVector LinearVelocity, FVector AngularVelocity);
 
