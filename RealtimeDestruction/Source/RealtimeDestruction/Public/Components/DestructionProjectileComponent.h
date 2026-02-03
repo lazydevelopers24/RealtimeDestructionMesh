@@ -205,6 +205,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
 	FName DecalConfigID = FName("Default");
 
+	UPROPERTY(EditAnywhere)
+	FName CachedConfigID;
+
 
 	//=========================================================================
 	// Immediate Feedback Settings
@@ -243,6 +246,8 @@ public:
 public:
 	UFUNCTION(BlueprintCallable, Category="Destruction|Decal")
 	void GetCalculateDecalSize(FName SurfaceType,FVector& LocationOffset,  FRotator& RotatorOffset, FVector& SizeOffset) const;
+
+	void UpdateCachedDecalDataAssetIfNeeded();
 
 	/** Collision event handler */
 

@@ -957,3 +957,19 @@ void UDestructionProjectileComponent::GetCalculateDecalSize(FName SurfaceType, F
 	float FinalSize	 = BaseSize * DecalSizeMultiplier;
 	SizeOffset = FVector(FinalSize,FinalSize,FinalSize);
 }
+void UDestructionProjectileComponent::UpdateCachedDecalDataAssetIfNeeded()
+{
+	// ConfigID가 변경된 경우에만 업데이트
+	if (CachedConfigID != DecalConfigID)
+	{
+		CachedConfigID = DecalConfigID;
+
+		if (UGameInstance* GI = GetWorld()->GetGameInstance())
+		{
+			if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+			{
+				CachedDecalDataAsset = Subsystem->FindDataAssetByConfigID(DecalConfigID);
+			}
+		}
+	}
+}
