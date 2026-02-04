@@ -891,15 +891,15 @@ public:
 	 * Expands the removal region by this ratio when removing floating mesh islands. (1.2 = 120% of original size)
 	 * Adjusting this based on grid cell size can help remove debris cleanly without leaving residual fragments.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
-	float DebrisExpandRatio = 1.2f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "1.5", ClampMax = "3.0"))
+	float DebrisExpandRatio = 1.5f;
 
 	/**
 	 * Scale ratio for the debris mesh. (0.7 = 70% of original size)
 	 * Smaller values may look unnatural, but can reduce debris getting stuck in the original mesh.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
-	float DebrisScaleRatio = 0.9f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0", ClampMax = "1.0"))
+	float DebrisScaleRatio = 0.7f;
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials, ADebrisActor* TargetActgor = nullptr);
 

@@ -796,7 +796,7 @@ bool FGridCellBuilder::TriangleIntersectsAABB(const FVector& V0, const FVector& 
 	// Compute box center and half size
 	const FVector BoxCenter = (BoxMin + BoxMax) * 0.5f;
 
-	const FVector BoxEpsilon = (BoxMax - BoxMin) * 0.5f + FVector(0.01f);
+	const FVector BoxEpsilon = (BoxMax - BoxMin) * 0.5f * FVector(0.01f);
 
 	const FVector BoxHalfSize = (BoxMax - BoxMin) * 0.5f + BoxEpsilon;
 
