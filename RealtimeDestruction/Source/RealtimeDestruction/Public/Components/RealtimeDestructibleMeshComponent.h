@@ -236,6 +236,14 @@ public:
 	// Store component names instead of pointers (to find by name during PIE duplication)
 	UPROPERTY()
 	TArray<FString> SavedChunkComponentNames;
+
+	// GridCellLayout 보존 (Blueprint 재구성 시 앵커 데이터 유실 방지)
+	UPROPERTY()
+	FGridCellLayout SavedGridCellLayout;
+
+	// CachedRDMScale 보존 (Blueprint 재구성 후 BeginPlay에서 불필요한 BuildGridCells 방지)
+	UPROPERTY()
+	FVector SavedCachedRDMScale = FVector(1.0f, 1.0f, 1.0f);
 };
 
 //////////////////////////////////////////////////////////////////////////
