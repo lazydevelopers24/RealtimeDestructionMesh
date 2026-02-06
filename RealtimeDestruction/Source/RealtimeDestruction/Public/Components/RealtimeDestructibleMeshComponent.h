@@ -860,6 +860,23 @@ public:
 	 * @return Whether removal succeeded
 	 */
 	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr, TArray<int32>* OutToolMeshOverlappingCellIds = nullptr);
+
+	/**
+	 * Collect grid cell IDs that overlap with the ToolMesh shape (smoothed + DebrisExpandRatio scaled).
+	 * Lightweight version of RemoveTrianglesForDetachedCells — builds ToolMesh only for cell collection,
+	 * without boolean operations, DebrisToolMesh, or chunk processing.
+	 *
+	 * @param CellIds - Input cell IDs to build ToolMesh from
+	 * @param OutOverlappingCellIds - Output: cell IDs overlapping the expanded ToolMesh
+	 */
+	void CollectToolMeshOverlappingCells(const TArray<int32>& CellIds, TArray<int32>& OutOverlappingCellIds);
+
+	/** Build ToolMesh from sorted voxel piece (GreedyMesh + FillHoles + HC Laplacian Smoothing). */
+	FDynamicMesh3 BuildSmoothedToolMesh(TArray<FIntVector>& SortedPiece);
+
+	/** Collect grid cell IDs that overlap with the given mesh using SAT triangle-AABB intersection. */
+	void CollectCellsOverlappingMesh(const FDynamicMesh3& Mesh, TArray<int32>& OutCellIds);
+
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 
 	/** When Supercell is destroyed beyond threshold ratio */
