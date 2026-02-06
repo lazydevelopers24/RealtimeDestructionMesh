@@ -38,30 +38,30 @@ If you want to use the C++ Raw API directly, enable the Auto Bind Hit checkbox i
 <br>
 \*Currently, only Raw API calls for projectiles are supported. Add the DestructionProjectile component as a child of the projectile’s collision component.
 
-[image4]: ../images/image4.png
+[image4]: ../images/image4.png?v=20260206
 
 
-[image8]: ../images/image8.png
+[image8]: ../images/image8.png?v=20260206
 
 
-[image1]: ../images/image1.png
+[image1]: ../images/image1.png?v=20260206
 
 
-[image3]: ../images/image3.png
+[image3]: ../images/image3.png?v=20260206
 
 
-[image5]: ../images/image5.png
+[image5]: ../images/image5.png?v=20260206
 
 
-[image2]: ../images/image2.png
+[image2]: ../images/image2.png?v=20260206
 
 
-[image6]: ../images/image6.png
+[image6]: ../images/image6.png?v=20260206
 
 
-[image9]: ../images/image9.png
+[image9]: ../images/image9.png?v=20260206
 
 
-[image7]: ../images/image7.png
+[image7]: ../images/image7.png?v=20260206
 
-[image24]: ../images/image24.png
+[image24]: ../images/image24.png?v=20260206
