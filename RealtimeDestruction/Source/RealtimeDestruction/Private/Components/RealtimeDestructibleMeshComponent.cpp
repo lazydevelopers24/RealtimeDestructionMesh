@@ -20,7 +20,7 @@
 #include <algorithm> // std::lower_bound
 #include "Engine/World.h"
 #include "Actors/DebrisActor.h"
-#include "Components/BoxComponent.h" 
+#include "Components/BoxComponent.h"
 
 #include "DynamicMesh/MeshNormals.h" 
 #include "DrawDebugHelpers.h"
@@ -292,9 +292,10 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[EnqueueRequestLocal] ChunkIndex=%d → BooleanProcessor->EnqueueOp 호출"),
 			Op.Request.ChunkIndex);
-		if (FRDMCVarHelper::EnableAsyncBooleanOp())
+		if (FRDMCVarHelper::EnableAsyncBooleanOp() && ChunkMeshComponents.IsValidIndex(Op.Request.ChunkIndex))
 		{
-		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get(), BatchId);
+			BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get(),
+			                            BatchId);
 	}
 	else
 	{
@@ -895,13 +896,13 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 	if (AliveCells.Num() == 0) return;
 	
 
-	// 렌더링 처리 (Dedicated Server는 패스)
+	// 렌더링 처리 (Dedicated Server는 패스) 
 	// ToolMesh(smoothed + DebrisExpandRatio) 형상과 겹치는 cell도 함께 수집
 	const bool bIsDedicatedServer = GetWorld() && GetWorld()->GetNetMode() == NM_DedicatedServer;
 	const bool bIsDedicatedServerClient = bServerIsDedicatedServer && !GetOwner()->HasAuthority();
-
+	
 	TArray<int32> ToolMeshOverlappingCells;
-
+	 
 	if (bIsDedicatedServer)
 	{
 		SpawnDebrisActorForDedicatedServer(AllCellsInSupercell);
@@ -1689,7 +1690,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			CollectCellsOverlappingMesh(ToolMesh, *OutToolMeshOverlappingCellIds);
 		}
 
-		// Smoothing
+		// Smoothing 
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
 			ApplyHCLaplacianSmoothing(DebrisToolMesh);

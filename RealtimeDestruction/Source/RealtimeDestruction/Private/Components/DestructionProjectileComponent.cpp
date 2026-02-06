@@ -154,6 +154,7 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 	URealtimeDestructibleMeshComponent* DestructComp =
 		OtherActor->FindComponentByClass<URealtimeDestructibleMeshComponent>();
 
+	bool bSuccess = false;
 	if (DestructComp)
 	{
 		// 파괴 가능한 오브젝트에 충돌
@@ -165,12 +166,12 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 			// {
 			// 	GetOwner()->Destroy();
 			// }
-			BooleanSourceMesh(DestructComp, Hit);
-			}
+			bSuccess = BooleanSourceMesh(DestructComp, Hit);
+		}
 		else
 		{
 			//UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequestForCell %d"), ChunkNum);
-			ProcessDestructionRequestForChunk(DestructComp, Hit);
+			bSuccess = ProcessDestructionRequestForChunk(DestructComp, Hit);
 		}
 	}
 	else
@@ -183,19 +184,26 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 			GetOwner()->Destroy();
 		}
 	}
+
+	if (bSuccess && bDestroyOnHit)
+	{
+		GetOwner()->Destroy();
+	}
 }
 
-void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit)
+bool UDestructionProjectileComponent::ProcessDestructionRequestForChunk(
+	URealtimeDestructibleMeshComponent* DestructComp,
+	const FHitResult& Hit)
 {
 	if (!DestructComp)
 	{
-		return;
+		return false;
 	}
 
 	AActor* Owner = GetOwner();
 	if (!Owner)
 	{
-		return;
+		return false;
 	}
 	
 	// ===== DataAsset에서 Tool Shape 로드 (메시 생성 전에!) =====
@@ -372,10 +380,12 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 		OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
 	
 		// 투사체 제거
-		if (bDestroyOnHit)
-		{
-			Owner->Destroy();
-		}
+		// if (bDestroyProjectile)
+		// {
+		// 	Owner->Destroy();
+		// }
+
+	return true;
 }
 
 void UDestructionProjectileComponent::ProcessSphereDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FVector& ExplosionCenter)
@@ -960,6 +970,66 @@ void UDestructionProjectileComponent::GetCalculateDecalSize(FName SurfaceType, F
 	float FinalSize	 = BaseSize * DecalSizeMultiplier;
 	SizeOffset = FVector(FinalSize,FinalSize,FinalSize);
 }
+
+bool UDestructionProjectileComponent::RequestDestructionFromProjectile(UPrimitiveComponent* HitComp, AActor* OtherActor,
+	UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit, bool bDestroyProjectile)
+{
+	if (!OtherActor)
+	{
+		return false;
+	}
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return false;
+	}
+
+	// 자기 자신과 충돌한 경우 무시
+	if (OtherActor == Owner)
+	{
+		return false;
+	}
+
+	// Owner가 Pawn/Character인 경우 무시 (캐릭터 사망 방지)
+	if (Owner->IsA<APawn>())
+	{
+		return false;
+	}
+
+	// 맞은 Actor에서 파괴 컴포넌트 찾기
+	URealtimeDestructibleMeshComponent* DestructComp =
+		OtherActor->FindComponentByClass<URealtimeDestructibleMeshComponent>();
+	
+	bool bSuccess = ProcessDestructionRequestForChunk(DestructComp, Hit);
+
+	if ((bSuccess && bDestroyProjectile) || !DestructComp)
+	{
+		Owner->Destroy();
+	}
+
+	return bSuccess;
+}
+
+bool UDestructionProjectileComponent::RequestDestructionFromHitScan(URealtimeDestructibleMeshComponent* DestructComp,
+	const FHitResult& Hit, bool bDestroyProjectile)
+{
+	bool bSuccess = ProcessDestructionRequestForChunk(DestructComp, Hit);
+
+	if (bSuccess && bDestroyProjectile)
+	{
+		if (AActor* Owner = GetOwner())
+		{
+			if (!Owner->IsA<APawn>())
+			{
+				Owner->Destroy();
+			}
+		}
+	}
+
+	return bSuccess;
+}
+
 void UDestructionProjectileComponent::UpdateCachedDecalDataAssetIfNeeded()
 {
 	// ConfigID가 변경된 경우에만 업데이트
@@ -977,17 +1047,20 @@ void UDestructionProjectileComponent::UpdateCachedDecalDataAssetIfNeeded()
 	}
 }
 
-void UDestructionProjectileComponent::BooleanSourceMesh(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit)
+bool UDestructionProjectileComponent::BooleanSourceMesh(
+	URealtimeDestructibleMeshComponent* DestructComp,
+	const FHitResult& Hit,
+	bool bDestroyProjectile)
 {
 	if (!DestructComp)
 	{
-		return;
+		return false;
 	}
 
 	AActor* Owner = GetOwner();
 	if (!Owner)
 	{
-		return;
+		return false;
 	}
 
 	FName SurfaceTypeForShape = DestructComp->SurfaceType;
@@ -1067,9 +1140,5 @@ void UDestructionProjectileComponent::BooleanSourceMesh(URealtimeDestructibleMes
 	// 이벤트 브로드캐스트
 	OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
 
-	// 투사체 제거
-	if (bDestroyOnHit)
-	{
-		Owner->Destroy();
-	}
+	return true;
 }

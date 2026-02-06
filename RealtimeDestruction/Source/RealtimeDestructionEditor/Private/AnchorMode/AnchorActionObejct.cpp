@@ -29,26 +29,31 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 	}
 
 	FEditorViewportClient* ViewportClient = (FEditorViewportClient*)GEditor->GetActiveViewport()->GetClient();
-
 	FVector SpawnLocation = ViewportClient->GetViewLocation() + (ViewportClient->GetViewRotation().Vector() * 300.0f);
+	FRotator SpawnRotation = FRotator::ZeroRotator;
+
 	if (IsValid(TargetComp))
 	{
-		FVector ToCamera = (ViewportClient->GetViewLocation() - TargetComp->GetComponentLocation());
-		float Dist = ToCamera.Length();
-		ToCamera.Normalize();
+		const FBoxSphereBounds WorldBounds = TargetComp->Bounds;
+		const FVector LocalHalfExtent = TargetComp->GetLocalBounds().GetBox().GetExtent();
+		const FVector ScaleAbs = TargetComp->GetComponentTransform().GetScale3D().GetAbs();
+		const FVector ScaledHalfExtent = LocalHalfExtent * ScaleAbs;
+		const FVector BoundsCenter = WorldBounds.Origin;
 		
-		FVector TargetForward = TargetComp->GetForwardVector();
-		FVector TargetRight = TargetComp->GetRightVector();
+		const FVector Forward = TargetComp->GetForwardVector();
+		const FVector Right = TargetComp->GetRightVector();
 
-		float AngleForward=  ToCamera.Dot(TargetForward);
-		float AngleRight = ToCamera.Dot(TargetRight);
-		float Scale = 1.0f;
-		if (AngleForward >= 0.0f)
-		{
+		const FVector ToCamera = (ViewportClient->GetViewLocation() - BoundsCenter).GetSafeNormal();
 			
-		}		
+		const bool bUseForwardAxis = ScaledHalfExtent.X <= ScaledHalfExtent.Y;
+		const FVector Axis = bUseForwardAxis ? Forward : Right;
+		const float HalfExtent = bUseForwardAxis ? ScaledHalfExtent.X : ScaledHalfExtent.Y;
 		
-		SpawnLocation = TargetComp->GetComponentLocation() + (ToCamera * Dist * 0.3f * TargetComp->GetComponentScale());
+		const float Sign = (FVector::DotProduct(Axis, ToCamera) >= 0.0f) ? 1.0f : -1.0f;
+		
+		constexpr float Distance = 100.0f;
+		SpawnLocation = BoundsCenter +(Axis * Sign * (HalfExtent + Distance));
+		SpawnRotation = TargetComp->GetComponentRotation();
 	}	
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "SpawnAnchorPlane", "Spawn Plane"));
@@ -56,7 +61,7 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (World)
 	{
-		AAnchorPlaneActor* NewPlane = World->SpawnActor<AAnchorPlaneActor>(SpawnLocation, FRotator::ZeroRotator);
+		AAnchorPlaneActor* NewPlane = World->SpawnActor<AAnchorPlaneActor>(SpawnLocation, SpawnRotation);
 		if (NewPlane)
 		{
 			GEditor->SelectNone(true, true);
@@ -78,13 +83,37 @@ void UAnchorActionObejct::SpawnAnchorVolume()
 
 	FEditorViewportClient* ViewportClient = (FEditorViewportClient*)GEditor->GetActiveViewport()->GetClient();
 	FVector SpawnLocation = ViewportClient->GetViewLocation() + (ViewportClient->GetViewRotation().Vector() * 300.0f);
+	FRotator SpawnRotation = FRotator::ZeroRotator;
+
+	if (IsValid(TargetComp))
+	{
+		const FBoxSphereBounds WorldBounds = TargetComp->Bounds;
+		const FVector BoundsCenter = WorldBounds.Origin;
+		const FVector ToCamera = (ViewportClient->GetViewLocation() - BoundsCenter).GetSafeNormal();
+		const FVector LocalHalfExtent = TargetComp->GetLocalBounds().GetBox().GetExtent();
+		const FVector ScaleAbs = TargetComp->GetComponentTransform().GetScale3D().GetAbs();
+		const FVector ScaledHalfExtent = LocalHalfExtent * ScaleAbs;
+
+		const FVector Forward = TargetComp->GetForwardVector();
+		const FVector Right = TargetComp->GetRightVector();
+
+		const bool bUseForwardAxis = ScaledHalfExtent.X <= ScaledHalfExtent.Y;
+		const FVector Axis = bUseForwardAxis ? Forward : Right;
+		const float HalfExtent = bUseForwardAxis ? ScaledHalfExtent.X : ScaledHalfExtent.Y;
+
+		const float Sign = (FVector::DotProduct(Axis, ToCamera) >= 0.0f) ? 1.0f : -1.0f;
+		
+		constexpr float Distance = 100.0f;
+		SpawnLocation = BoundsCenter +(Axis * Sign * (HalfExtent + Distance));
+		SpawnRotation = TargetComp->GetComponentRotation();
+	}	
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "SpawnAnchorVolume", "Spawn Volume"));
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (World)
 	{
-		AAnchorVolumeActor* NewVolume = World->SpawnActor<AAnchorVolumeActor>(SpawnLocation, FRotator::ZeroRotator);
+		AAnchorVolumeActor* NewVolume = World->SpawnActor<AAnchorVolumeActor>(SpawnLocation, SpawnRotation);
 		if (NewVolume)
 		{
 			GEditor->SelectNone(true, true);

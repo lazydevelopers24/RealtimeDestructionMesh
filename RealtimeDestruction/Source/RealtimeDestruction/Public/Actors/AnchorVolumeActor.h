@@ -77,9 +77,21 @@ protected:
 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostEditMove(bool bFinished) override;
+	virtual void EditorApplyScale(const FVector& DeltaScale, const FVector* PivotLocation, bool bAltDown, bool bShiftDown, bool bCtrlDown) override;
+
+	void CommitScaleToShapeParamAndReset();
+	void UpdateSphereScalePreviewFromActorScale();
+
+	static float ComputeSphereFactorFromAbsScale(const FVector& AbsScale);
+	static FVector SafeReciprocalAbsScale(const FVector& AbsScale);
+
+	bool bBakingScale = false;
+	bool bSphereScalePreview = false;
+	float SphereRadiusAtScale = 0.0f;
+	float SpherePreviewFactor = 1.0f;
 #endif
 
 private:
 	void RefreshVisualization();	
-	
 };
