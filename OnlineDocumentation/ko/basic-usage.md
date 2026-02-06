@@ -27,11 +27,15 @@ Realtime Destructible Mesh 플러그인은 연산 속도 향상을 위해 원본
 ▲ 직육면체의 source mesh를 2x2x2개의 chunk mesh들로 만든 모습  
   세팅이 완료된 Realtime Destructible Mesh 컴포넌트의 파괴를 트리거하는 역할은 **Destruction Projectile** 컴포넌트가 담당합니다. UDesturctionProjectileComponent::ProcessProjectileHit 메소드의 OtherComp 매개변수에 파괴하고자 하는 Realtime Destructible Mesh 컴포넌트를 인자로 전달하여 파괴를 수행할 수 있습니다.
 
-가장 일반적인 사용방법은 아래와 같이 총탄의 콜리젼 컴포넌트의 자식으로 Destruction Projectile 컴포넌트를 추가하고, On Component Hit 이벤트를 통해 호출하는 것입니다.  
+가장 일반적인 사용방법은 아래와 같이 총탄의 콜리젼 컴포넌트의 자식으로 Destruction Projectile 컴포넌트를 추가하고, On Component Hit 이벤트를 통해 Request Destruction from Projectile 함수를 호출하는 것입니다.  
 ![][image8]
 
-Hitscan 방식을 채택하여 별도의 투사체가 없는 경우 DestructionProjectile을 플레이어 액터에 추가하고, ProcessProjectileHit을 직접 호출하거나 GAS를 통해 호출하는 방식 등을 고려할 수 있습니다.   
+Hitscan 방식을 채택하여 별도의 투사체가 없는 경우 DestructionProjectile을 플레이어 액터에 추가하고 Request Destruction from Projectile 함수를 호출하여 사용할 수 있습니다.
 ![][image9]
+
+C++ Raw Api를 직접 사용하고 싶다면 DestructionProjectile의 디테일 패널에서 Auto Bind Hit 체크박스를 활성화 하십시오.
+![][image24]
+\*현재 투사체에 대한 Raw Api 호출만 지원하고 있습니다. 투사체의 콜리젼 컴포넌트의 자식으로 Destruction Projectile 컴포넌트를 추가하십시오.
 
 [image4]: ../images/image4.png
 
@@ -58,4 +62,6 @@ Hitscan 방식을 채택하여 별도의 투사체가 없는 경우 DestructionP
 
 
 [image7]: ../images/image7.png
+
+[image24]: ../images/image24.png
 

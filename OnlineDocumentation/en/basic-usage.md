@@ -29,8 +29,12 @@ The Realtime Destructible Mesh plugin manages the original mesh by splitting it 
 The most common method of use is to add the Destruction Projectile Component as a child of the bullet's collision component and call it through the On Component Hit event, as shown below.  
 ![][image8]
 
-If you adopt a Hitscan method and there is no separate projectile, you can consider adding DestructionProjectile to the Player Actor and calling ProcessProjectileHit directly or through the Gameplay Ability System (GAS).  
+If you adopt a hitscan method and there is no separate projectile, you can consider adding DestructionProjectile to the Player Actor and calling Request Destruction from Projectile.
 ![][image9]
+
+If you want to use the C++ Raw API directly, enable the Auto Bind Hit checkbox in the DestructionProjectile’s details panel.
+![][image24]
+\*Currently, only Raw API calls for projectiles are supported. Add the DestructionProjectile component as a child of the projectile’s collision component.
 
 [image4]: ../images/image4.png
 
@@ -58,3 +62,4 @@ If you adopt a Hitscan method and there is no separate projectile, you can consi
 
 [image7]: ../images/image7.png
 
+[image24]: ../images/image24.png

@@ -22,8 +22,14 @@ The picture below shows the result of spawning an Anchor Volume, moving the anch
 ![][image22]
 
 ![][image23]
+<br>
 ▲ You can confirm that the anchors are set correctly by turning on Grid Cell Debug.
+<br>
 
+---
+Known Issue
+* Anchor Actors duplicated via Alt+Drag are not properly registered in the destruction system and therefore are ignored during anchor creation/removal calculations.
+  
 
 
 [image22]: ../images/image22.png

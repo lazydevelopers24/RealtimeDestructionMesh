@@ -23,7 +23,14 @@ Spawn Anchor Plane 또는 Spawn Anchor Volume 버튼을 누르면 앵커 영역�
 ![][image22]
 
 ![][image23]
+<br>
 ▲ Grid Cell 디버그를 켜서 앵커가 제대로 설정된 것을 확인할 수 있습니다.
+<br>
+
+---
+알려진 문제
+* Alt+Drag 등으로 복제된 Anchor Actor는 앵커 에디터에 등록되지 않아 앵커 생성/제거 기능에 반영되지 않습니다.
+
 
 
 
