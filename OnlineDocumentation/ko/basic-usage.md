@@ -34,7 +34,9 @@ Hitscan 방식을 채택하여 별도의 투사체가 없는 경우 DestructionP
 ![][image9]
 
 C++ Raw Api를 직접 사용하고 싶다면 DestructionProjectile의 디테일 패널에서 Auto Bind Hit 체크박스를 활성화 하십시오.
+<br>
 ![][image24]
+<br>
 \*현재 투사체에 대한 Raw Api 호출만 지원하고 있습니다. 투사체의 콜리젼 컴포넌트의 자식으로 Destruction Projectile 컴포넌트를 추가하십시오.
 
 [image4]: ../images/image4.png

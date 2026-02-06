@@ -33,7 +33,9 @@ If you adopt a hitscan method and there is no separate projectile, you can consi
 ![][image9]
 
 If you want to use the C++ Raw API directly, enable the Auto Bind Hit checkbox in the DestructionProjectile’s details panel.
+<br>
 ![][image24]
+<br>
 \*Currently, only Raw API calls for projectiles are supported. Add the DestructionProjectile component as a child of the projectile’s collision component.
 
 [image4]: ../images/image4.png
