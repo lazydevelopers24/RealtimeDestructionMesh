@@ -20,7 +20,7 @@
 #include <algorithm> // std::lower_bound
 #include "Engine/World.h"
 #include "Actors/DebrisActor.h"
-#include "Components/BoxComponent.h"
+#include "Components/BoxComponent.h" 
 
 #include "DynamicMesh/MeshNormals.h" 
 #include "DrawDebugHelpers.h"
@@ -883,7 +883,7 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 	TArray<int32> AllCellsInSupercell;
 	SupercellState.GetCellsInSupercell(SuperCellId, GridCellLayout, AllCellsInSupercell);
 
-	/*TArray<int32> AliveCells;
+	TArray<int32> AliveCells;
 	for (int32 CellId : AllCellsInSupercell)
 	{
 		if (!CellState.DestroyedCells.Contains(CellId))
@@ -893,13 +893,15 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 	}
 
 	if (AliveCells.Num() == 0) return;
-	*/
+	
 
-	// 렌더링 처리 (Dedicated Server는 패스) 
+	// 렌더링 처리 (Dedicated Server는 패스)
+	// ToolMesh(smoothed + DebrisExpandRatio) 형상과 겹치는 cell도 함께 수집
 	const bool bIsDedicatedServer = GetWorld() && GetWorld()->GetNetMode() == NM_DedicatedServer;
 	const bool bIsDedicatedServerClient = bServerIsDedicatedServer && !GetOwner()->HasAuthority();
-	
-	 
+
+	TArray<int32> ToolMeshOverlappingCells;
+
 	if (bIsDedicatedServer)
 	{
 		SpawnDebrisActorForDedicatedServer(AllCellsInSupercell);
@@ -910,18 +912,42 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 		float DebrisSize = CalculateDebrisBoundsExtent(AllCellsInSupercell);
 		if (DebrisSize < MinDebrisSyncSize)
 		{
-			RemoveTrianglesForDetachedCells(AllCellsInSupercell);
+			RemoveTrianglesForDetachedCells(AllCellsInSupercell, nullptr, &ToolMeshOverlappingCells);
 			// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
 		}
 		// else: 큰 것은 서버에서 복제된 DebrisActor가 처리
 	}
 	else
 	{
-		RemoveTrianglesForDetachedCells(AllCellsInSupercell);
+		RemoveTrianglesForDetachedCells(AllCellsInSupercell, nullptr, &ToolMeshOverlappingCells);
 		// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
 	}
 
-	// cell state 업데이트 
+	// Supercell 삭제하면서 이웃 Supercell의 cell에 영향을 끼칠 수 있음, 
+	// 이웃 supercell에 삭제된게 있으면 업데이트를 해준다. 
+	if (ToolMeshOverlappingCells.Num() > 0)
+	{
+		// 원본 supercell cell과 합치기 (AddUnique로 수집했으므로 중복 없음)
+		TSet<int32> OriginalCellSet(AllCellsInSupercell);
+		for (int32 CellId : ToolMeshOverlappingCells)
+		{
+			if (!OriginalCellSet.Contains(CellId))
+			{
+				AllCellsInSupercell.Add(CellId);
+
+				// 인접 supercell의 DestroyedCellCount 업데이트
+				if (bEnableSupercell && SupercellState.IsValid())
+				{
+					const int32 NeighborSCId = SupercellState.GetSupercellForCell(CellId);
+					if (NeighborSCId != INDEX_NONE && NeighborSCId != SuperCellId &&
+						SupercellState.DestroyedCellCounts.IsValidIndex(NeighborSCId))
+					{
+						SupercellState.DestroyedCellCounts[NeighborSCId]++;
+					}
+				}
+			}
+		}
+	}
 	CellState.DestroyCells(AllCellsInSupercell);
 
 	// hit count 리셋
@@ -1459,7 +1485,7 @@ void URealtimeDestructibleMeshComponent::UpdateDirtyCollisionChunks()
 	}
 }
 
-bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor)
+bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor, TArray<int32>* OutToolMeshOverlappingCellIds)
 {
 		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_RemoveTrianglesForDetachedCells);
 	using namespace UE::Geometry;
@@ -1691,6 +1717,11 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 				}
 			}
 		}
+		// Smoothing 
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
+			ApplyHCLaplacianSmoothing(ToolMesh);
+		}
 
 		FDynamicMesh3 DebrisToolMesh;
 		DebrisToolMesh.EnableAttributes();
@@ -1722,7 +1753,61 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 			}
 		}
 
-		// Smoothing 
+		// ToolMesh(smoothed + DebrisExpandRatio) 삼각형과 겹치는 grid cell 수집
+		if (OutToolMeshOverlappingCellIds)
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_CollectToolMeshOverlappingCells);
+
+			const FVector& Origin = GridCellLayout.GridOrigin;
+			const FVector& CS = GridCellLayout.CellSize;
+			const FVector InvCS(1.0 / CS.X, 1.0 / CS.Y, 1.0 / CS.Z);
+
+			for (int32 TriId : ToolMesh.TriangleIndicesItr())
+			{
+				FIndex3i Tri = ToolMesh.GetTriangle(TriId);
+				FVector3d V0 = ToolMesh.GetVertex(Tri.A);
+				FVector3d V1 = ToolMesh.GetVertex(Tri.B);
+				FVector3d V2 = ToolMesh.GetVertex(Tri.C);
+
+				// 삼각형 AABB
+				FVector3d TriMin = FVector3d::Min(FVector3d::Min(V0, V1), V2);
+				FVector3d TriMax = FVector3d::Max(FVector3d::Max(V0, V1), V2);
+
+				// grid 좌표 범위로 변환
+				const int32 CMinX = FMath::Max(0, FMath::FloorToInt32((TriMin.X - Origin.X) * InvCS.X));
+				const int32 CMinY = FMath::Max(0, FMath::FloorToInt32((TriMin.Y - Origin.Y) * InvCS.Y));
+				const int32 CMinZ = FMath::Max(0, FMath::FloorToInt32((TriMin.Z - Origin.Z) * InvCS.Z));
+				const int32 CMaxX = FMath::Min(GridCellLayout.GridSize.X - 1, FMath::FloorToInt32((TriMax.X - Origin.X) * InvCS.X));
+				const int32 CMaxY = FMath::Min(GridCellLayout.GridSize.Y - 1, FMath::FloorToInt32((TriMax.Y - Origin.Y) * InvCS.Y));
+				const int32 CMaxZ = FMath::Min(GridCellLayout.GridSize.Z - 1, FMath::FloorToInt32((TriMax.Z - Origin.Z) * InvCS.Z));
+
+				for (int32 Z = CMinZ; Z <= CMaxZ; ++Z)
+				{
+					for (int32 Y = CMinY; Y <= CMaxY; ++Y)
+					{
+						for (int32 X = CMinX; X <= CMaxX; ++X)
+						{
+							const int32 CellId = GridCellLayout.CoordToId(X, Y, Z);
+							if (GridCellLayout.GetCellExists(CellId) &&
+								!CellState.DestroyedCells.Contains(CellId))
+							{
+								// cell의 AABB 구하기
+								FVector3d CellMin(Origin.X + X * CS.X, Origin.Y + Y * CS.Y, Origin.Z + Z * CS.Z);
+								FVector3d CellMax = CellMin + FVector3d(CS);
+
+								if (FGridCellBuilder::TriangleIntersectsAABB(
+									FVector(V0), FVector(V1), FVector(V2), CellMin, CellMax))
+								{
+									OutToolMeshOverlappingCellIds->AddUnique(CellId);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Smoothing
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
 			ApplyHCLaplacianSmoothing(DebrisToolMesh);
@@ -1759,6 +1844,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		TSharedPtr<FDynamicMesh3> SharedDebrisToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(DebrisToolMesh));
 
 		FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
+		 
 		TArray<int32> OverlappingChunks;
 
 		for (int32 i = 0; i < GetChunkNum(); i++)

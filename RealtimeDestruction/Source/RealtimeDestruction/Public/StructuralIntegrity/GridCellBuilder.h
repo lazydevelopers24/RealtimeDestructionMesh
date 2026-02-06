@@ -63,6 +63,11 @@ public:
 		float AnchorHeightThreshold,
 		FGridCellLayout& OutLayout);
 
+	static bool TriangleIntersectsAABB(
+		const FVector& V0, const FVector& V1, const FVector& V2,
+		const FVector& BoxMin, const FVector& BoxMax
+	);
+
 	/**
 	* Mark subcells as alive if they intersect with the given triangle.
 	*
@@ -170,10 +175,6 @@ private:
 		FGridCellLayout& OutLayout,
 		TMap<int32, FSubCell>* OutSubCellStates);
 
-	static bool TriangleIntersectsAABB(
-		const FVector& V0, const FVector& V1, const FVector& V2,
-		const FVector& BoxMin, const FVector& BoxMax
-	);
 
 	static void FillInsideVoxels(FGridCellLayout& OutLayout);
 

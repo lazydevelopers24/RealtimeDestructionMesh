@@ -859,7 +859,7 @@ public:
 	 * @param OutRemovedMeshIsland - On success, the portion cut from original mesh (OriginalMesh ∩ ToolMesh)
 	 * @return Whether removal succeeded
 	 */
-	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr);
+	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr, TArray<int32>* OutToolMeshOverlappingCellIds = nullptr);
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 
 	/** When Supercell is destroyed beyond threshold ratio */
