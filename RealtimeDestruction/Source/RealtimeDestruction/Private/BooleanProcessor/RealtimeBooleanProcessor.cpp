@@ -28,6 +28,7 @@
 #include "MeshConstraintsUtil.h"
 #include "Actors/DebrisActor.h"
 #include "Operations/MeshClusterSimplifier.h"
+#include "Debug/DebugConsoleVariables.h"
 
 TRACE_DECLARE_INT_COUNTER(Counter_ThreadCount, TEXT("RealtimeDestruction/ThreadCount"));
 TRACE_DECLARE_INT_COUNTER(Counter_UnionThreadCount, TEXT("RealtimeDestruction/UnionThreadCount"));
@@ -218,6 +219,8 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 	Op.TemporaryDecal = TemporaryDecal;
 	Op.ToolMeshPtr = Operation.Request.ToolMeshPtr;
 
+	if (FRDMCVarHelper::EnableAsyncBooleanOp())
+	{
 	UE_LOG(LogTemp, Warning, TEXT("High Queue Size: %d"), DebugHighQueueCount);
 	UE_LOG(LogTemp, Warning, TEXT("Normal Queue Size: %d"), DebugNormalQueueCount);
 
@@ -233,6 +236,11 @@ void FRealtimeBooleanProcessor::EnqueueOp(FRealtimeDestructionOp&& Operation, UD
 		DebugNormalQueueCount++;
 		UE_LOG(LogTemp, Warning, TEXT("[Enqueue] ✅ Normal Priority Queue Size: %d"), DebugNormalQueueCount);
 	}	
+	}
+	else
+	{
+		BooleanOpSync(MoveTemp(Op));
+	}
 }
 
 void FRealtimeBooleanProcessor::EnqueueRemaining(FBulletHole&& Operation)
@@ -725,16 +733,16 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						          // 그 외: 새 DebrisActor 스폰 (Standalone/Listen Server)
 						          else if (Context->Owner.IsValid())
 						          {
-							          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
-						          }
-					          }
+					          Context->Owner->SpawnDebrisActor(MoveTemp(Context->AccumulatedDebrisMesh), Materials);
+				          }
+			          }
 
 					          // IslandRemoval 완료 후 작은 파편 정리
 					          if (Context->DisconnectedCellsForCleanup.Num() > 0 && Context->Owner.IsValid())
 					          {
 						          Context->Owner->CleanupSmallFragments(Context->DisconnectedCellsForCleanup);
+					          }
 				          }
-			          }
 
 				          // IslandRemoval 카운터 감소 (Boolean 배치 완료와 조율용)
 				          if (Context->Owner.IsValid())
@@ -749,7 +757,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 						  {
 							  Processor->KickSubtractWorker(i);
 						  }
-					  }		
+					  }
 		          });
 	};
 
@@ -923,7 +931,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 			          ResultMesh = MoveTemp(ResultMesh),
 			          Context = UnionResult.IslandContext,
 			          Decals = MoveTemp(UnionResult.Decals),
-			          UnionCount = UnionResult.UnionCount, 
+			          UnionCount = UnionResult.UnionCount,
 			          CompletionBatchIds = MoveTemp(UnionResult.CompletionBatchIds),
 			          bSuccess]() mutable
 		          {
@@ -1004,13 +1012,13 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 					          if (Context->DisconnectedCellsForCleanup.Num() > 0 && Context->Owner.IsValid())
 					          {
 						          Context->Owner->CleanupSmallFragments(Context->DisconnectedCellsForCleanup);
-				          }
+					          }
 
 					          // IslandRemoval 카운터 감소 (Boolean 배치 완료와 조율용)
 					          if (Context->Owner.IsValid())
 					          {
 						          Context->Owner->DecrementIslandRemovalCount();
-			          } 
+					          }
 				          }
 			          }
 
@@ -1061,7 +1069,7 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				return;
 			}
 			WeakOwner->ClearChunkBusy(ChunkIndex);
-			
+
 			// 실패해도 배치 완료 추적: 모든 BatchId에 대해 완료 알림
 			for (int32 BatchId : CompletionBatchIds)
 			{
@@ -1078,8 +1086,8 @@ void FRealtimeBooleanProcessor::ProcessSlotSubtractWork(int32 SlotIndex, FUnionR
 				if (!Processor->SlotSubtractQueues[i]->IsEmpty())
 				{
 					Processor->KickSubtractWorker(i);
-				} 
-			} 
+				}
+			}
 		});
 	}
 }
@@ -1093,6 +1101,54 @@ void FRealtimeBooleanProcessor::CleanupSlotMapping(int32 SlotIndex)
 	if (!bUnionEmpty || !bSubtractEmpty)
 	{
 		return;  // Work still remaining.
+	}
+}
+
+void FRealtimeBooleanProcessor::BooleanOpSync(FBulletHole&& Op)
+{
+	if (!OwnerComponent.IsValid())
+	{
+		return;
+	}
+
+	if (Op.ChunkIndex == INDEX_NONE)
+	{
+		return;
+	}
+
+	TRACE_CPUPROFILER_EVENT_SCOPE("BooleanSync");
+	
+	FDynamicMesh3 Result = {};
+	FGeometryScriptMeshBooleanOptions Options = OwnerComponent->GetBooleanOptions();
+
+	FDynamicMesh3 WorkMesh = *OwnerComponent->GetMesh();
+
+	FDynamicMesh3 ToolMesh = MoveTemp(*Op.ToolMeshPtr.Get());
+	MeshTransforms::ApplyTransform(ToolMesh, Op.ToolTransform, true);
+
+	bool bBooleanSuccess = false;
+	UE_LOG(LogTemp, Display, TEXT("BooleanSync"));
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE("BooleanSync_Subtact");
+		bBooleanSuccess = ApplyMeshBooleanAsync(
+			&WorkMesh,
+			&ToolMesh,
+			&Result,
+			EGeometryScriptBooleanOperation::Subtract,
+			Options);
+	}
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE("BooleanSync_Apply");
+		if (bBooleanSuccess)
+		{
+			OwnerComponent->EditMesh([&](FDynamicMesh3 & InternalMesh)
+			{
+				InternalMesh = MoveTemp(Result);
+			});
+
+			OwnerComponent->ApplyCollisionUpdate(OwnerComponent.Get());
+		}
 	}
 }
 
@@ -1487,7 +1543,7 @@ void FRealtimeBooleanProcessor::StartBooleanWorkerAsyncForChunk(FBulletHoleBatch
 #if !UE_BUILD_SHIPPING
 					TRACE_CPUPROFILER_EVENT_SCOPE("ChunkBooleanAsync_ApplyGT");
 #endif
-					
+
 					if (AppliedCount > 0)
 					{
 						double CurrentSetMeshAvgCost = FPlatformTime::Seconds();
@@ -1619,9 +1675,9 @@ void FRealtimeBooleanProcessor::UpdateSimplifyInterval(double CurrentSetMeshAvgC
 
 bool FRealtimeBooleanProcessor::TrySimplify(UE::Geometry::FDynamicMesh3& WorkMesh, int32 ChunkIndex, int32 UnionCount, bool bEnableDetail)
 {
-	if (Simplify_Toggle == 0)
+	if (!FRDMCVarHelper::EnableSimplify())
 	{
-		UE_LOG(LogTemp, Display, TEXT("Simplify Off %d"), Simplify_Toggle);
+		UE_LOG(LogTemp, Display, TEXT("Simplify Off"));
 		return false;
 	}
 	if (!ChunkStates.States.IsValidIndex(ChunkIndex))
@@ -1868,7 +1924,7 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 	}
 	using namespace UE::Geometry;
 
-	FQEMSimplification Simplifier(TargetMesh);
+	FQEMSimplification Simplifier(TargetMesh);	
 
 	if (bEnableDetail)
 	{
@@ -1877,8 +1933,26 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 			TargetMesh->EnableAttributes();
 		}
 
-		if (Simplify_Mat == 0)
-	{
+		if (FRDMCVarHelper::GetSimplifyMode() == 0)
+		{
+			UE_LOG(LogTemp, Display, TEXT("HighDetail"));
+			MeshClusterSimplify::FSimplifyOptions SimplifyOptions;
+			SimplifyOptions.TargetEdgeLength = 1.0;
+			SimplifyOptions.PreserveEdges.PolyGroup = MeshClusterSimplify::FSimplifyOptions::EConstraintLevel::Constrained;
+			SimplifyOptions.PreserveEdges.UVSeam = MeshClusterSimplify::FSimplifyOptions::EConstraintLevel::Constrained;
+			SimplifyOptions.PreserveEdges.Material = MeshClusterSimplify::FSimplifyOptions::EConstraintLevel::Constrained;
+			SimplifyOptions.bTransferAttributes = true;
+			SimplifyOptions.bTransferGroups = true;
+
+			FDynamicMesh3 SimplifiedMesh;
+			if (MeshClusterSimplify::Simplify(*TargetMesh, SimplifiedMesh, SimplifyOptions))
+			{
+				*TargetMesh = MoveTemp(SimplifiedMesh);
+			}
+		}
+
+		if (FRDMCVarHelper::GetSimplifyMode() == 1)
+		{
 			FDynamicMeshAttributeSet* Attributes = TargetMesh->Attributes();
 			const bool bHasMaterialID = Attributes && Attributes->HasMaterialID();
 
@@ -1899,7 +1973,7 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 				if (EdgeTris.A >= 0 && MaterialID->GetValue(EdgeTris.A) == SurfacematerialID)
 				{
 					return true;
-	}
+				}
 
 				if (EdgeTris.B >= 0 && MaterialID->GetValue(EdgeTris.B) == SurfacematerialID)
 				{
@@ -1978,181 +2052,6 @@ void FRealtimeBooleanProcessor::ApplySimplifyToPlanarAsync(UE::Geometry::FDynami
 			Simplifier.SetExternalConstraints(MoveTemp(ExternalConstraints));
 
 			Simplifier.SimplifyToMinimalPlanar(FMath::Max(0.001, Options.AngleThreshold));
-		}
-
-		if (Simplify_Mat == 1)
-		{
-			FDynamicMeshAttributeSet* Attributes = TargetMesh->Attributes();
-			const bool bHasMaterialID = (Attributes && Attributes->HasMaterialID());
-
-			const FDynamicMeshMaterialAttribute* MaterialID = bHasMaterialID ? Attributes->GetMaterialID() : nullptr;
-			const FDynamicMeshUVOverlay* PrimaryUV = Attributes ? Attributes->PrimaryUV() : nullptr;
-
-			// 기존 가정 유지: 표면 = MatID 0
-			const int32 SurfaceMaterialID = 0;
-
-			// Hard seam 판정 민감도 (프로젝트에 맞게 조정)
-			// - 너무 작으면 seam 과보호로 돌아가고
-			// - 너무 크면 진짜 seam도 풀릴 수 있음
-			const double HardUVEps = 1e-4;
-
-			// 표면에 닿는 엣지인지 (MatID==0 tri에 인접)
-			auto EdgeTouchesSurface = [&](int32 EdgeID) -> bool
-			{
-				if (!MaterialID)
-				{
-					return false;
-				}
-
-				const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-
-				if (EdgeTris.A >= 0 && MaterialID->GetValue(EdgeTris.A) == SurfaceMaterialID)
-				{
-					return true;
-				}
-				if (EdgeTris.B >= 0 && MaterialID->GetValue(EdgeTris.B) == SurfaceMaterialID)
-				{
-					return true;
-				}
-
-				return false;
-			};
-
-			// tri의 특정 vertex corner에 대응되는 UV를 얻어서 비교하기 위해 필요
-			auto GetTriUVForVertex = [&](int32 TriID, int32 Vid) -> FVector2d
-			{
-				if (!PrimaryUV || TriID < 0)
-				{
-					return FVector2d::Zero();
-				}
-
-				const FIndex3i TriV = TargetMesh->GetTriangle(TriID);
-				const FIndex3i TriU = PrimaryUV->GetTriangle(TriID);
-
-				int32 Corner = -1;
-				if (TriV.A == Vid) Corner = 0;
-				else if (TriV.B == Vid) Corner = 1;
-				else if (TriV.C == Vid) Corner = 2;
-
-				if (Corner < 0)
-				{
-					return FVector2d::Zero();
-				}
-
-				const int32 UvElem = (Corner == 0) ? TriU.A : (Corner == 1) ? TriU.B : TriU.C;
-				if (UvElem < 0)
-				{
-					return FVector2d::Zero();
-				}
-
-				const FVector2f UVf = PrimaryUV->GetElement(UvElem);
-				return FVector2d((double)UVf.X, (double)UVf.Y);
-			};
-
-			// (1) Hard UV seam만 보호:
-			// - Overlay 구조상 seam으로 표시되더라도 UV 값이 사실상 연속이면 보호하지 않음
-			auto IsHardUVSeamEdge = [&](int32 EdgeID) -> bool
-			{
-				if (!PrimaryUV)
-				{
-					return false;
-				}
-
-				if (!PrimaryUV->IsSeamEdge(EdgeID))
-				{
-					return false;
-				}
-
-				const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-
-				// 한쪽 tri가 없으면(경계) 보수적으로 하드 처리
-				if (EdgeTris.A < 0 || EdgeTris.B < 0)
-				{
-					return true;
-				}
-
-				const FIndex2i EV = TargetMesh->GetEdgeV(EdgeID);
-
-				const FVector2d A0 = GetTriUVForVertex(EdgeTris.A, EV.A);
-				const FVector2d B0 = GetTriUVForVertex(EdgeTris.A, EV.B);
-
-				const FVector2d A1 = GetTriUVForVertex(EdgeTris.B, EV.A);
-				const FVector2d B1 = GetTriUVForVertex(EdgeTris.B, EV.B);
-
-				const double dA = (A0 - A1).Length();
-				const double dB = (B0 - B1).Length();
-
-				return (dA > HardUVEps) || (dB > HardUVEps);
-			};
-
-			// =========================================================================
-			// 제약 구성 (bEnableDetail && MaterialID 있을 때만)
-			// =========================================================================
-			TOptional<FMeshConstraints> ExternalConstraints;
-			if (bEnableDetail && MaterialID)
-			{
-				ExternalConstraints.Emplace();
-				FMeshConstraints& Constraints = ExternalConstraints.GetValue();
-
-				const FEdgeConstraint NoCollapseEdge(EEdgeRefineFlags::NoCollapse);
-
-				for (int32 EdgeID : TargetMesh->EdgeIndicesItr())
-				{
-					// 표면(MatID=0)과 무관하면 보호 불필요
-					if (!EdgeTouchesSurface(EdgeID))
-					{
-						continue;
-					}
-
-					// (2) 전역 boundary NoCollapse 제거 대신:
-					//     "표면에 닿는 boundary"만 선택적으로 보호
-					if (TargetMesh->IsBoundaryEdge(EdgeID))
-					{
-						Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
-						continue;
-					}
-
-					// 머티리얼 경계 보호 (MatA != MatB)
-					{
-						const FIndex2i EdgeTris = TargetMesh->GetEdgeT(EdgeID);
-						if (EdgeTris.A >= 0 && EdgeTris.B >= 0)
-						{
-							const int32 MatA = MaterialID->GetValue(EdgeTris.A);
-							const int32 MatB = MaterialID->GetValue(EdgeTris.B);
-							if (MatA != MatB)
-							{
-								Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
-								continue;
-							}
-						}
-					}
-
-					// (1) Hard UV seam만 보호 (soft seam은 collapse 허용)
-					if (IsHardUVSeamEdge(EdgeID))
-					{
-						Constraints.SetOrUpdateEdgeConstraint(EdgeID, NoCollapseEdge);
-						continue;
-					}
-				}
-			}
-		}
-
-		if (Simplify_Mat == 2)
-		{
-			UE_LOG(LogTemp, Display, TEXT("HighDetail"));
-			MeshClusterSimplify::FSimplifyOptions SimplifyOptions;
-			SimplifyOptions.TargetEdgeLength = 1.0;
-			SimplifyOptions.PreserveEdges.PolyGroup = MeshClusterSimplify::FSimplifyOptions::EConstraintLevel::Constrained;
-			SimplifyOptions.PreserveEdges.UVSeam = MeshClusterSimplify::FSimplifyOptions::EConstraintLevel::Constrained;
-			SimplifyOptions.PreserveEdges.Material = MeshClusterSimplify::FSimplifyOptions::EConstraintLevel::Constrained;
-			SimplifyOptions.bTransferAttributes = true;
-			SimplifyOptions.bTransferGroups = true;
-
-			FDynamicMesh3 SimplifiedMesh;
-			if (MeshClusterSimplify::Simplify(*TargetMesh, SimplifiedMesh, SimplifyOptions))
-			{
-				*TargetMesh = MoveTemp(SimplifiedMesh);
-			}
 		}
 	}
 	else

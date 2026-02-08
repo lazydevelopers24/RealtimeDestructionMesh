@@ -11,8 +11,11 @@
 
 #include "CoreMinimal.h"
 
-extern int32 Simplify_Toggle;
-extern int32 Triangle_Debug;
+struct FRDMCVarHelper
+{
+	static int32 EnableSimplify();	
 
-extern int32 Simplify_Mat;
+	static int32 GetSimplifyMode();
 
+	static int32 EnableAsyncBooleanOp();
+};

@@ -41,9 +41,6 @@ public:
 	UFUNCTION(CallInEditor, Category = "3. Remove", meta = (DisplayPriority = "2"))
 	void RemoveAllAnchorVolumes();
 
-	UFUNCTION(CallInEditor, Category = "3. Remove", meta = (DisplayPriority = "3"))
-	void RemoveAllAnchors();
-
 	UFUNCTION(CallInEditor, Category = "4. Selection", meta = (DisplayPriority = "1"))
 	void ApplyAnchors();
 

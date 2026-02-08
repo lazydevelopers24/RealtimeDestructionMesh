@@ -8,6 +8,8 @@
 // the use of this product.
 
 #include "Components/DestructionProjectileComponent.h"
+
+#include "DebugConsoleVariables.h"
 #include "Components/RealtimeDestructibleMeshComponent.h"
 #include "Components/DestructionNetworkComponent.h"
 #include "Engine/GameInstance.h"
@@ -152,6 +154,7 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 	URealtimeDestructibleMeshComponent* DestructComp =
 		OtherActor->FindComponentByClass<URealtimeDestructibleMeshComponent>();
 
+	bool bSuccess = false;
 	if (DestructComp)
 	{
 		// 파괴 가능한 오브젝트에 충돌
@@ -159,15 +162,16 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 		if (ChunkNum == 0)
 		{
 			//UE_LOG(LogTemp, Warning, TEXT("%s : No chunk. Make chunk"), *DestructComp->GetName());
-			if (bDestroyOnHit)
-			{
-				GetOwner()->Destroy();
-			}
+			// if (bDestroyOnHit)
+			// {
+			// 	GetOwner()->Destroy();
+			// }
+			bSuccess = BooleanSourceMesh(DestructComp, Hit);
 		}
 		else
 		{
 			//UE_LOG(LogTemp, Warning, TEXT("ProcessDestructionRequestForCell %d"), ChunkNum);
-			ProcessDestructionRequestForChunk(DestructComp, Hit);
+			bSuccess = ProcessDestructionRequestForChunk(DestructComp, Hit);
 		}
 	}
 	else
@@ -180,19 +184,26 @@ void UDestructionProjectileComponent::ProcessProjectileHit(
 			GetOwner()->Destroy();
 		}
 	}
+
+	if (bSuccess && bDestroyOnHit)
+	{
+		GetOwner()->Destroy();
+	}
 }
 
-void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit)
+bool UDestructionProjectileComponent::ProcessDestructionRequestForChunk(
+	URealtimeDestructibleMeshComponent* DestructComp,
+	const FHitResult& Hit)
 {
 	if (!DestructComp)
 	{
-		return;
+		return false;
 	}
 
 	AActor* Owner = GetOwner();
 	if (!Owner)
 	{
-		return;
+		return false;
 	}
 	
 	// ===== DataAsset에서 Tool Shape 로드 (메시 생성 전에!) =====
@@ -369,10 +380,12 @@ void UDestructionProjectileComponent::ProcessDestructionRequestForChunk(URealtim
 		OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
 	
 		// 투사체 제거
-		if (bDestroyOnHit)
-		{
-			Owner->Destroy();
-		}
+		// if (bDestroyProjectile)
+		// {
+		// 	Owner->Destroy();
+		// }
+
+	return true;
 }
 
 void UDestructionProjectileComponent::ProcessSphereDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FVector& ExplosionCenter)
@@ -956,4 +969,176 @@ void UDestructionProjectileComponent::GetCalculateDecalSize(FName SurfaceType, F
 
 	float FinalSize	 = BaseSize * DecalSizeMultiplier;
 	SizeOffset = FVector(FinalSize,FinalSize,FinalSize);
+}
+
+bool UDestructionProjectileComponent::RequestDestructionFromProjectile(UPrimitiveComponent* HitComp, AActor* OtherActor,
+	UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit, bool bDestroyProjectile)
+{
+	if (!OtherActor)
+	{
+		return false;
+	}
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return false;
+	}
+
+	// 자기 자신과 충돌한 경우 무시
+	if (OtherActor == Owner)
+	{
+		return false;
+	}
+
+	// Owner가 Pawn/Character인 경우 무시 (캐릭터 사망 방지)
+	if (Owner->IsA<APawn>())
+	{
+		return false;
+	}
+
+	// 맞은 Actor에서 파괴 컴포넌트 찾기
+	URealtimeDestructibleMeshComponent* DestructComp =
+		OtherActor->FindComponentByClass<URealtimeDestructibleMeshComponent>();
+	
+	bool bSuccess = ProcessDestructionRequestForChunk(DestructComp, Hit);
+
+	if ((bSuccess && bDestroyProjectile) || !DestructComp)
+	{
+		Owner->Destroy();
+	}
+
+	return bSuccess;
+}
+
+bool UDestructionProjectileComponent::RequestDestructionFromHitScan(URealtimeDestructibleMeshComponent* DestructComp,
+	const FHitResult& Hit, bool bDestroyProjectile)
+{
+	bool bSuccess = ProcessDestructionRequestForChunk(DestructComp, Hit);
+
+	if (bSuccess && bDestroyProjectile)
+	{
+		if (AActor* Owner = GetOwner())
+		{
+			if (!Owner->IsA<APawn>())
+			{
+				Owner->Destroy();
+			}
+		}
+	}
+
+	return bSuccess;
+}
+
+void UDestructionProjectileComponent::UpdateCachedDecalDataAssetIfNeeded()
+{
+	// ConfigID가 변경된 경우에만 업데이트
+	if (CachedConfigID != DecalConfigID)
+	{
+		CachedConfigID = DecalConfigID;
+
+		if (UGameInstance* GI = GetWorld()->GetGameInstance())
+		{
+			if (UDestructionGameInstanceSubsystem* Subsystem = GI->GetSubsystem<UDestructionGameInstanceSubsystem>())
+			{
+				CachedDecalDataAsset = Subsystem->FindDataAssetByConfigID(DecalConfigID);
+			}
+		}
+	}
+}
+
+bool UDestructionProjectileComponent::BooleanSourceMesh(
+	URealtimeDestructibleMeshComponent* DestructComp,
+	const FHitResult& Hit,
+	bool bDestroyProjectile)
+{
+	if (!DestructComp)
+	{
+		return false;
+	}
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return false;
+	}
+
+	FName SurfaceTypeForShape = DestructComp->SurfaceType;
+	bool bHasDecalConfig = false;
+	FImpactProfileConfig OverrideDecalConfig;
+
+	if (CachedDecalDataAsset)
+	{
+		bHasDecalConfig = CachedDecalDataAsset->GetConfigRandom(SurfaceTypeForShape, OverrideDecalConfig);
+		if (bHasDecalConfig)
+		{
+			bool bShapeChanged = (CylinderRadius != OverrideDecalConfig.CylinderRadius ||
+				CylinderHeight != OverrideDecalConfig.CylinderHeight ||
+				SphereRadius != OverrideDecalConfig.SphereRadius ||
+				ToolShape != OverrideDecalConfig.ToolShape);
+
+			SurfaceMargin = OverrideDecalConfig.CylinderRadius;
+			CylinderRadius = OverrideDecalConfig.CylinderRadius;
+			CylinderHeight = OverrideDecalConfig.CylinderHeight;
+			SphereRadius = OverrideDecalConfig.SphereRadius;
+			ToolShape = OverrideDecalConfig.ToolShape;
+
+			if (bShapeChanged && ToolMeshPtr.IsValid())
+			{
+				ToolMeshPtr.Reset();
+				if (!EnsureToolMesh())
+				{
+					UE_LOG(LogTemp, Warning, TEXT("DestructionProjectileComponent: Tool mesh is invalid."));
+				}
+			}
+		}
+	}
+
+
+	APawn* InstigatorPawn = Owner->GetInstigator();
+	APlayerController* PC = InstigatorPawn ? Cast<APlayerController>(InstigatorPawn->GetController()) : nullptr;
+	UDestructionNetworkComponent* NetworkComp = PC ? PC->FindComponentByClass<UDestructionNetworkComponent>() : nullptr;
+
+	FRealtimeDestructionRequest Request;
+	Request.ImpactPoint = Hit.ImpactPoint;
+	Request.ImpactNormal = Hit.ImpactNormal;
+	Request.ChunkIndex = 1;
+	Request.ToolForwardVector = GetToolDirection(Hit, Owner);
+
+	Request.ToolMeshPtr = ToolMeshPtr;
+	Request.ToolShape = ToolShape;
+
+	Request.bSpawnDecal = false;
+
+	FName SurfaceType = DestructComp->SurfaceType;
+	Request.SurfaceType = SurfaceType;
+	Request.DecalConfigID = DecalConfigID; // 네트워크 전송용
+
+	if (bHasDecalConfig)
+	{
+		Request.DecalSize = OverrideDecalConfig.DecalSize;
+		Request.DecalLocationOffset = OverrideDecalConfig.LocationOffset;
+		Request.DecalRotationOffset = OverrideDecalConfig.RotationOffset;
+		Request.DecalMaterial = OverrideDecalConfig.DecalMaterial;
+		Request.bRandomRotation = OverrideDecalConfig.bRandomDecalRotation;
+	}
+
+	SetShapeParameters(Request);
+
+	if (NetworkComp)
+	{
+		// NetworkComp가 서버/클라이언트/스탠드얼론 모두 처리
+		NetworkComp->RequestDestruction(DestructComp, Request);
+	}
+	else
+	{
+		// NetworkComp가 없으면 로컬에서 직접 처리 (스탠드얼론 또는 설정 오류)
+		DestructComp->RequestDestruction(Request);
+	}
+
+
+	// 이벤트 브로드캐스트
+	OnDestructionRequested.Broadcast(Hit.ImpactPoint, Hit.ImpactNormal);
+
+	return true;
 }

@@ -74,7 +74,7 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	/** Tool Shape Parameters (for network serialization) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	FDestructionToolShapeParams ShapeParams;
-
+	  
 	/** Client send time for RTT measurement (set only on client) */
 	UPROPERTY()
 	double ClientSendTime = 0.0;
@@ -97,13 +97,13 @@ struct REALTIMEDESTRUCTION_API FRealtimeDestructionRequest
 	/** Decal Material (retrieved from Projectile or ImpactProfile) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh")
 	TObjectPtr<UMaterialInterface> DecalMaterial = nullptr;
-
+	
 	UPROPERTY(EditAnywhere, Category = "RealtimeDestructibleMesh")
 	FName SurfaceType = FName("Default");
 
 	UPROPERTY()
 	bool bRandomRotation = false;
-
+	
 	/** Decal config lookup ID (for network transmission) */
 	UPROPERTY()
 	FName DecalConfigID = FName("Default");
@@ -220,7 +220,7 @@ public:
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> SavedSourceStaticMesh;
-	
+
 	UPROPERTY()
 	bool bSavedIsInitialized = false;
 
@@ -236,6 +236,14 @@ public:
 	// Store component names instead of pointers (to find by name during PIE duplication)
 	UPROPERTY()
 	TArray<FString> SavedChunkComponentNames;
+
+	// GridCellLayout 보존 (Blueprint 재구성 시 앵커 데이터 유실 방지)
+	UPROPERTY()
+	FGridCellLayout SavedGridCellLayout;
+
+	// CachedRDMScale 보존 (Blueprint 재구성 후 BeginPlay에서 불필요한 BuildGridCells 방지)
+	UPROPERTY()
+	FVector SavedCachedRDMScale = FVector(1.0f, 1.0f, 1.0f);
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -539,7 +547,7 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|StructuralIntegrity")
 	bool bEnableSupercell = true;
-
+	
 	/** Function for preserving data */
 	virtual TStructOnScope<FActorComponentInstanceData> GetComponentInstanceData() const override;
 
@@ -589,7 +597,7 @@ public:
 	// Bit operations are not atomic, logic modification needed when calling outside GT
 	void ClearChunkBusy(int32 ChunkIndex);
 
-	void ClearAllChunkBusyBits();
+	void ClearAllChunkBusyBits(); 
 
 	void SetChunkBits(int32 ChunkIndex, int32& BitIndex, int32& BitOffset);
 
@@ -601,7 +609,7 @@ public:
 
 	/** Increment batch counter when Boolean operation completes */
 	void NotifyBooleanCompleted(int32 BatchId);
-
+	
 	// Function to update collision async with target mesh idle or desired delay
 	void RequestDelayedCollisionUpdate(UDynamicMeshComponent* TargetComp);		
 
@@ -654,7 +662,7 @@ protected:
 	TMap<int32, FManagedDecal> ActiveDecals;
 
 	TMap<int32, TArray<int32>> CellToDecalMap;
-	
+ 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "RealtimeDestructibleMesh|Status")
 	bool bIsInitialized = false;
 
@@ -795,7 +803,7 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "RealtimeDestructibleMesh|GridCell")
 	bool BuildGridCells();
-	
+
 	/** Whether grid cell layout is valid */
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|GridCell")
 	bool IsGridCellLayoutValid() const { return GridCellLayout.IsValid(); }
@@ -842,8 +850,8 @@ public:
 	 * Function used for arbitrary destruction (currently called based on bullet count in Supercell)
 	 */
 	void ForceRemoveSupercell(int32 SuperCellId);
-
-	UFUNCTION(NetMulticast, Reliable)
+	
+	UFUNCTION(NetMulticast, Reliable)  
 	void MulticastForceRemoveSupercell(int32 SuperCellId);
 
 	/**
@@ -859,7 +867,24 @@ public:
 	 * @param OutRemovedMeshIsland - On success, the portion cut from original mesh (OriginalMesh ∩ ToolMesh)
 	 * @return Whether removal succeeded
 	 */
-	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr);
+	bool RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor = nullptr, TArray<int32>* OutToolMeshOverlappingCellIds = nullptr);
+
+	/**
+	 * Collect grid cell IDs that overlap with the ToolMesh shape (smoothed + DebrisExpandRatio scaled).
+	 * Lightweight version of RemoveTrianglesForDetachedCells — builds ToolMesh only for cell collection,
+	 * without boolean operations, DebrisToolMesh, or chunk processing.
+	 *
+	 * @param CellIds - Input cell IDs to build ToolMesh from
+	 * @param OutOverlappingCellIds - Output: cell IDs overlapping the expanded ToolMesh
+	 */
+	void CollectToolMeshOverlappingCells(const TArray<int32>& CellIds, TArray<int32>& OutOverlappingCellIds);
+
+	/** Build ToolMesh from sorted voxel piece (GreedyMesh + FillHoles + HC Laplacian Smoothing). */
+	FDynamicMesh3 BuildSmoothedToolMesh(TArray<FIntVector>& SortedPiece);
+
+	/** Collect grid cell IDs that overlap with the given mesh using SAT triangle-AABB intersection. */
+	void CollectCellsOverlappingMesh(const FDynamicMesh3& Mesh, TArray<int32>& OutCellIds);
+
 	FDynamicMesh3 GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand = 1.0f );
 
 	/** When Supercell is destroyed beyond threshold ratio */
@@ -891,15 +916,15 @@ public:
 	 * Expands the removal region by this ratio when removing floating mesh islands. (1.2 = 120% of original size)
 	 * Adjusting this based on grid cell size can help remove debris cleanly without leaving residual fragments.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
-	float DebrisExpandRatio = 1.2f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "1.5", ClampMax = "3.0"))
+	float DebrisExpandRatio = 1.5f;
 
 	/**
 	 * Scale ratio for the debris mesh. (0.7 = 70% of original size)
 	 * Smaller values may look unnatural, but can reduce debris getting stuck in the original mesh.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0"))
-	float DebrisScaleRatio = 0.9f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debris", meta = (ClampMin = "0", ClampMax = "1.0"))
+	float DebrisScaleRatio = 0.7f;
 
 	void SpawnDebrisActor(FDynamicMesh3&& Source, const TArray<UMaterialInterface*>& Materials, ADebrisActor* TargetActgor = nullptr);
 
@@ -910,24 +935,24 @@ public:
 	 *  Requires valid BooleanProcessor and ChunkMesh
 	 */
 	bool CanExtractDebrisForClient() const;
-
+	 
 	/** Generate DebrisId */
 	int32 GenerateDebrisId() { return NextDebrisId++; }
 
 	/** Register local debris (client) */
 	void RegisterLocalDebris(int32 InDebrisId, UProceduralMeshComponent* Mesh);
-
+	
 	/** Register to pending queue when Actor arrives first */
 	void RegisterPendingDebrisActor(int32 InDebrisId, ADebrisActor* Actor);
-
+	
 	/** Find and remove local debris (client) */
 	UProceduralMeshComponent* FindAndRemoveLocalDebris(int32 InDebrisId);
-
+	
 	/** Cleanup small fragments (isolated Connected Components) */
-	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells);
+	void CleanupSmallFragments(const TSet<int32>& InDisconnectedCells); 
 
 	/** Cleanup small fragments (calculates detached cells internally) */
-	void CleanupSmallFragments();
+	void CleanupSmallFragments(); 
 
 	/**
 	 * Spawn detached cells as debris actors
@@ -940,31 +965,34 @@ public:
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
 	int32 GetChunkMeshCount() const { return ChunkMeshComponents.Num(); }
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|ChunkMesh", meta = (ClampMin = "1" , ClampMax="10"))
 	FIntVector SliceCount = FIntVector(2.0f, 2.0f, 2.0f);
 
 	/** Grid cell size (cm). Smaller values increase resolution but cost more performance */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "1.0"))
 	FVector GridCellSize = FVector(10.0f);
-
+	
 	/** Floor anchor detection Z height threshold (cm, relative to MeshBounds.Min.Z) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "0.0"))
 	float FloorHeightThreshold = 10.0f;
+
+	UPROPERTY()
+	FVector CachedRDMScale = FVector(1.0f, 1.0f, 1.0f);
 
 	//////////////////////////////////////////////////////////////////////////
 	// Detached Cell Smoothing (Staircase Artifact Reduction)
 	//////////////////////////////////////////////////////////////////////////
 
 	/** Laplacian Smoothing iterations when removing detached cells (0 to disable) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0", ClampMax = "10"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Debris", meta = (ClampMin = "0", ClampMax = "5"))
 	int32 SmoothingIterations = 4;
 
 	/** Laplacian Smoothing strength (0~1) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Debris", meta = (ClampMin = "0.0", ClampMax = "0.5"))
 	float SmoothingStrength = 0.2f;
 
 	/** HC Laplacian correction strength (0~1, prevents shrinkage) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|StructuralIntegrity", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Advanced|Debris", meta = (ClampMin = "0.1", ClampMax = "0.8"))
 	float HCBeta = 0.5f;
 
 	UFUNCTION(BlueprintPure, Category = "RealtimeDestructibleMesh|ChunkMesh")
@@ -972,7 +1000,7 @@ public:
 
 	/** Apply HC Laplacian Smoothing (Vollmer et al., 1999) when removing detached cells (staircase artifact reduction)
 	 * @param Mesh - ToolMesh to smooth
-	 */
+ */
 	void ApplyHCLaplacianSmoothing(FDynamicMesh3& Mesh);
 private:
 	/** Create mesh sections on ProceduralMeshComponent */
@@ -980,7 +1008,7 @@ private:
 		UProceduralMeshComponent* Mesh,
         const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
         const TArray<UMaterialInterface*>& InMaterials);
-
+	
 	/** Create local-only Debris Actor (no sync) */
 	AActor* CreateLocalOnlyDebrisActor(
 		UWorld* World,
@@ -989,7 +1017,7 @@ private:
 		const TMap<int32, FMeshSectionData>& SectionDataByMaterial,
 		const TArray<UMaterialInterface*>& InMaterials
 	);
-
+	
 	/** Apply physics and initial velocity to Debris */
 	void ApplyDebrisPhysics(
 		 UBoxComponent* CollisionBox,
@@ -1037,6 +1065,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowCellSpawnPosition = false;
 
+
 	/** Server collision box debug visualization (for listen server) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bShowServerCollisionDebug = false;
@@ -1048,12 +1077,20 @@ protected:
 	/** Show small non-synced debris as red boxes */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
 	bool bDebugDrawDebris = false;
+
+	/** SuperCell debug display */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
+	bool bShowSupercellDebug = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
+	bool bShowSubCellDebug = false;
+
 	UPROPERTY()
 	float DebugDrawDuration = 5.0f;
 
 	/** Recently directly destroyed cell IDs (for debug highlighting) */
 	TSet<int32> RecentDirectDestroyedCellIds;
-
+	
 	/** Update debug text. Controls update frequency by only performing on mesh update */
 	void UpdateDebugText();
 
@@ -1062,12 +1099,12 @@ protected:
 	/** Grid cell debug visualization */
 	void DrawGridCellDebug();
 
-	/** SuperCell debug display */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|Debug")
-	bool bShowSupercellDebug = false;
 
 	/** SuperCell debug visualization */
 	void DrawSupercellDebug();
+
+	/** SubCell Dbug */
+	void DrawSubCellDebug();
 
 	/** Server collision box debug visualization */
 	void DrawServerCollisionDebug();
@@ -1079,6 +1116,10 @@ protected:
 protected:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+
+	void TryAutoSetupFromParentStaticMesh();
+
+	bool bAutoSetUpDone = false;
 #endif
 
 private:
@@ -1181,12 +1222,12 @@ private:
 	TMap<int32, TWeakObjectPtr<AActor>> ActiveDebrisActors;
 
 	/** Local Debris mesh map (for client) */
-	TMap<int32, TObjectPtr<UProceduralMeshComponent>> LocalDebrisMeshMap;
+	TMap<int32, TObjectPtr<UProceduralMeshComponent>> LocalDebrisMeshMap; 
 
 	/** Pending queue when Actor arrives before local mesh */
 	UPROPERTY()
 	TMap<int32, TObjectPtr<ADebrisActor>> PendingDebrisActors;
-
+	
 	/** Debris physics sync timer */
 	FTimerHandle DebrisPhysicsSyncTimerHandle;
 

@@ -9,24 +9,53 @@
 
 
 #include "Debug/DebugConsoleVariables.h"
+#include "HAL/IConsoleManager.h"
 
-int32 Simplify_Toggle = 1;
-int32 Triangle_Debug = 0;
-int32 Simplify_Mat = 2;
+#if !UE_BUILD_SHIPPING
 
-static FAutoConsoleVariableRef CVar_Simplify(
+static TAutoConsoleVariable<int32> CVarSimplifyEnable(
 	TEXT("RDM.Enable.Simplify"),
-	Simplify_Toggle,
-	TEXT("0=off, 1=on"),
-	ECVF_Cheat);
-static FAutoConsoleVariableRef CVar_CollectedTriangle(
-	TEXT("RDM.CollectedTri.Debug"),
-	Triangle_Debug,
+	1,
 	TEXT("0=off, 1=on"),
 	ECVF_Cheat);
 
-static FAutoConsoleVariableRef CVar_Simplify_Mat(
+static TAutoConsoleVariable<int32> CVarSimplifyMode(
 	TEXT("RDM.Simplify.Mode"),
-	Simplify_Mat,
-	TEXT("0=Const1, 1=Const2"),
+	0,
+	TEXT("0=Protect Mat, 1=No Protect Mat"),
 	ECVF_Cheat);
+
+static TAutoConsoleVariable<int32> CVarBooleanAsync(
+	TEXT("RDM.Enable.BooleanAsync"),
+	1,
+	TEXT("0=Sync, 1=Async"),
+	ECVF_Cheat);
+
+#endif
+
+int32 FRDMCVarHelper::EnableSimplify()
+{
+#if !UE_BUILD_SHIPPING
+	return CVarSimplifyEnable.GetValueOnAnyThread() != 0;
+#else
+	return 1
+#endif
+}
+
+int32 FRDMCVarHelper::GetSimplifyMode()
+{
+#if !UE_BUILD_SHIPPING
+	return CVarSimplifyMode.GetValueOnAnyThread();
+#else
+	return 2
+#endif
+}
+
+int32 FRDMCVarHelper::EnableAsyncBooleanOp()
+{
+#if !UE_BUILD_SHIPPING
+	return CVarBooleanAsync.GetValueOnAnyThread() != 0;
+#else
+	return 1
+#endif
+}

@@ -386,6 +386,8 @@ private:
 	// Clean up mapping when a slot drains.
 	void CleanupSlotMapping(int32 SlotIndex);
 
+	void BooleanOpSync(FBulletHole&& Op);
+
 private:
 	// ===============================================================
 	// Processing Pipeline

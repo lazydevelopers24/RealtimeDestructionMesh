@@ -205,6 +205,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Decal")
 	FName DecalConfigID = FName("Default");
 
+	UPROPERTY(EditAnywhere)
+	FName CachedConfigID;
+
 
 	//=========================================================================
 	// Immediate Feedback Settings
@@ -248,15 +251,21 @@ public:
 
 	// Blueprint-exposed function that can be directly bound to collision shape's OnComponentHit event
 	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	bool RequestDestructionFromProjectile(UPrimitiveComponent* HitComp, AActor* OtherActor,
+		UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit, bool bDestroyProjectile = true);
+
+	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	bool  RequestDestructionFromHitScan(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit, bool bDestroyProjectile = false);
+
+	UFUNCTION()
 	void ProcessProjectileHit(UPrimitiveComponent* HitComp, AActor* OtherActor,
 		UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
 
-	// Wrapper function for line trace usage
-	UFUNCTION(BlueprintCallable, Category = "Destruction")
-	void ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit);
-
 	UFUNCTION(BlueprintCallable, Category = "Destruction")
 	void ProcessSphereDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FVector& ExplosionCenter );
+	 
+	UFUNCTION(BlueprintCallable, Category = "Destruction")
+	void UpdateCachedDecalDataAssetIfNeeded();
 
 protected:
 	virtual void BeginPlay() override;
@@ -267,6 +276,8 @@ protected:
 
 
 private:
+	bool ProcessDestructionRequestForChunk(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit);
+	
 	bool EnsureToolMesh();
 
 	void SetShapeParameters(FRealtimeDestructionRequest& OutRequest);
@@ -283,6 +294,7 @@ private:
 
 	TSharedPtr<FDynamicMesh3, ESPMode::ThreadSafe> ToolMeshPtr = nullptr;
 
+	bool BooleanSourceMesh(URealtimeDestructibleMeshComponent* DestructComp, const FHitResult& Hit, bool bDestroyProjectile = true);
 
 	float SurfaceMargin = 0.0f;
 };

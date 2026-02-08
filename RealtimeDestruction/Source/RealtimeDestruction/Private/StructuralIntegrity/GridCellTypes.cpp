@@ -652,6 +652,9 @@ void FGridCellLayout::Reset()
 	SparseIndexToCellId.Empty();
 	SparseCellTriangles.Empty();
 	SparseCellNeighbors.Empty();
+
+	// Note: Do NOT clear CachedVertices/CachedIndices here
+	// They need to persist for runtime rebuilds
 }
 
 bool FGridCellLayout::IsValid() const

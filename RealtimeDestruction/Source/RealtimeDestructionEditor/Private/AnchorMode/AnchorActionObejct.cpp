@@ -30,13 +30,38 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 
 	FEditorViewportClient* ViewportClient = (FEditorViewportClient*)GEditor->GetActiveViewport()->GetClient();
 	FVector SpawnLocation = ViewportClient->GetViewLocation() + (ViewportClient->GetViewRotation().Vector() * 300.0f);
+	FRotator SpawnRotation = FRotator::ZeroRotator;
+
+	if (IsValid(TargetComp))
+	{
+		const FBoxSphereBounds WorldBounds = TargetComp->Bounds;
+		const FVector LocalHalfExtent = TargetComp->GetLocalBounds().GetBox().GetExtent();
+		const FVector ScaleAbs = TargetComp->GetComponentTransform().GetScale3D().GetAbs();
+		const FVector ScaledHalfExtent = LocalHalfExtent * ScaleAbs;
+		const FVector BoundsCenter = WorldBounds.Origin;
+		
+		const FVector Forward = TargetComp->GetForwardVector();
+		const FVector Right = TargetComp->GetRightVector();
+
+		const FVector ToCamera = (ViewportClient->GetViewLocation() - BoundsCenter).GetSafeNormal();
+			
+		const bool bUseForwardAxis = ScaledHalfExtent.X <= ScaledHalfExtent.Y;
+		const FVector Axis = bUseForwardAxis ? Forward : Right;
+		const float HalfExtent = bUseForwardAxis ? ScaledHalfExtent.X : ScaledHalfExtent.Y;
+		
+		const float Sign = (FVector::DotProduct(Axis, ToCamera) >= 0.0f) ? 1.0f : -1.0f;
+		
+		constexpr float Distance = 100.0f;
+		SpawnLocation = BoundsCenter +(Axis * Sign * (HalfExtent + Distance));
+		SpawnRotation = TargetComp->GetComponentRotation();
+	}	
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "SpawnAnchorPlane", "Spawn Plane"));
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (World)
 	{
-		AAnchorPlaneActor* NewPlane = World->SpawnActor<AAnchorPlaneActor>(SpawnLocation, FRotator::ZeroRotator);
+		AAnchorPlaneActor* NewPlane = World->SpawnActor<AAnchorPlaneActor>(SpawnLocation, SpawnRotation);
 		if (NewPlane)
 		{
 			GEditor->SelectNone(true, true);
@@ -58,13 +83,37 @@ void UAnchorActionObejct::SpawnAnchorVolume()
 
 	FEditorViewportClient* ViewportClient = (FEditorViewportClient*)GEditor->GetActiveViewport()->GetClient();
 	FVector SpawnLocation = ViewportClient->GetViewLocation() + (ViewportClient->GetViewRotation().Vector() * 300.0f);
+	FRotator SpawnRotation = FRotator::ZeroRotator;
+
+	if (IsValid(TargetComp))
+	{
+		const FBoxSphereBounds WorldBounds = TargetComp->Bounds;
+		const FVector BoundsCenter = WorldBounds.Origin;
+		const FVector ToCamera = (ViewportClient->GetViewLocation() - BoundsCenter).GetSafeNormal();
+		const FVector LocalHalfExtent = TargetComp->GetLocalBounds().GetBox().GetExtent();
+		const FVector ScaleAbs = TargetComp->GetComponentTransform().GetScale3D().GetAbs();
+		const FVector ScaledHalfExtent = LocalHalfExtent * ScaleAbs;
+
+		const FVector Forward = TargetComp->GetForwardVector();
+		const FVector Right = TargetComp->GetRightVector();
+
+		const bool bUseForwardAxis = ScaledHalfExtent.X <= ScaledHalfExtent.Y;
+		const FVector Axis = bUseForwardAxis ? Forward : Right;
+		const float HalfExtent = bUseForwardAxis ? ScaledHalfExtent.X : ScaledHalfExtent.Y;
+
+		const float Sign = (FVector::DotProduct(Axis, ToCamera) >= 0.0f) ? 1.0f : -1.0f;
+		
+		constexpr float Distance = 100.0f;
+		SpawnLocation = BoundsCenter +(Axis * Sign * (HalfExtent + Distance));
+		SpawnRotation = TargetComp->GetComponentRotation();
+	}	
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "SpawnAnchorVolume", "Spawn Volume"));
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (World)
 	{
-		AAnchorVolumeActor* NewVolume = World->SpawnActor<AAnchorVolumeActor>(SpawnLocation, FRotator::ZeroRotator);
+		AAnchorVolumeActor* NewVolume = World->SpawnActor<AAnchorVolumeActor>(SpawnLocation, SpawnRotation);
 		if (NewVolume)
 		{
 			GEditor->SelectNone(true, true);
@@ -99,11 +148,11 @@ void UAnchorActionObejct::ApplyAllAnchorPlanes()
 	{
 		if (AAnchorPlaneActor* Plane = Cast<AAnchorPlaneActor>(AnchorActor.Get()))
 		{
-		if (IsValid(Plane))
-		{
-			Planes.Add(Plane);
+			if (IsValid(Plane))
+			{
+				Planes.Add(Plane);
+			}
 		}
-	}
 	}
 
 	if (Planes.Num() == 0)
@@ -160,7 +209,7 @@ void UAnchorActionObejct::ApplyAllAnchorVolumes()
 	}	
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ApplyAnchorVolumes", "Apply Anchor Volumes"));
-
+	
 	ValidateAnchorArray();
 
 	TArray<AAnchorVolumeActor*> Volumes;
@@ -168,11 +217,11 @@ void UAnchorActionObejct::ApplyAllAnchorVolumes()
 	{
 		if (AAnchorVolumeActor* Volume = Cast<AAnchorVolumeActor>(AnchorActor.Get()))
 		{
-		if (IsValid(Volume))
-		{
-			Volumes.Add(Volume);
+			if (IsValid(Volume))
+			{
+				Volumes.Add(Volume);
+			}
 		}
-	}
 	}
 
 	if (Volumes.Num() == 0)
@@ -240,23 +289,23 @@ void UAnchorActionObejct::RemoveAllAnchorPlanes()
 	{
 		if (AAnchorPlaneActor* Plane = Cast<AAnchorPlaneActor>(AnchorActor.Get()))
 		{
-		if (!IsValid(Plane))
-		{
-			continue;
-		}
-		Plane->Modify();
+			if (!IsValid(Plane))
+			{
+				continue;
+			}
+			Plane->Modify();
 
-		GEditor->SelectActor(Plane, false, false);
+			GEditor->SelectActor(Plane, false, false);
 		
-		if (ActorSubsystem)
-		{
-			ActorSubsystem->DestroyActor(Plane);
+			if (ActorSubsystem)
+			{
+				ActorSubsystem->DestroyActor(Plane);
+			}
+			else
+			{
+				World->EditorDestroyActor(Plane, true);
+			}
 		}
-		else
-		{
-			World->EditorDestroyActor(Plane, true);
-		}
-	}
 	}
 
 	UpdateCellCounts();
@@ -289,70 +338,27 @@ void UAnchorActionObejct::RemoveAllAnchorVolumes()
 	{
 		if(AAnchorVolumeActor* Volume = Cast<AAnchorVolumeActor>(AnchorActor.Get()))
 		{
-		if (!IsValid(Volume))
-		{
-			continue;
-		}
-		Volume->Modify();
+			if (!IsValid(Volume))
+			{
+				continue;
+			}
+			Volume->Modify();
 
-		GEditor->SelectActor(Volume, false, false);
+			GEditor->SelectActor(Volume, false, false);
 		
-		if (ActorSubsystem)
-		{
-			ActorSubsystem->DestroyActor(Volume);
+			if (ActorSubsystem)
+			{
+				ActorSubsystem->DestroyActor(Volume);
+			}
+			else
+			{
+				World->EditorDestroyActor(Volume, true);
+			}
 		}
-		else
-		{
-			World->EditorDestroyActor(Volume, true);
-		}
-	}
 	}
 
 	UpdateCellCounts();
 	GEditor->NoteSelectionChange();
-	GEditor->RedrawLevelEditingViewports(true);
-}
-
-void UAnchorActionObejct::RemoveAllAnchors()
-{
-	if (!GEditor)
-	{
-		return;
-	}
-	
-	UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!World)
-	{
-		return;
-	}	
-
-	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ClearAnchors", "Clear Anchors"));
-	
-	for (TObjectIterator<URealtimeDestructibleMeshComponent> It; It; ++It)
-	{
-		URealtimeDestructibleMeshComponent* Comp = *It;
-
-		if (!IsValid(Comp) || Comp->GetWorld() != World || Comp->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
-		{
-			continue;
-		}
-
-		if (Comp->IsTemplate())
-		{
-			continue;
-		}
-
-		Comp->Modify();
-
-		FGridCellLayout& GridCellCache = Comp->GetGridCellLayout();
-		if (GridCellCache.IsValid())
-		{
-			FGridCellBuilder::ClearAllAnchors(GridCellCache);;
-			Comp->MarkRenderStateDirty();
-		}
-	}
-
-	UpdateCellCounts();
 	GEditor->RedrawLevelEditingViewports(true);
 }
 

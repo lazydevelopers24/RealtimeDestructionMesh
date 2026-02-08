@@ -327,6 +327,31 @@ struct REALTIMEDESTRUCTION_API FGridCellLayout
 	TArray<FIntArray> SparseCellNeighbors;
 
 	//=========================================================================
+	// Cached triangle data (for runtime voxelization)
+	//=========================================================================
+
+	/** Cached vertex positions from source mesh (editor-time capture). */
+	UPROPERTY()
+	TArray<FVector> CachedVertices;
+
+	/** Cached triangle indices from source mesh (editor-time capture). */
+	UPROPERTY()
+	TArray<uint32> CachedIndices;
+
+	/** Check if cached triangle data is available. */
+	bool HasCachedTriangleData() const
+	{
+		return CachedVertices.Num() > 0 && CachedIndices.Num() >= 3;
+	}
+
+	/** Clear cached triangle data (call after voxelization if memory is a concern). */
+	void ClearCachedTriangleData()
+	{
+		CachedVertices.Empty();
+		CachedIndices.Empty();
+	}
+
+	//=========================================================================
 	// Bitfield accessors
 	//=========================================================================
 

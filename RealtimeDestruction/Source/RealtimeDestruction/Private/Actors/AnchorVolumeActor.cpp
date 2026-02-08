@@ -92,7 +92,6 @@ void AAnchorVolumeActor::ApplyToAnchors(const FTransform& MeshTransform, FGridCe
 void AAnchorVolumeActor::BeginPlay()
 {
 	Super::BeginPlay();
-	
 }
 
 // Called every frame
@@ -114,11 +113,161 @@ void AAnchorVolumeActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 	RefreshVisualization();
 }
+
+void AAnchorVolumeActor::PostEditMove(bool bFinished)
+{
+	Super::PostEditMove(bFinished);
+
+#if WITH_EDITORONLY_DATA
+	if (!bFinished)
+	{
+		return;
+	}
+
+	if (bBakingScale)
+	{
+		return;
+	}
+
+	TGuardValue<bool> Guard(bBakingScale, true);
+	CommitScaleToShapeParamAndReset();
+#endif	
+}
+
+void AAnchorVolumeActor::EditorApplyScale(const FVector& DeltaScale, const FVector* PivotLocation, bool bAltDown,
+	bool bShiftDown, bool bCtrlDown)
+{
+	Super::EditorApplyScale(DeltaScale, PivotLocation, bAltDown, bShiftDown, bCtrlDown);
+#if WITH_EDITORONLY_DATA
+	if (Shape != EAnchorVolumeShape::Sphere || !Sphere)
+	{
+		return;
+	}
+
+	// 스케일 드래그 시작 시점 스냅샷
+	if (!bSphereScalePreview)
+	{
+		bSphereScalePreview = true;
+		SphereRadiusAtScale = SphereRadius;
+		SpherePreviewFactor = 1.0f;
+
+		// 현재 스케일 드래그 트랜잭션에 이 액터가 포함되도록 1회 Modify
+		Modify();
+	}
+
+	UpdateSphereScalePreviewFromActorScale();
+#endif
+}
+
+void AAnchorVolumeActor::CommitScaleToShapeParamAndReset()
+{
+#if WITH_EDITORONLY_DATA
+	const FVector Scale = GetActorScale3D();
+	if (Scale.Equals(FVector::OneVector, KINDA_SMALL_NUMBER))
+	{
+		return;
+	}
+
+	const FVector AbsScale = Scale.GetAbs();
+
+	Modify();
+
+	if (Shape == EAnchorVolumeShape::Box)
+	{
+		BoxExtent.X = FMath::Max(1.0f, BoxExtent.X * AbsScale.X);
+		BoxExtent.Y = FMath::Max(1.0f, BoxExtent.Y * AbsScale.Y);
+		BoxExtent.Z = FMath::Max(1.0f, BoxExtent.Z * AbsScale.Z);
+	}
+	else
+	{
+		// const float UniformScale = AbsScale.GetMax();
+		// SphereRadius = FMath::Max(1.0f, SphereRadius * UniformScale);
+
+		const float Factor = bSphereScalePreview ? SpherePreviewFactor : ComputeSphereFactorFromAbsScale(AbsScale);
+		const float BaseRadius = bSphereScalePreview ? SphereRadiusAtScale : SphereRadius;
+		SphereRadius = FMath::Max(1.0f, BaseRadius * FMath::Max(0.01f, Factor));
+	}
+
+	SetActorScale3D(FVector::OneVector);
+
+	if (Box)
+	{
+		Box->SetRelativeScale3D(FVector::OneVector);
+	}
+	
+	if (Sphere)
+	{
+		Sphere->SetRelativeScale3D(FVector::OneVector);
+	}
+
+	bSphereScalePreview = false;
+	SphereRadiusAtScale = 0.0f;
+	SpherePreviewFactor = 1.0f;
+
+	RefreshVisualization();	
+#endif
+}
+
+void AAnchorVolumeActor::UpdateSphereScalePreviewFromActorScale()
+{
+#if WITH_EDITORONLY_DATA
+	if (!Sphere || Shape != EAnchorVolumeShape::Sphere)
+	{
+		return;
+	}
+
+	const FVector AbsScale = GetActorScale3D().GetAbs();
+	if (AbsScale.Equals(FVector::OneVector, KINDA_SMALL_NUMBER))
+	{
+		SpherePreviewFactor = 1.0f;
+		Sphere->SetRelativeScale3D(FVector::OneVector);
+		Sphere->SetSphereRadius(SphereRadiusAtScale, false);
+		Sphere->MarkRenderStateDirty();
+		return;
+	}
+
+	SpherePreviewFactor = FMath::Max(0.01f, ComputeSphereFactorFromAbsScale(AbsScale));
+	const float PreviewRadius = FMath::Max(1.0f, SphereRadiusAtScale * SpherePreviewFactor);
+	Sphere->SetSphereRadius(PreviewRadius, /*bUpdateOverlaps*/ false);
+
+	Sphere->SetRelativeScale3D(SafeReciprocalAbsScale(AbsScale));
+	Sphere->MarkRenderStateDirty();
+#endif
+}
+
+float AAnchorVolumeActor::ComputeSphereFactorFromAbsScale(const FVector& AbsScale)
+{
+	const float Dx = FMath::Abs(AbsScale.X - 1.0f);
+	const float Dy = FMath::Abs(AbsScale.Y - 1.0f);
+	const float Dz = FMath::Abs(AbsScale.Z - 1.0f);
+
+	if (Dx >= Dy && Dx >= Dz)
+	{
+		return AbsScale.X;
+	}
+
+	if (Dy >= Dx && Dy >= Dz)
+	{
+		return AbsScale.Y;
+	}
+
+	return AbsScale.Z;
+}
+
+FVector AAnchorVolumeActor::SafeReciprocalAbsScale(const FVector& AbsScale)
+{
+	constexpr float Min = KINDA_SMALL_NUMBER;
+	return FVector(
+		(AbsScale.X > Min) ? (1.0f / AbsScale.X) : 1.0f,
+		(AbsScale.Y > Min) ? (1.0f / AbsScale.Y) : 1.0f,
+		(AbsScale.Z > Min) ? (1.0f / AbsScale.Z) : 1.0f);
+}
 #endif
 
 void AAnchorVolumeActor::RefreshVisualization()
 {
 #if WITH_EDITORONLY_DATA
+
 	if (Box)
 	{
 		Box->SetBoxExtent(BoxExtent);
@@ -163,4 +312,3 @@ void AAnchorVolumeActor::RefreshVisualization()
 	}
 #endif
 }
-

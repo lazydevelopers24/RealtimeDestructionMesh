@@ -37,7 +37,7 @@ void UAnchorEditMode::Enter()
 	{
 		ActionObject = NewObject<UAnchorActionObejct>(this);
 	}
-	
+
 	if (ActionObject)
 	{
 		ActionObject->CollectionExistingAnchorActors(GetWorld());
@@ -51,6 +51,12 @@ void UAnchorEditMode::Enter()
 void UAnchorEditMode::Exit()
 {
 	SelectedComp = nullptr;
+	
+	if (ActionObject)
+	{
+		ActionObject->RemoveAllAnchorPlanes();
+		ActionObject->RemoveAllAnchorVolumes();
+	}
 	
 	if(Toolkit.IsValid())
 	{

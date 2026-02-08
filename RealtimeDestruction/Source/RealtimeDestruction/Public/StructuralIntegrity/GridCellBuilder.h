@@ -44,7 +44,9 @@ public:
 		const FVector& MeshScale,
 		const FVector& CellSize,
 		float AnchorHeightThreshold,
-		FGridCellLayout& OutLayout);
+		FGridCellLayout& OutLayout,
+		TMap<int32, FSubCell>* OutSubCellStates = nullptr
+		);
 
 	/**
 	 * Build a grid cell layout from a dynamic mesh.
@@ -60,6 +62,26 @@ public:
 		const FVector& CellSize,
 		float AnchorHeightThreshold,
 		FGridCellLayout& OutLayout);
+
+	static bool TriangleIntersectsAABB(
+		const FVector& V0, const FVector& V1, const FVector& V2,
+		const FVector& BoxMin, const FVector& BoxMax
+	);
+
+	/**
+	* Mark subcells as alive if they intersect with the given triangle.
+	*
+	* @param V0, V1, V2 - Triangle vertices (local space)
+	* @param CellMin - Cell minimum corner (local space)
+	* @param CellSize - Cell size (local space)
+	* @param OutSubCellState - SubCell state to update (bits set to 1 for alive)
+	*/
+
+	static void MarkIntersectingSubCellsAlive(
+		const FVector& V0, const FVector& V1, const FVector& V2,
+		const FVector& CellMin, const FVector& CellSIze,
+		FSubCell& OutSubCellState
+	);
 
 	static void SetAnchorsByFinitePlane(
 		const FTransform& PlaneTransform,
@@ -135,12 +157,24 @@ private:
 	/** Voxelize using StaticMesh render triangles. */
 	static void VoxelizeWithTriangles(
 		const UStaticMesh* SourceMesh,
-		FGridCellLayout& OutLayout);
-	
-	static bool TriangleIntersectsAABB(
-		const FVector& V0, const FVector& V1, const FVector& V2,
-		const FVector& BoxMin, const FVector& BoxMax
-	);
+		FGridCellLayout& OutLayout,
+		TMap<int32, FSubCell>* OutSubCellStates);
+
+	/** Voxelize a single triangle (with optional SubCell support). */
+	static void VoxelizeTriangle(
+		const FVector& V0,
+		const FVector& V1,
+		const FVector& V2,
+		FGridCellLayout& OutLayout,
+		TMap<int32, FSubCell>* OutSubCellStates);
+
+	/** Voxelize from vertex/index arrays (for cached data). */
+	static void VoxelizeFromArrays(
+		const TArray<FVector>& Vertices,
+		const TArray<uint32>& Indices,
+		FGridCellLayout& OutLayout,
+		TMap<int32, FSubCell>* OutSubCellStates);
+
 
 	static void FillInsideVoxels(FGridCellLayout& OutLayout);
 

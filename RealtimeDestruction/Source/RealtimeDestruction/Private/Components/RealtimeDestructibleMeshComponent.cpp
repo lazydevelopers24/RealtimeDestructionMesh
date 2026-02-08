@@ -170,6 +170,7 @@ FRealtimeDestructionRequest FCompactDestructionOp::Decompress() const
 #include "BooleanProcessor/RealtimeBooleanProcessor.h"
 #include "Components/DecalComponent.h"
 #include "StructuralIntegrity/GridCellBuilder.h"
+#include <Selection/MeshTopologySelectionMechanic.h>
 
 URealtimeDestructibleMeshComponent::URealtimeDestructibleMeshComponent()
 {
@@ -291,7 +292,16 @@ FDestructionOpId URealtimeDestructibleMeshComponent::EnqueueRequestLocal(const F
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[EnqueueRequestLocal] ChunkIndex=%d → BooleanProcessor->EnqueueOp 호출"),
 			Op.Request.ChunkIndex);
-		BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get(), BatchId);
+		if (FRDMCVarHelper::EnableAsyncBooleanOp() && ChunkMeshComponents.IsValidIndex(Op.Request.ChunkIndex))
+		{
+			BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, ChunkMeshComponents[Op.Request.ChunkIndex].Get(),
+			                            BatchId);
+	}
+	else
+	{
+			UE_LOG(LogTemp, Display, TEXT("BooleanSync"));
+			BooleanProcessor->EnqueueOp(MoveTemp(Op), TemporaryDecal, this, BatchId);
+		}
 	}
 	else
 	{
@@ -653,7 +663,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 	// 통합 API 사용: bEnableSupercell, bEnableSubcell 플래그에 따라 자동 선택
 	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
 	//======================================================== 
-
+	  
 	//[depricated]
 	//TSet<int32> DisconnectedCells;
 	//{
@@ -671,8 +681,8 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 	//double BFSEndTime = FPlatformTime::Seconds();
 	//UE_LOG(LogTemp, Warning, TEXT("[BFS #%d] FindDisconnectedCells END - took %.3f ms, found %d disconnected"),
 	//	BFSCallCount, (BFSEndTime - BFSStartTime) * 1000.0, DisconnectedCells.Num());
-
-	TSet<int32> DisconnectedCells;
+	 
+	TSet<int32> DisconnectedCells; 
 	if (AffectedNeighborCells.Num() > 0)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCellsFromAffected);
@@ -727,8 +737,8 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 		// 클라이언트에게 Detach 발생 신호만 전송 (클라이언트가 자체 BFS 실행)
 
 		// 분리된 셀의 삼각형 삭제 (데디서버: 렌더링 불필요, Cell Box만 업데이트)
- 		{
-			const ENetMode NetMode = GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone; 
+ 		{  
+			const ENetMode NetMode = GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone;
 			const bool bIsDedicatedServerClient = bServerIsDedicatedServer && !GetOwner()->HasAuthority();
 
 			TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_Phase4);
@@ -740,7 +750,7 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 				{
 					SpawnDebrisActorForDedicatedServer(Group);
 				}
-			}
+			} 
 			else if (bIsDedicatedServerClient)
 			{
 				// 크기가 작은 debris만 클라이언트가 자체 생성
@@ -863,6 +873,8 @@ float URealtimeDestructibleMeshComponent::CalculateDebrisBoundsExtent(const TArr
 	}
 
 	FVector BoxExtent = CellBounds.GetExtent();
+	BoxExtent *= GetComponentTransform().GetScale3D(); 
+
 	return BoxExtent.GetMax();
 }
 void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
@@ -872,7 +884,7 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 	TArray<int32> AllCellsInSupercell;
 	SupercellState.GetCellsInSupercell(SuperCellId, GridCellLayout, AllCellsInSupercell);
 
-	/*TArray<int32> AliveCells;
+	TArray<int32> AliveCells;
 	for (int32 CellId : AllCellsInSupercell)
 	{
 		if (!CellState.DestroyedCells.Contains(CellId))
@@ -882,43 +894,73 @@ void URealtimeDestructibleMeshComponent::ForceRemoveSupercell(int32 SuperCellId)
 	}
 
 	if (AliveCells.Num() == 0) return;
-	*/
+	
 
 	// 렌더링 처리 (Dedicated Server는 패스) 
+	// ToolMesh(smoothed + DebrisExpandRatio) 형상과 겹치는 cell도 함께 수집
 	const bool bIsDedicatedServer = GetWorld() && GetWorld()->GetNetMode() == NM_DedicatedServer;
 	const bool bIsDedicatedServerClient = bServerIsDedicatedServer && !GetOwner()->HasAuthority();
 	
+	TArray<int32> ToolMeshOverlappingCells;
 	 
 	if (bIsDedicatedServer)
 	{
 		SpawnDebrisActorForDedicatedServer(AllCellsInSupercell);
+		CollectToolMeshOverlappingCells(AllCellsInSupercell, ToolMeshOverlappingCells);
 	}
 	else if (bIsDedicatedServerClient)
 	{
-		// 크기가 작은 debris만 클라이언트가 자체 생성
 		float DebrisSize = CalculateDebrisBoundsExtent(AllCellsInSupercell);
 		if (DebrisSize < MinDebrisSyncSize)
 		{
-			RemoveTrianglesForDetachedCells(AllCellsInSupercell);
-			// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
+			// 작은 debris: 클라이언트가 자체 boolean + cell 수집
+			RemoveTrianglesForDetachedCells(AllCellsInSupercell, nullptr, &ToolMeshOverlappingCells);
 		}
-		// else: 큰 것은 서버에서 복제된 DebrisActor가 처리
+		else
+		{
+			// 큰 debris: 서버 DebrisActor가 boolean 처리, cell 수집만 수행
+			CollectToolMeshOverlappingCells(AllCellsInSupercell, ToolMeshOverlappingCells);
+		}
 	}
 	else
 	{
-		RemoveTrianglesForDetachedCells(AllCellsInSupercell);
+		RemoveTrianglesForDetachedCells(AllCellsInSupercell, nullptr, &ToolMeshOverlappingCells);
 		// Cleanup은 IslandRemoval 완료 콜백에서 처리 (비동기)
-	} 
+	}
 
-	// cell state 업데이트 
+	// Supercell 삭제하면서 이웃 Supercell의 cell에 영향을 끼칠 수 있음, 
+	// 이웃 supercell에 삭제된게 있으면 업데이트를 해준다. 
+	if (ToolMeshOverlappingCells.Num() > 0)
+	{
+		// 원본 supercell cell과 합치기 (AddUnique로 수집했으므로 중복 없음)
+		TSet<int32> OriginalCellSet(AllCellsInSupercell);
+		for (int32 CellId : ToolMeshOverlappingCells)
+		{
+			if (!OriginalCellSet.Contains(CellId))
+			{
+				AllCellsInSupercell.Add(CellId);
+
+				// 인접 supercell의 DestroyedCellCount 업데이트
+				if (bEnableSupercell && SupercellState.IsValid())
+				{
+					const int32 NeighborSCId = SupercellState.GetSupercellForCell(CellId);
+					if (NeighborSCId != INDEX_NONE && NeighborSCId != SuperCellId &&
+						SupercellState.DestroyedCellCounts.IsValidIndex(NeighborSCId))
+					{
+						SupercellState.DestroyedCellCounts[NeighborSCId]++;
+					}
+				}
+			}
+		}
+	}
 	CellState.DestroyCells(AllCellsInSupercell);
 
-	// hit count 리셋 
+	// hit count 리셋
 	SupercellState.MarkSupercellBroken(SuperCellId);
 
 	if (SupercellState.DestroyedCellCounts.IsValidIndex(SuperCellId))
 	{
-		SupercellState.DestroyedCellCounts[SuperCellId] = 0; 
+		SupercellState.DestroyedCellCounts[SuperCellId] = 0;
 		SupercellState.InitialValidCellCounts[SuperCellId] = 0;
 	}
 
@@ -1448,16 +1490,19 @@ void URealtimeDestructibleMeshComponent::UpdateDirtyCollisionChunks()
 	}
 }
 
-bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor)
+bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const TArray<int32>& DetachedCellIds, ADebrisActor* TargetDebrisActor, TArray<int32>* OutToolMeshOverlappingCellIds)
 {
 		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_RemoveTrianglesForDetachedCells);
 	using namespace UE::Geometry;
 
-	if (DetachedCellIds.Num() == 0 || ChunkMeshComponents.Num() == 0)
+	if (DetachedCellIds.Num() == 0)
 	{
 		return false;
 	}
-
+	if (ChunkMeshComponents.Num() == 0 && !OutToolMeshOverlappingCellIds)
+	{
+		return false;
+	}
 	UE_LOG(LogTemp, Warning, TEXT("=== RemoveTrianglesForDetachedCells START (TargetDebrisActor=%p) ==="), TargetDebrisActor);
 	UE_LOG(LogTemp, Warning, TEXT("DetachedCellIds.Num()=%d, ChunkMeshComponents.Num()=%d"),
 		DetachedCellIds.Num(), ChunkMeshComponents.Num());
@@ -1472,17 +1517,10 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 	TSet<FIntVector> BaseCells;
 	for (int32 CellId : DetachedCellIds)
 	{
-		const FVector LocalMin = GridCellLayout.IdToLocalMin(CellId);
-		const FVector Origin = GridCellLayout.GridOrigin;
-
-		FIntVector GridPos(
-			FMath::FloorToInt((LocalMin.X - Origin.X)/ CellSizeVec.X),
-			FMath::FloorToInt((LocalMin.Y - Origin.Y)/ CellSizeVec.Y),
-			FMath::FloorToInt((LocalMin.Z - Origin.Z) / CellSizeVec.Z)
-		);
+		FIntVector GridPos = GridCellLayout.IdToCoord(CellId);   
 		BaseCells.Add(GridPos);
 	}
-
+	
 
 	TArray<TArray<FIntVector>> FinalPieces;
 
@@ -1584,7 +1622,6 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 
 
 	// 3. 각 조각별로 ToolMesh 생성 + Enqueue
-	const double BoxExpand = 1.0f;
 	UE_LOG(LogTemp, Warning, TEXT("Final Piceses : %d"), FinalPieces.Num());
 
 	// 이진탐색용 비교 함수
@@ -1609,95 +1646,19 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		// Piece를 정렬 (이진탐색용)
 		Piece.Sort(VoxelLess);
 
-		// 정렬된 배열에서 Contains 대체
-		auto PieceContains = [&](const FIntVector& Value) -> bool
-			{
-				const FIntVector* Start = Piece.GetData();
-				const FIntVector* End = Start + Piece.Num();
-				const FIntVector* It = std::lower_bound(Start, End, Value, VoxelLess);
-				return It != End && *It == Value;
-			}; 
-
-		// Greedy Mesh 생성 (정렬된 TArray를 직접 전달)
-		FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(Piece, GridCellLayout.GridOrigin, CellSizeVec, BoxExpand);
+		// ToolMesh 빌드 (GreedyMesh + FillHoles + Smoothing)
+		FDynamicMesh3 ToolMesh = BuildSmoothedToolMesh(Piece);
 
 		if (ToolMesh.TriangleCount() == 0)
 		{
 			continue;
 		}
 
-		// FillHoles 
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_FillHoles);
-
-			FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
-			for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
-			{
-				FSimpleHoleFiller Filler(&ToolMesh, Loop);
-				if (Filler.Fill())
-				{
-					// normal값 재생성해야될 수도 있음 
-					/*
-					if (Filler.NewTriangles.Num() > 0)
-					{
-						int32 NewTriId = Filler.NewTriangles[0];
-						FIndex3i NewTri = ToolMesh.GetTriangle(NewTriId);
-						bool bNeedFlip = false;
-
-						for (int32 i = 0; i < 3 && !bNeedFlip; ++i)
-						{
-							int32 Va = NewTri[i];
-							int32 Vb = NewTri[(i + 1) % 3];
-							int32 EdgeId = ToolMesh.FindEdge(Va, Vb);
-							if (EdgeId != FDynamicMesh3::InvalidID)
-							{
-								FIndex2i EdgeTris = ToolMesh.GetEdgeT(EdgeId);
-								int32 OtherTriId = (EdgeTris.A == NewTriId) ? EdgeTris.B : EdgeTris.A;
-								if (OtherTriId != FDynamicMesh3::InvalidID &&
-									!Filler.NewTriangles.Contains(OtherTriId))
-								{
-									FIndex3i OtherTri = ToolMesh.GetTriangle(OtherTriId);
-									for (int32 j = 0; j < 3; ++j)
-									{
-										if (OtherTri[j] == Va && OtherTri[(j + 1) % 3] == Vb)
-										{
-											bNeedFlip = true;
-											break;
-										}
-										else if (OtherTri[j] == Vb && OtherTri[(j + 1) % 3] == Va)
-										{
-											break;
-										}
-									}
-									break;
-								}
-							}
-						}
-
-						if (bNeedFlip)
-						{
-							for (int32 TriId : Filler.NewTriangles)
-							{
-								ToolMesh.ReverseTriOrientation(TriId);
-							}
-						}
-					}
-				}
-						*/
-				}
-			}
-		}
-
-		// Smoothing 
-		{
-			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth); 
-			ApplyHCLaplacianSmoothing(ToolMesh);
-		}
-
 		FDynamicMesh3 DebrisToolMesh;
 		DebrisToolMesh.EnableAttributes();
 		DebrisToolMesh.EnableTriangleGroups();
 		DebrisToolMesh = ToolMesh;
+
 
 		// Subtract용만 Scaling 
 		{
@@ -1722,6 +1683,19 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 				DebrisToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * DebrisScaleRatio);
 			}
 		}
+
+		// ToolMesh(smoothed + DebrisExpandRatio) 삼각형과 겹치는 grid cell 수집
+		if (OutToolMeshOverlappingCellIds)
+		{
+			CollectCellsOverlappingMesh(ToolMesh, *OutToolMeshOverlappingCellIds);
+		}
+
+		// Smoothing 
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
+			ApplyHCLaplacianSmoothing(DebrisToolMesh);
+		}
+
 		ToolMesh.ReverseOrientation();
 		DebrisToolMesh.ReverseOrientation();
 
@@ -1753,6 +1727,7 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 		TSharedPtr<FDynamicMesh3> SharedDebrisToolMesh = MakeShared<FDynamicMesh3>(MoveTemp(DebrisToolMesh));
 
 		FAxisAlignedBox3d ToolBounds = SharedToolMesh->GetBounds();
+		 
 		TArray<int32> OverlappingChunks;
 
 		for (int32 i = 0; i < GetChunkNum(); i++)
@@ -1822,6 +1797,154 @@ bool URealtimeDestructibleMeshComponent::RemoveTrianglesForDetachedCells(const T
 
 	
 }
+FDynamicMesh3 URealtimeDestructibleMeshComponent::BuildSmoothedToolMesh(TArray<FIntVector>& SortedPiece)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_BuildSmoothedToolMesh);
+	using namespace UE::Geometry;
+
+	const FVector CellSizeVec = GridCellLayout.CellSize;
+	const double BoxExpand = 1.0f;
+
+	FDynamicMesh3 ToolMesh = GenerateGreedyMeshFromVoxels(SortedPiece, GridCellLayout.GridOrigin, CellSizeVec, BoxExpand);
+
+	if (ToolMesh.TriangleCount() == 0)
+	{
+		return ToolMesh;
+	}
+
+	// FillHoles
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_FillHoles);
+		FMeshBoundaryLoops BoundaryLoops(&ToolMesh);
+		for (const FEdgeLoop& Loop : BoundaryLoops.Loops)
+		{
+			FSimpleHoleFiller Filler(&ToolMesh, Loop);
+			Filler.Fill();
+		}
+	}
+
+	// HC Laplacian Smoothing
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(Debris_Smooth);
+		ApplyHCLaplacianSmoothing(ToolMesh);
+	}
+
+	return ToolMesh;
+}
+
+void URealtimeDestructibleMeshComponent::CollectCellsOverlappingMesh(const FDynamicMesh3& Mesh, TArray<int32>& OutCellIds)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_CollectCellsOverlappingMesh);
+	using namespace UE::Geometry;
+
+	const FVector& Origin = GridCellLayout.GridOrigin;
+	const FVector& CS = GridCellLayout.CellSize;
+	const FVector InvCS(1.0 / CS.X, 1.0 / CS.Y, 1.0 / CS.Z);
+
+	for (int32 TriId : Mesh.TriangleIndicesItr())
+	{
+		FIndex3i Tri = Mesh.GetTriangle(TriId);
+		FVector3d V0 = Mesh.GetVertex(Tri.A);
+		FVector3d V1 = Mesh.GetVertex(Tri.B);
+		FVector3d V2 = Mesh.GetVertex(Tri.C);
+
+		// 삼각형 AABB
+		FVector3d TriMin = FVector3d::Min(FVector3d::Min(V0, V1), V2);
+		FVector3d TriMax = FVector3d::Max(FVector3d::Max(V0, V1), V2);
+
+		// grid 좌표 범위로 변환
+		const int32 CMinX = FMath::Max(0, FMath::FloorToInt32((TriMin.X - Origin.X) * InvCS.X));
+		const int32 CMinY = FMath::Max(0, FMath::FloorToInt32((TriMin.Y - Origin.Y) * InvCS.Y));
+		const int32 CMinZ = FMath::Max(0, FMath::FloorToInt32((TriMin.Z - Origin.Z) * InvCS.Z));
+		const int32 CMaxX = FMath::Min(GridCellLayout.GridSize.X - 1, FMath::FloorToInt32((TriMax.X - Origin.X) * InvCS.X));
+		const int32 CMaxY = FMath::Min(GridCellLayout.GridSize.Y - 1, FMath::FloorToInt32((TriMax.Y - Origin.Y) * InvCS.Y));
+		const int32 CMaxZ = FMath::Min(GridCellLayout.GridSize.Z - 1, FMath::FloorToInt32((TriMax.Z - Origin.Z) * InvCS.Z));
+
+		for (int32 Z = CMinZ; Z <= CMaxZ; ++Z)
+		{
+			for (int32 Y = CMinY; Y <= CMaxY; ++Y)
+			{
+				for (int32 X = CMinX; X <= CMaxX; ++X)
+				{
+					const int32 CellId = GridCellLayout.CoordToId(X, Y, Z);
+					if (GridCellLayout.GetCellExists(CellId) &&
+						!CellState.DestroyedCells.Contains(CellId))
+					{
+						FVector CellMin(Origin.X + X * CS.X, Origin.Y + Y * CS.Y, Origin.Z + Z * CS.Z);
+						FVector CellMax = CellMin + FVector(CS);
+
+						if (FGridCellBuilder::TriangleIntersectsAABB(
+							FVector(V0), FVector(V1), FVector(V2), CellMin, CellMax))
+						{
+							OutCellIds.AddUnique(CellId);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+void URealtimeDestructibleMeshComponent::CollectToolMeshOverlappingCells(const TArray<int32>& CellIds, TArray<int32>& OutOverlappingCellIds)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_CollectToolMeshOverlappingCells);
+	using namespace UE::Geometry;
+
+	if (CellIds.Num() == 0)
+	{
+		return;
+	}
+
+	// CellIds → 정렬된 voxel 좌표
+	TSet<FIntVector> BaseCells;
+	for (int32 CellId : CellIds)
+	{
+		BaseCells.Add(GridCellLayout.IdToCoord(CellId));
+	}
+	TArray<FIntVector> Piece = BaseCells.Array();
+	if (Piece.Num() == 0)
+	{
+		return;
+	}
+	auto VoxelLess = [](const FIntVector& A, const FIntVector& B)
+		{
+			if (A.Z != B.Z) return A.Z < B.Z;
+			if (A.Y != B.Y) return A.Y < B.Y;
+			return A.X < B.X;
+		};
+	Piece.Sort(VoxelLess);
+
+	// ToolMesh 빌드 (GreedyMesh + FillHoles + Smoothing)
+	FDynamicMesh3 ToolMesh = BuildSmoothedToolMesh(Piece);
+	if (ToolMesh.TriangleCount() == 0)
+	{
+		return;
+	}
+
+	// DebrisExpandRatio 스케일링
+	{
+		FVector3d Centroid = FVector3d::Zero();
+		int32 VertexCount = 0;
+		for (int32 Vid : ToolMesh.VertexIndicesItr())
+		{
+			Centroid += ToolMesh.GetVertex(Vid);
+			VertexCount++;
+		}
+		if (VertexCount > 0)
+		{
+			Centroid /= (double)VertexCount;
+		}
+		for (int32 Vid : ToolMesh.VertexIndicesItr())
+		{
+			FVector3d Pos = ToolMesh.GetVertex(Vid);
+			ToolMesh.SetVertex(Vid, Centroid + (Pos - Centroid) * DebrisExpandRatio);
+		}
+	}
+
+	// SAT 교차 검사로 cell 수집
+	CollectCellsOverlappingMesh(ToolMesh, OutOverlappingCellIds);
+}
+
 FDynamicMesh3 URealtimeDestructibleMeshComponent::GenerateGreedyMeshFromVoxels(const TArray<FIntVector>& InVoxels, FVector InCellOrigin, FVector InCellSize, double InBoxExpand)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(Debris_GenerateGreedyMeshFromVoxels);
@@ -2360,6 +2483,7 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActor(FDynamicMesh3&& Source
 		}
 	}
 	FVector BoxExtent = DebrisBounds.GetExtent(); 
+	//BoxExtent *= GetComponentTransform().GetScale3D();
 	BoxExtent = BoxExtent.ComponentMax(FVector(1.0f, 1.0f, 1.0f));
 
 	const bool bShouldSync = BoxExtent.GetMax() >= MinDebrisSyncSize; 
@@ -2566,14 +2690,18 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActorForDedicatedServer(cons
 	TSet<FIntVector> BaseCells;
 	for (int32 CellId : DetachedCellIds)
 	{
-		const FVector LocalMin = GridCellLayout.IdToLocalMin(CellId);
-		const FVector Origin = GridCellLayout.GridOrigin;
+		//const FVector LocalMin = GridCellLayout.IdToLocalMin(CellId);
+		//const FVector Origin = GridCellLayout.GridOrigin;
+		//
+		//FIntVector GridPos(
+		//	FMath::FloorToInt((LocalMin.X - Origin.X) / CellSizeVec.X),
+		//	FMath::FloorToInt((LocalMin.Y - Origin.Y) / CellSizeVec.Y),
+		//	FMath::FloorToInt((LocalMin.Z - Origin.Z) / CellSizeVec.Z)
+		//);
+		//BaseCells.Add(GridPos);
+		//
 
-		FIntVector GridPos(
-			FMath::FloorToInt((LocalMin.X - Origin.X) / CellSizeVec.X),
-			FMath::FloorToInt((LocalMin.Y - Origin.Y) / CellSizeVec.Y),
-			FMath::FloorToInt((LocalMin.Z - Origin.Z) / CellSizeVec.Z)
-		);
+		FIntVector GridPos = GridCellLayout.IdToCoord(CellId);
 		BaseCells.Add(GridPos);
 	}
 
@@ -2709,7 +2837,10 @@ void URealtimeDestructibleMeshComponent::SpawnDebrisActorForDedicatedServer(cons
 		FVector LocalCenter = CellBounds.GetCenter();
 		FVector SpawnLocation = ComponentTransform.TransformPosition(LocalCenter);
 		FVector BoxExtent = CellBounds.GetExtent();
+		BoxExtent *= DebrisScaleRatio;
+		//BoxExtent *= ComponentTransform.GetScale3D();
 		BoxExtent = BoxExtent.ComponentMax(FVector(1.0f, 1.0f, 1.0f));
+		//BoxExtent = BoxExtent.ComponentMax(FVector(1.0f, 1.0f, 1.0f));
 
 		// 동기화 여부 판정 (작은 조각은 스킵)
 		if (BoxExtent.GetMax() < MinDebrisSyncSize)
@@ -2983,7 +3114,7 @@ void URealtimeDestructibleMeshComponent::CleanupSmallFragments()
 }
 
 void URealtimeDestructibleMeshComponent::CleanupSmallFragments(const TSet<int32>& InDisconnectedCells)
-{ 
+{
 	// 데디케이티드 서버에서는 파편 처리 스킵 (물리 NaN 오류 방지)
 	if (IsRunningDedicatedServer())
 	{
@@ -3515,8 +3646,8 @@ void URealtimeDestructibleMeshComponent::MulticastDetachSignal_Implementation()
 		// 분리된 셀의 삼각형 삭제 (시각적 처리)
 		if (!bIsDedicatedServerClient)
 		{
-		RemoveTrianglesForDetachedCells(Group);		
-	}
+			RemoveTrianglesForDetachedCells(Group);
+		}
 	}
 
 	// 분리된 셀들을 파괴됨 상태로 이동
@@ -3600,8 +3731,8 @@ void URealtimeDestructibleMeshComponent::ApplyOpsDeterministic(const TArray<FRea
 		else
 		{
 			// 큐잉 조건 불충족 시 기존처럼 호출 (BatchId 없이)
-		EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal);
-	}
+			EnqueueRequestLocal(ModifiableRequest, Op.bIsPenetration, TempDecal);
+		}
 	}
 
 	// === 배치 트래커 등록 ===
@@ -4168,7 +4299,7 @@ void URealtimeDestructibleMeshComponent::ApplyBooleanOperationResult(FDynamicMes
 	// 수정된 청크 추적
 	ModifiedChunkIds.Add(ChunkIndex);
 #if !UE_BUILD_SHIPPING
-	// 디버그 텍스트 갱신 플래그는 기본적으로 구조적 무결성 갱신 후 업데이트되지만, 청크 없는 경우 여기에서 대신 갱신 
+	// 디버그 텍스트 갱신 플래그는 기본적으로 구조적 무결성 갱신 후 업데이트되지만, 청크 없는 경우 여기에서 대신 갱신
 		bShouldDebugUpdate = true;
 #endif
 	if (bDelayedCollisionUpdate)
@@ -4513,6 +4644,49 @@ void URealtimeDestructibleMeshComponent::DrawSupercellDebug()
 	}
 }
 
+void URealtimeDestructibleMeshComponent::DrawSubCellDebug()
+{
+#if !UE_BUILD_SHIPPING
+	if (!GridCellLayout.IsValid() && !bEnableSubcell)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	} 
+
+	const FTransform& ComponentTransform = GetComponentTransform();
+	const FVector SubCellSize = GridCellLayout.GetSubCellSize(); 
+	const FVector HalfExtent = SubCellSize * 0.5f * ComponentTransform.GetScale3D();
+	 
+
+	for (int32 CellId : GridCellLayout.GetValidCellIds())
+	{
+		for (int32 SubCellId = 0; SubCellId < SUBCELL_COUNT; ++SubCellId)
+		{
+			const bool bAlive = CellState.IsSubCellAlive(CellId, SubCellId);
+			const FColor SubCellColor = bAlive ? FColor::Green : FColor::Red;
+
+			const FVector LocalCenter = GridCellLayout.GetSubCellLocalCenter(CellId, SubCellId);
+			const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);
+
+
+			DrawDebugBox(World, WorldCenter, HalfExtent,
+				ComponentTransform.GetRotation(),
+				SubCellColor,
+				false, 0.0f, SDPG_World, 1.0f);
+		}
+		  
+	}
+
+	static bool bFirstDraw = true;
+#endif
+
+}
+
 void URealtimeDestructibleMeshComponent::DrawServerCollisionDebug()
 {
 	if (!bServerCellCollisionInitialized)
@@ -4752,12 +4926,17 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 		BuildChunksFromGC(CachedGeometryCollection);
 		return; 
 	}
+
+	if (!bAutoSetUpDone && !SourceStaticMesh && ChunkMeshComponents.Num() == 0)
+	{
+		TryAutoSetupFromParentStaticMesh();
+	}
 #endif
 
-	if (ChunkMeshComponents.Num() > 0)
-	{
-		return;  // Cell 모드에서 이미 셀이 있으면 스킵
-	}
+	// if (ChunkMeshComponents.Num() > 0)
+	// {
+	// 	return;  // Cell 모드에서 이미 셀이 있으면 스킵
+	// }
 
 	if (SourceStaticMesh && !bIsInitialized)
 	{
@@ -4868,7 +5047,7 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 	ChunkSubtractBusyBits.Init(0ULL, NumBits);
 
 	// 런타임 시작 시 GridCellLayout가 유효하지 않으면 구축
-	if (SourceStaticMesh && !GridCellLayout.IsValid())
+	if ( ( SourceStaticMesh && !GridCellLayout.IsValid()) || CachedRDMScale != GetComponentTransform().GetScale3D())
 	{
 		BuildGridCells();
 	}
@@ -4995,6 +5174,12 @@ void URealtimeDestructibleMeshComponent::TickComponent(float DeltaTime, ELevelTi
 	if (bShowSupercellDebug)
 	{
 		DrawSupercellDebug();
+	}
+
+	// Draw SubCell Debug
+	if (bShowSubCellDebug)
+	{
+		DrawSubCellDebug();
 	}
 
 	// 서버/클라이언트 Cell Box Collision: 지연 초기화 (BeginPlay에서 GridCellLayout이 유효하지 않았던 경우)
@@ -5945,12 +6130,20 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 	}
 
 	// 2. 컴포넌트 스케일 가져오기
-	const FVector WorldScale = GetComponentScale();
+	//const FVector WorldScale = GetComponentScale();
+	const FVector WorldScale = GetComponentTransform().GetScale3D();
 
 	// 3. GridCellBuilder를 사용하여 캐시 생성
 	// - GridCellSize: 월드 좌표계 기준 (사용자 설정값)
 	// - WorldScale: 컴포넌트 스케일 (빌더 내부에서 로컬 변환에 사용)
 	// - FloorHeightThreshold: 앵커 판정용 (빌더 내부가 로컬 스페이스이므로 변환 필요)
+
+	// 앵커 에디터에서 설정한 앵커 데이터 백업 (Reset 전에 저장)
+	const FIntVector SavedGridSize = GridCellLayout.GridSize;
+	const TArray<uint32> SavedAnchorBits = GridCellLayout.CellIsAnchorBits;
+	const bool bHadSavedAnchors = SavedAnchorBits.Num() > 0
+		&& SavedGridSize.X > 0 && SavedGridSize.Y > 0 && SavedGridSize.Z > 0;
+
 	GridCellLayout.Reset();
 	CellState.Reset();
 
@@ -5961,7 +6154,8 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		WorldScale,           // MeshScale (새 파라미터)
 		GridCellSize,         // 월드 스페이스 셀 크기 (빌더가 내부에서 로컬로 변환)
 		LocalFloorThreshold,  // 앵커 높이 (빌더 내부가 로컬 스페이스이므로 변환 필요)
-		GridCellLayout
+		GridCellLayout,
+		&CellState.SubCellStates
 	);
 
 	if (!bSuccess)
@@ -5970,9 +6164,21 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		return false;
 	}
 
+	// 앵커 에디터에서 설정한 앵커 데이터 복원
+	// 그리드 크기가 동일하고 비트필드 크기가 일치하면 에디터에서 설정한 앵커를 복원
+	if (bHadSavedAnchors
+		&& GridCellLayout.GridSize == SavedGridSize
+		&& SavedAnchorBits.Num() == GridCellLayout.CellIsAnchorBits.Num())
+	{
+		GridCellLayout.CellIsAnchorBits = SavedAnchorBits;
+		UE_LOG(LogTemp, Log, TEXT("BuildGridCells: Restored saved anchor data from Anchor Editor (Anchors: %d)"),
+			GridCellLayout.GetAnchorCount());
+	}
+
 	// 4. 캐시된 정보 저장
 	// CachedMeshBounds = SourceStaticMesh->GetBoundingBox();
 	CachedCellSize = GridCellLayout.CellSize;  // 빌더가 저장한 로컬 스페이스 셀 크기
+	CachedRDMScale = GetComponentTransform().GetScale3D();
 
 	UE_LOG(LogTemp, Log, TEXT("BuildGridCells: WorldCellSize=(%.1f, %.1f, %.1f), Scale=(%.2f, %.2f, %.2f), LocalCellSize=(%.2f, %.2f, %.2f), Grid %dx%dx%d, Valid cells: %d, Anchors: %d"),
 		GridCellSize.X, GridCellSize.Y, GridCellSize.Z,
@@ -6169,6 +6375,69 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 		}
 	}
 }
+
+void URealtimeDestructibleMeshComponent::TryAutoSetupFromParentStaticMesh()
+{
+	if (!(GIsEditor && GetWorld() && !GetWorld()->IsGameWorld()))
+	{
+		return;
+	}
+	
+	if (SourceStaticMesh)
+	{
+		return;
+	}
+
+	if (HasAnyFlags(RF_ClassDefaultObject) || IsTemplate() || IsRunningCommandlet())
+	{
+		return;
+	}
+
+	UStaticMeshComponent* ParentStaticMeshComp = Cast<UStaticMeshComponent>(GetAttachParent());
+	if (!ParentStaticMeshComp || !ParentStaticMeshComp->GetStaticMesh())
+	{
+		return;
+	}
+	SetRelativeTransform(FTransform::Identity);
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("RDM", "Auto Setup", "Setup From ParentSMC"));
+	Owner->Modify();
+	Modify();
+	ParentStaticMeshComp->Modify();
+
+	SourceStaticMesh = ParentStaticMeshComp->GetStaticMesh();
+	
+	const FVector LocalSize = SourceStaticMesh->GetBoundingBox().GetSize();
+	const FVector ParentSizeAbs = ParentStaticMeshComp->GetComponentTransform().GetScale3D().GetAbs();
+	const FVector ScaledSize = LocalSize * ParentSizeAbs;
+	
+	ParentStaticMeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ParentStaticMeshComp->SetGenerateOverlapEvents(false);
+	ParentStaticMeshComp->SetStaticMesh(nullptr);
+	ParentStaticMeshComp->MarkRenderStateDirty();
+
+	if (ChunkMeshComponents.Num() <= 0)
+	{
+		int32 SliceX = FMath::Clamp(FMath::FloorToInt(ScaledSize.X / 300), 2, 10);
+		int32 SliceY = FMath::Clamp(FMath::FloorToInt(ScaledSize.Y / 300), 2, 10);
+		int32 SliceZ = FMath::Clamp(FMath::FloorToInt(ScaledSize.Z / 300), 2, 10);
+		SliceCount = FIntVector(SliceX, SliceY, SliceZ);
+		UE_LOG(LogTemp, Display, TEXT("AutoSetup %s"), *SliceCount.ToString());
+		GenerateDestructibleChunks();
+	}
+
+	Owner->MarkPackageDirty();
+	MarkPackageDirty();
+
+	bAutoSetUpDone = true;
+}
+
 #endif // WITH_EDITOR
 
 int32 URealtimeDestructibleMeshComponent::GetMaterialIDFromFaceIndex(int32 FaceIndex)
@@ -6243,6 +6512,7 @@ AActor* URealtimeDestructibleMeshComponent::CreateLocalOnlyDebrisActor(UWorld* W
 	CollisionBox->SetCollisionObjectType(ECC_PhysicsBody);
 	CollisionBox->SetCollisionResponseToAllChannels(ECR_Block);
 	CollisionBox->SetHiddenInGame(true);
+	CollisionBox->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 	LocalActor->SetRootComponent(CollisionBox);
 	CollisionBox->RegisterComponent();
 
@@ -6283,7 +6553,7 @@ void URealtimeDestructibleMeshComponent::ApplyDebrisPhysics(UBoxComponent* Colli
 	float FinalMassKg = FMath::Clamp(CalcMassKg, 0.001, MaxDebrisMass); 
 	float MassRatio = 1.0f - (FinalMassKg / MaxDebrisMass);
 	MassRatio = std::max(MassRatio, 0.1f);
-
+	
 	// 물리 설정
 	CollisionBox->SetEnableGravity(true);
 	CollisionBox->SetMassOverrideInKg(NAME_None, FinalMassKg, true);
@@ -6327,7 +6597,7 @@ void URealtimeDestructibleMeshComponent::GenerateDestructibleChunks()
 		if (GUnrealEd)
 		{
 			GUnrealEd->UpdateFloatingPropertyWindows();
-	}
+		}
 	}
 }
 
@@ -6516,7 +6786,7 @@ void URealtimeDestructibleMeshComponent::RevertChunksToSourceMesh()
 		if (GUnrealEd)
 		{
 			GUnrealEd->UpdateFloatingPropertyWindows();
-	}
+		}
 	}
 }
 #endif
@@ -6549,8 +6819,16 @@ FRealtimeDestructibleMeshComponentInstanceData::FRealtimeDestructibleMeshCompone
 			}
 		}
 
-		UE_LOG(LogTemp, Warning, TEXT("InstanceData Constructor: bCellMeshesValid=%d, CellMeshComponents.Num=%d, SavedNames.Num=%d"),
-			bSavedChunkMeshesValid, SourceComponent->ChunkMeshComponents.Num(), SavedChunkComponentNames.Num());
+		// GridCellLayout 보존 (Blueprint 재구성 시 앵커 데이터 유실 방지)
+		SavedGridCellLayout = SourceComponent->GridCellLayout;
+
+		// CachedRDMScale 보존 (Blueprint 재구성 후 BeginPlay에서 불필요한 BuildGridCells 방지)
+		SavedCachedRDMScale = SourceComponent->CachedRDMScale;
+
+		UE_LOG(LogTemp, Warning, TEXT("InstanceData Constructor: bCellMeshesValid=%d, CellMeshComponents.Num=%d, SavedNames.Num=%d, GridValid=%d, Anchors=%d, CachedScale=(%.2f,%.2f,%.2f)"),
+			bSavedChunkMeshesValid, SourceComponent->ChunkMeshComponents.Num(), SavedChunkComponentNames.Num(),
+			SavedGridCellLayout.IsValid() ? 1 : 0, SavedGridCellLayout.GetAnchorCount(),
+			SavedCachedRDMScale.X, SavedCachedRDMScale.Y, SavedCachedRDMScale.Z);
 	}
 }
 
@@ -6572,6 +6850,18 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 
 		// Cell 모드 상태 복원
 		DestructComp->bChunkMeshesValid = bSavedChunkMeshesValid;
+		DestructComp->bIsInitialized = bSavedIsInitialized;
+
+		// GridCellLayout 복원 (Blueprint 재구성 시 앵커 데이터 유실 방지)
+		if (SavedGridCellLayout.IsValid())
+		{
+			DestructComp->GridCellLayout = SavedGridCellLayout;
+			UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: Restored GridCellLayout from InstanceData (ValidCells=%d, Anchors=%d)"),
+				DestructComp->GridCellLayout.GetValidCellCount(), DestructComp->GridCellLayout.GetAnchorCount());
+		}
+
+		// CachedRDMScale 복원 (BeginPlay에서 스케일 불일치로 인한 불필요한 BuildGridCells 호출 방지)
+		DestructComp->CachedRDMScale = SavedCachedRDMScale;
 
 		// PIE에서는 포인터가 유효하지 않으므로 이름으로 복제된 컴포넌트를 찾음
 		if (AActor* Owner = DestructComp->GetOwner())
