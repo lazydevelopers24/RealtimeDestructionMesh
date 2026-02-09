@@ -38,7 +38,7 @@ int32 FRDMCVarHelper::EnableSimplify()
 #if !UE_BUILD_SHIPPING
 	return CVarSimplifyEnable.GetValueOnAnyThread() != 0;
 #else
-	return 1
+	return 1;
 #endif
 }
 
@@ -47,7 +47,7 @@ int32 FRDMCVarHelper::GetSimplifyMode()
 #if !UE_BUILD_SHIPPING
 	return CVarSimplifyMode.GetValueOnAnyThread();
 #else
-	return 2
+	return 2;
 #endif
 }
 
@@ -56,6 +56,6 @@ int32 FRDMCVarHelper::EnableAsyncBooleanOp()
 #if !UE_BUILD_SHIPPING
 	return CVarBooleanAsync.GetValueOnAnyThread() != 0;
 #else
-	return 1
+	return 1;
 #endif
 }
