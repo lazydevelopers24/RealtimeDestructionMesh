@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "1.0",
+	"Version": 2,
+	"VersionName": "1.1",
 	"EngineVersion": "5.7.0",
-	"FriendlyName": "Realtime Destruction",
+	"FriendlyName": "Realtime Destructible Mesh",
 	"Description": "Realtime procedural mesh destruction system with network replication support",
 	"Category": "Gameplay",
 	"CreatedBy": "LazyDevelopers",

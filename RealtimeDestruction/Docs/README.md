@@ -7,8 +7,9 @@ RealtimeDestruction delivers production-ready mesh destruction for Unreal Engine
 Ideal for placing destructible cover or obstacles such as pillars, walls, crates, and furniture throughout your levels. This solution is a perfect fit for FPS games, destruction simulators, or any project that demands high-performance, dynamic mesh deformation.
 
 ## User Guide
-Online documentation: https://lazydevelopers24.github.io/RealtimeDestructibleMesh/
-Youtube: https://www.youtube.com/@LazyDevelopers-y5k
+- Online documentation: https://lazydevelopers24.github.io/RealtimeDestructibleMesh/
+- Youtube: https://www.youtube.com/@LazyDevelopers-y5k
+- Changelog: Docs/CHANGELOG.md (included in project)
 
 ## Features
 

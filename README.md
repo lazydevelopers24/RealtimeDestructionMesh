@@ -3,15 +3,15 @@
 This is a summary of Docs/README.md for display on the GitHub repository page. For more detailed and up-to-date documentation, please refer to the Docs folder.
 
 ---
-<img width="1280" height="720" alt="image" src="https://github.com/user-attachments/assets/8788b507-1b90-469c-a986-98c5aef77817" />
 
 ## Overview
 RealtimeDestruction delivers production-ready mesh destruction for Unreal Engine. Shoot and blast through meshes in real-time using optimized boolean operations running on background threads. Key features include adaptive batch processing, structural integrity with grid cell approximation, automatic mesh simplification, and full multiplayer replication.
 Ideal for placing destructible cover or obstacles such as pillars, walls, crates, and furniture throughout your levels. This solution is a perfect fit for FPS games, destruction simulators, or any project that demands high-performance, dynamic mesh deformation.
 
 ## User Guide
-Online documentation: https://lazydevelopers24.github.io/RealtimeDestructibleMesh/
-Youtube: https://www.youtube.com/@LazyDevelopers-y5k
+- Online documentation: https://lazydevelopers24.github.io/RealtimeDestructibleMesh/
+- Youtube: https://www.youtube.com/@LazyDevelopers-y5k
+- Changelog: Docs/CHANGELOG.md (included in project)
 
 ## Features
 
