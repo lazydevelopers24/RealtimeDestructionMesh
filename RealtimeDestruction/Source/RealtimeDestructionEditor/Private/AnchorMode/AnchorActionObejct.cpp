@@ -18,11 +18,18 @@
 #include "Actors/AnchorVolumeActor.h"
 #include "Subsystems/EditorActorSubsystem.h"
 
-
 class AAnchorVolumeActor;
+
+void UAnchorActionObejct::BeginDestroy()
+{
+	UnBindEditorDelgates();
+	Super::BeginDestroy();
+}
 
 void UAnchorActionObejct::SpawnAnchorPlane()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!GEditor || !GEditor->GetActiveViewport())
 	{
 		return;
@@ -31,7 +38,7 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 	FEditorViewportClient* ViewportClient = (FEditorViewportClient*)GEditor->GetActiveViewport()->GetClient();
 	FVector SpawnLocation = ViewportClient->GetViewLocation() + (ViewportClient->GetViewRotation().Vector() * 300.0f);
 	FRotator SpawnRotation = FRotator::ZeroRotator;
-
+	
 	if (IsValid(TargetComp))
 	{
 		const FBoxSphereBounds WorldBounds = TargetComp->Bounds;
@@ -42,13 +49,13 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 		
 		const FVector Forward = TargetComp->GetForwardVector();
 		const FVector Right = TargetComp->GetRightVector();
-
+		
 		const FVector ToCamera = (ViewportClient->GetViewLocation() - BoundsCenter).GetSafeNormal();
-			
+
 		const bool bUseForwardAxis = ScaledHalfExtent.X <= ScaledHalfExtent.Y;
 		const FVector Axis = bUseForwardAxis ? Forward : Right;
 		const float HalfExtent = bUseForwardAxis ? ScaledHalfExtent.X : ScaledHalfExtent.Y;
-		
+
 		const float Sign = (FVector::DotProduct(Axis, ToCamera) >= 0.0f) ? 1.0f : -1.0f;
 		
 		constexpr float Distance = 100.0f;
@@ -60,7 +67,7 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	if (World)
-	{
+	{		
 		AAnchorPlaneActor* NewPlane = World->SpawnActor<AAnchorPlaneActor>(SpawnLocation, SpawnRotation);
 		if (NewPlane)
 		{
@@ -76,6 +83,8 @@ void UAnchorActionObejct::SpawnAnchorPlane()
 
 void UAnchorActionObejct::SpawnAnchorVolume()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!GEditor || !GEditor->GetActiveViewport())
 	{
 		return;
@@ -128,6 +137,8 @@ void UAnchorActionObejct::SpawnAnchorVolume()
 
 void UAnchorActionObejct::ApplyAllAnchorPlanes()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!GEditor)
 	{
 		return;
@@ -197,6 +208,8 @@ void UAnchorActionObejct::ApplyAllAnchorPlanes()
 
 void UAnchorActionObejct::ApplyAllAnchorVolumes()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!GEditor)
 	{
 		return;
@@ -266,6 +279,8 @@ void UAnchorActionObejct::ApplyAllAnchorVolumes()
 
 void UAnchorActionObejct::RemoveAllAnchorPlanes()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!GEditor)
 	{
 		return;
@@ -315,6 +330,8 @@ void UAnchorActionObejct::RemoveAllAnchorPlanes()
 
 void UAnchorActionObejct::RemoveAllAnchorVolumes()
 {
+	
+	EnsureEditorDelegatesBound();
 	if (!GEditor)
 	{
 		return;
@@ -364,6 +381,8 @@ void UAnchorActionObejct::RemoveAllAnchorVolumes()
 
 void UAnchorActionObejct::ApplyAnchors()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!TargetComp)
 	{
 		return;
@@ -382,6 +401,8 @@ void UAnchorActionObejct::ApplyAnchors()
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ApplyAnchorsToSelectedComp", "Apply Anchors To Selected"));
 
+	TargetComp->Modify();
+	
 	ValidateAnchorArray();
 
 	FGridCellLayout& GridCellCache = TargetComp->GetGridCellLayout();
@@ -411,6 +432,8 @@ void UAnchorActionObejct::ApplyAnchors()
 
 void UAnchorActionObejct::RemoveAnchors()
 {
+	EnsureEditorDelegatesBound();
+	
 	if (!TargetComp)
 	{
 		return;
@@ -429,6 +452,8 @@ void UAnchorActionObejct::RemoveAnchors()
 
 	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ApplyAnchorsToSelectedComp", "Apply Anchors To Selected"));
 
+	TargetComp->Modify();
+	
 	FGridCellLayout& GridCellCache = TargetComp->GetGridCellLayout();
 	if (!GridCellCache.IsValid())
 	{
@@ -442,13 +467,26 @@ void UAnchorActionObejct::RemoveAnchors()
 
 void UAnchorActionObejct::BuildGridCellsForSelection()
 {
-	if (!GEditor || !IsValid(TargetComp))
+	EnsureEditorDelegatesBound();
+
+	if (!GEditor)
 	{
 		return;
 	}
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!World || TargetComp->GetWorld() != World)
+	if (!World)
+	{
+		return;
+	}
+
+	if (!ResolveTargetComponent(World))
+	{
+		UE_LOG(LogTemp, Display, TEXT("AnchorEdit: TargetComp unresolved (reinistanced?)"));
+		return;
+	}
+
+	if (TargetComp->GetWorld() != World)
 	{
 		return;
 	}
@@ -458,10 +496,53 @@ void UAnchorActionObejct::BuildGridCellsForSelection()
 	TargetComp->Modify();
 
 	FGridCellLayout& Cache = TargetComp->GetGridCellLayout();
-
-	if (!Cache.IsValid() || Cache.GetTotalCellCount() == 0)
+	if (!Cache.IsValid() || !Cache.MeshScale.Equals(TargetComp->GetComponentTransform().GetScale3D(), 1.e-4f) || Cache.GetTotalCellCount() == 0)
 	{
+		UE_LOG(LogTemp, Display, TEXT("BuildCell/BuildGridCellsForSelection %s"), *TargetComp->GetOwner()->GetName());
 		TargetComp->BuildGridCells();
+	}
+
+	UpdateCellCounts();
+
+	GEditor->RedrawLevelEditingViewports(true);
+}
+
+void UAnchorActionObejct::ClearAllCells()
+{
+	EnsureEditorDelegatesBound();
+
+	if (!GEditor)
+	{
+		return;
+	}
+
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World)
+	{
+		return;
+	}
+
+	if (!ResolveTargetComponent(World))
+	{
+		UE_LOG(LogTemp, Display, TEXT("AnchorEdit: TargetComp unresolved (reinistanced?)"));
+		return;
+	}
+
+	if (TargetComp->GetWorld() != World)
+	{
+		return;
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT("Anchor", "ClearAllCells", "Clear Grid Cells (Selected)"));
+
+	TargetComp->Modify();
+	
+	FGridCellLayout& Cache = TargetComp->GetGridCellLayout();
+	FCellState& CellState = TargetComp->GetCellState();
+	if (Cache.IsValid())
+	{
+		Cache.Reset();
+		CellState.Reset();
 	}
 
 	UpdateCellCounts();
@@ -471,6 +552,8 @@ void UAnchorActionObejct::BuildGridCellsForSelection()
 
 void UAnchorActionObejct::UpdateSelectionFromEditor(UWorld* InWorld)
 {
+	EnsureEditorDelegatesBound();
+	
 	TargetComp = nullptr;
 
 	TotalCellCount = 0;
@@ -522,10 +605,14 @@ void UAnchorActionObejct::UpdateSelectionFromEditor(UWorld* InWorld)
 	{
 		// 이름 업데이트
 		SelectedComponentName = TargetComp->GetName();
+		TargetOwner = TargetComp->GetOwner();
+		TargetCompName = TargetComp->GetFName();
 	}
 	else
 	{
 		SelectedComponentName = TEXT("None");
+		TargetOwner.Reset();
+		TargetCompName = NAME_None;
 	}
 
 	UpdateCellCounts();
@@ -560,6 +647,18 @@ void UAnchorActionObejct::ValidateAnchorArray()
 	{
 		return !Ptr.IsValid();
 	});
+
+	if (bAnchorActorsDirty)
+	{
+		if (GEditor)
+		{
+			if (UWorld* World = GEditor->GetEditorWorldContext().World())
+			{
+				CollectionExistingAnchorActors(World);
+			}
+			bAnchorActorsDirty = false;
+		}
+	}
 }
 
 void UAnchorActionObejct::CollectionExistingAnchorActors(UWorld* World)
@@ -580,5 +679,303 @@ void UAnchorActionObejct::CollectionExistingAnchorActors(UWorld* World)
 		}
 	}
 
+	bAnchorActorsDirty = false;
 	UpdateCellCounts();
+}
+
+void UAnchorActionObejct::EnsureEditorDelegatesBound()
+{
+	if (bEditorDelegatesBound)
+	{
+		return;
+	}
+
+	if (!GEditor)
+	{
+		return;
+	}
+
+	if (!OnObjectsReplacedHandle.IsValid())
+	{
+		OnObjectsReplacedHandle = FCoreUObjectDelegates::OnObjectsReplaced.AddLambda(
+			[this](const TMap<UObject*, UObject*>& OldToNew)
+			{
+				if (IsValid(TargetComp))
+				{
+					if (UObject* const* NewObj = OldToNew.Find(TargetComp))
+					{
+						if (URealtimeDestructibleMeshComponent* NewComp = Cast<URealtimeDestructibleMeshComponent>(*NewObj))
+						{
+							TargetComp = NewComp;
+							SelectedComponentName = TargetComp->GetName();
+							TargetCompName = TargetComp->GetFName();
+							UpdateCellCounts();
+							return;
+						}
+					}
+				}
+
+				if (!IsValid(TargetComp) && TargetOwner.IsValid() && !TargetCompName.IsNone())
+				{
+					AActor* Owner = TargetOwner.Get();
+					if (Owner)
+					{
+						TArray<URealtimeDestructibleMeshComponent*> Comps;
+						Owner->GetComponents<URealtimeDestructibleMeshComponent>(Comps);
+						for (auto Comp : Comps)
+						{
+							if (IsValid(Comp) && Comp->GetFName() == TargetCompName)
+							{
+								TargetComp = Cast<URealtimeDestructibleMeshComponent>(Comp);
+								UpdateCellCounts();
+								return;
+							}
+						}
+					}
+				}
+			});
+	}
+
+	if (!OnLevelActorAddedHandle.IsValid())
+	{
+		OnLevelActorAddedHandle = GEditor->OnLevelActorAdded().AddUObject(this, &UAnchorActionObejct::OnLevelActorAdded);
+	}
+
+	if (!OnLevelActorDeletedHandle.IsValid())
+	{
+		OnLevelActorDeletedHandle = GEditor->OnLevelActorDeleted().AddUObject(this, &UAnchorActionObejct::OnLevelActorDeleted);
+	}
+
+	if (USelection* SelectedActors = GEditor->GetSelectedActors())
+	{
+		if (!OnSelectionChangedHandle_Actors.IsValid())
+		{
+			OnSelectionChangedHandle_Actors = SelectedActors->SelectionChangedEvent.AddUObject(this, &UAnchorActionObejct::OnEditorSelectionChanged);
+		}
+
+		if (!OnSelectObjectHandle_Actors.IsValid())
+		{
+			OnSelectObjectHandle_Actors = SelectedActors->SelectObjectEvent.AddUObject(this, &UAnchorActionObejct::OnEditorSelectObject);
+		}
+	}
+
+	if (USelection* SelectedComponents = GEditor->GetSelectedComponents())
+	{
+		if (!OnSelectionChangedHandle_Components.IsValid())
+		{
+			OnSelectionChangedHandle_Components = SelectedComponents->SelectionChangedEvent.AddUObject(this, &UAnchorActionObejct::OnEditorSelectionChanged);
+		}
+
+		if (!OnSelectObjectHandle_Components.IsValid())
+		{
+			OnSelectObjectHandle_Components = SelectedComponents->SelectObjectEvent.AddUObject(
+				this, &UAnchorActionObejct::OnEditorSelectObject);
+		}
+	}
+
+	bEditorDelegatesBound = true;
+}
+
+void UAnchorActionObejct::UnBindEditorDelgates()
+{
+	if (!bEditorDelegatesBound)
+	{
+		return;
+	}
+
+	if (OnObjectsReplacedHandle.IsValid())
+	{
+		FCoreUObjectDelegates::OnObjectsReplaced.Remove(OnObjectsReplacedHandle);
+		OnObjectsReplacedHandle.Reset();
+	}
+
+	if (GEditor)
+	{
+		if (OnLevelActorAddedHandle.IsValid())
+		{
+			GEditor->OnLevelActorAdded().Remove(OnLevelActorAddedHandle);
+			OnLevelActorAddedHandle.Reset();
+		}
+
+		if (OnLevelActorDeletedHandle.IsValid())
+		{
+			GEditor->OnLevelActorDeleted().Remove(OnLevelActorDeletedHandle);
+			OnLevelActorDeletedHandle.Reset();
+		}
+		
+		if (USelection* SelectedActors = GEditor->GetSelectedActors())
+		{
+			if (OnSelectionChangedHandle_Actors.IsValid())
+			{
+				SelectedActors->SelectionChangedEvent.Remove(OnSelectionChangedHandle_Actors);
+				OnSelectionChangedHandle_Actors.Reset();
+			}
+			if (OnSelectObjectHandle_Actors.IsValid())
+			{
+				SelectedActors->SelectObjectEvent.Remove(OnSelectObjectHandle_Actors);
+				OnSelectObjectHandle_Actors.Reset();
+			}
+		}
+	}
+
+	if (USelection* SelectedComponents = GEditor->GetSelectedComponents())
+	{
+		if (OnSelectionChangedHandle_Components.IsValid())
+		{
+			SelectedComponents->SelectionChangedEvent.Remove(OnSelectionChangedHandle_Components);
+			OnSelectionChangedHandle_Components.Reset();
+		}
+		if (OnSelectObjectHandle_Components.IsValid())
+		{
+			SelectedComponents->SelectObjectEvent.Remove(OnSelectObjectHandle_Components);
+			OnSelectObjectHandle_Components.Reset();
+		}
+	}
+	
+	bEditorDelegatesBound = false;
+}
+
+bool UAnchorActionObejct::ResolveTargetComponent(UWorld* World)
+{
+	if (IsValid(TargetComp))
+	{
+		return true;
+	}
+
+	RefreshTargetFromEditorSelection(World);
+	if (IsValid(TargetComp))
+	{
+		return true;
+	}
+
+	AActor* Owner = TargetOwner.Get();
+	if (!Owner || TargetCompName.IsNone())
+	{
+		return false;
+	}
+
+	TArray<URealtimeDestructibleMeshComponent*> Components;
+	Owner->GetComponents<URealtimeDestructibleMeshComponent>(Components);
+	for (auto Comp : Components)
+	{
+		if (IsValid(Comp) && Comp->GetFName() == TargetCompName && Comp->GetWorld() == World && !Comp->IsTemplate())
+		{
+			TargetComp = Comp;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void UAnchorActionObejct::RefreshTargetFromEditorSelection(UWorld* World)
+{
+	if (!GEditor || !World)
+	{
+		return;
+	}
+
+	if (USelection* SelectedComponents = GEditor->GetSelectedComponents())
+	{
+		for (FSelectionIterator It(*SelectedComponents); It; ++It)
+		{
+			if (URealtimeDestructibleMeshComponent* Comp = Cast<URealtimeDestructibleMeshComponent>(*It))
+			{
+				if (IsValid(Comp) && Comp->GetWorld() == World && !Comp->IsTemplate())
+				{
+					TargetComp = Comp;
+					TargetOwner = Comp->GetOwner();
+					TargetCompName = Comp->GetFName();
+					SelectedComponentName = TargetComp->GetName();
+					UpdateCellCounts();
+					return;
+				}
+			}
+		}
+	}
+
+	if (USelection* SelectedActors = GEditor->GetSelectedActors())
+	{
+		for (FSelectionIterator It(*SelectedActors); It; ++It)
+		{
+			AActor* Actor = Cast<AActor>(*It);
+			if (!IsValid(Actor) || Actor->GetWorld() != World)
+			{
+				continue;
+			}
+
+			URealtimeDestructibleMeshComponent* Comp = Actor->FindComponentByClass<
+				URealtimeDestructibleMeshComponent>();
+			if (IsValid(Comp) && !Comp->IsTemplate())
+			{
+				TargetComp = Comp;
+				TargetOwner = Actor;
+				TargetCompName = Comp->GetFName();
+				SelectedComponentName = TargetComp->GetName();
+				UpdateCellCounts();
+				return;
+			}
+		}
+	}
+}
+
+void UAnchorActionObejct::OnEditorSelectionChanged(UObject* NewSeletion)
+{
+	if (!GEditor)
+	{
+		return;
+	}
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	RefreshTargetFromEditorSelection(World);
+}
+
+void UAnchorActionObejct::OnEditorSelectObject(UObject* Object)
+{
+	if (!GEditor)
+	{
+		return;
+	}
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	RefreshTargetFromEditorSelection(World);
+}
+
+void UAnchorActionObejct::OnLevelActorAdded(AActor* InActor)
+{
+	if (!GEditor || !IsValid(InActor))
+	{
+		return;
+	}
+
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World || InActor->GetWorld() != World)
+	{
+		return;
+	}
+
+	AAnchorActor* AnchorActor = Cast<AAnchorActor>(InActor);
+	if (!IsValid(AnchorActor))
+	{
+		return;
+	}
+
+	AnchorActors.AddUnique(TWeakObjectPtr<AAnchorActor>(AnchorActor));
+}
+
+void UAnchorActionObejct::OnLevelActorDeleted(AActor* InActor)
+{
+	if (!IsValid(InActor))
+	{
+		return;
+	}
+
+	AAnchorActor* AnchorActor = Cast<AAnchorActor>(InActor);
+	if (!IsValid(AnchorActor))
+	{
+		return;
+	}
+
+	AnchorActors.RemoveAll([AnchorActor](const TWeakObjectPtr<AAnchorActor>& Ptr)
+	{
+		return Ptr.Get() == AnchorActor;
+	});
 }

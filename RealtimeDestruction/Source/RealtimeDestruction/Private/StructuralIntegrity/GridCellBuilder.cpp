@@ -48,6 +48,7 @@ bool FGridCellBuilder::BuildFromStaticMesh(
 
 	// Store scale (used for collision checks)
 	OutLayout.MeshScale = MeshScale;
+	UE_LOG(LogTemp, Display, TEXT("BuildCell/BuildFromStaticMesh %s"), *OutLayout.MeshScale.ToCompactString());
 
 	// Compute grid dimensions using scaled size (for cell counts)
 	const FVector ScaledSize = LocalBounds.GetSize() * MeshScale;
@@ -582,13 +583,13 @@ void FGridCellBuilder::VoxelizeWithConvex(
 
 
 void FGridCellBuilder::VoxelizeWithTriangles(
-    const UStaticMesh* SourceMesh,
-    FGridCellLayout& OutLayout,
-    TMap<int32, FSubCell>* OutSubCellStates)
+      const UStaticMesh* SourceMesh,
+      FGridCellLayout& OutLayout,
+	  TMap<int32, FSubCell>* OutSubCellStates)
 {
     // Method 0: Try cached triangle data first (works in packaged builds)
     if (OutLayout.HasCachedTriangleData())
-    {
+  {
         UE_LOG(LogTemp, Log, TEXT("VoxelizeWithTriangles: Using CachedTriangleData (Vertices=%d, Triangles=%d)"),
             OutLayout.CachedVertices.Num(), OutLayout.CachedIndices.Num() / 3);
 
@@ -597,11 +598,11 @@ void FGridCellBuilder::VoxelizeWithTriangles(
     }
 
     // Method 1: MeshDescription (original method - most accurate in editor)
-    UStaticMeshDescription* StaticMeshDesc = const_cast<UStaticMesh*>(SourceMesh)->GetStaticMeshDescription(0);
-    const FMeshDescription* MeshDesc = StaticMeshDesc ? &StaticMeshDesc->GetMeshDescription() : nullptr;
+      UStaticMeshDescription* StaticMeshDesc = const_cast<UStaticMesh*>(SourceMesh)->GetStaticMeshDescription(0);
+      const FMeshDescription* MeshDesc = StaticMeshDesc ? &StaticMeshDesc->GetMeshDescription() : nullptr;
 
     if (MeshDesc)
-    {
+      {
         FStaticMeshConstAttributes Attributes(*MeshDesc);
         TVertexAttributesConstRef<FVector3f> VertexPositions = Attributes.GetVertexPositions();
 
@@ -609,7 +610,7 @@ void FGridCellBuilder::VoxelizeWithTriangles(
         const int32 NumTris = MeshDesc->Triangles().Num();
 
         if (NumVerts > 0 && NumTris > 0)
-        {
+          {
             UE_LOG(LogTemp, Log, TEXT("VoxelizeWithTriangles: Using MeshDescription (Vertices=%d, Triangles=%d)"), NumVerts, NumTris);
 
 #if WITH_EDITOR
@@ -627,18 +628,18 @@ void FGridCellBuilder::VoxelizeWithTriangles(
                 CacheVertices[VertIdx] = FVector(VertexPositions[VertID]);
                 VertexIDToIndex.Add(VertID, VertIdx);
                 VertIdx++;
-            }
+          }
 #endif
 
             // Original method: directly iterate triangles from MeshDescription
-            for (const FTriangleID TriID : MeshDesc->Triangles().GetElementIDs())
-            {
+      for (const FTriangleID TriID : MeshDesc->Triangles().GetElementIDs())
+      {
                 TArrayView<const FVertexID> TriVertices = MeshDesc->GetTriangleVertices(TriID);
 
                 // Get vertex positions directly (original method)
-                const FVector V0 = FVector(VertexPositions[TriVertices[0]]);
-                const FVector V1 = FVector(VertexPositions[TriVertices[1]]);
-                const FVector V2 = FVector(VertexPositions[TriVertices[2]]);
+          const FVector V0 = FVector(VertexPositions[TriVertices[0]]);
+          const FVector V1 = FVector(VertexPositions[TriVertices[1]]);
+          const FVector V2 = FVector(VertexPositions[TriVertices[2]]);
 
 #if WITH_EDITOR
                 // Collect indices for caching
@@ -684,83 +685,83 @@ void FGridCellBuilder::VoxelizeTriangle(
     FGridCellLayout& OutLayout,
     TMap<int32, FSubCell>* OutSubCellStates)
 {
-    // Compute triangle AABB
-    FVector TriMin, TriMax;
-    TriMin.X = FMath::Min3(V0.X, V1.X, V2.X);
-    TriMin.Y = FMath::Min3(V0.Y, V1.Y, V2.Y);
-    TriMin.Z = FMath::Min3(V0.Z, V1.Z, V2.Z);
-    TriMax.X = FMath::Max3(V0.X, V1.X, V2.X);
-    TriMax.Y = FMath::Max3(V0.Y, V1.Y, V2.Y);
-    TriMax.Z = FMath::Max3(V0.Z, V1.Z, V2.Z);
+          // Compute triangle AABB
+          FVector TriMin, TriMax;
+          TriMin.X = FMath::Min3(V0.X, V1.X, V2.X);
+          TriMin.Y = FMath::Min3(V0.Y, V1.Y, V2.Y);
+          TriMin.Z = FMath::Min3(V0.Z, V1.Z, V2.Z);
+          TriMax.X = FMath::Max3(V0.X, V1.X, V2.X);
+          TriMax.Y = FMath::Max3(V0.Y, V1.Y, V2.Y);
+          TriMax.Z = FMath::Max3(V0.Z, V1.Z, V2.Z);
 
-    // Compute cell range overlapped by the triangle AABB
-    const int32 MinCellX = FMath::Clamp(
-        FMath::FloorToInt((TriMin.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
-        0, OutLayout.GridSize.X - 1);
-    const int32 MinCellY = FMath::Clamp(
-        FMath::FloorToInt((TriMin.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
-        0, OutLayout.GridSize.Y - 1);
-    const int32 MinCellZ = FMath::Clamp(
-        FMath::FloorToInt((TriMin.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
-        0, OutLayout.GridSize.Z - 1);
+          // Compute cell range overlapped by the triangle AABB
+          const int32 MinCellX = FMath::Clamp(
+              FMath::FloorToInt((TriMin.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
+              0, OutLayout.GridSize.X - 1);
+          const int32 MinCellY = FMath::Clamp(
+              FMath::FloorToInt((TriMin.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
+              0, OutLayout.GridSize.Y - 1);
+          const int32 MinCellZ = FMath::Clamp(
+              FMath::FloorToInt((TriMin.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
+              0, OutLayout.GridSize.Z - 1);
 
-    const int32 MaxCellX = FMath::Clamp(
-        FMath::FloorToInt((TriMax.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
-        0, OutLayout.GridSize.X - 1);
-    const int32 MaxCellY = FMath::Clamp(
-        FMath::FloorToInt((TriMax.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
-        0, OutLayout.GridSize.Y - 1);
-    const int32 MaxCellZ = FMath::Clamp(
-        FMath::FloorToInt((TriMax.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
-        0, OutLayout.GridSize.Z - 1);
+          const int32 MaxCellX = FMath::Clamp(
+              FMath::FloorToInt((TriMax.X - OutLayout.GridOrigin.X) / OutLayout.CellSize.X),
+              0, OutLayout.GridSize.X - 1);
+          const int32 MaxCellY = FMath::Clamp(
+              FMath::FloorToInt((TriMax.Y - OutLayout.GridOrigin.Y) / OutLayout.CellSize.Y),
+              0, OutLayout.GridSize.Y - 1);
+          const int32 MaxCellZ = FMath::Clamp(
+              FMath::FloorToInt((TriMax.Z - OutLayout.GridOrigin.Z) / OutLayout.CellSize.Z),
+              0, OutLayout.GridSize.Z - 1);
 
-    // Mark all cells in range as valid
-    for (int32 Z = MinCellZ; Z <= MaxCellZ; Z++)
-    {
-        for (int32 Y = MinCellY; Y <= MaxCellY; Y++)
-        {
-            for (int32 X = MinCellX; X <= MaxCellX; X++)
-            {
-                const int32 CellId = OutLayout.CoordToId(X, Y, Z);
+          // Mark all cells in range as valid
+          for (int32 Z = MinCellZ; Z <= MaxCellZ; Z++)
+          {
+              for (int32 Y = MinCellY; Y <= MaxCellY; Y++)
+              {
+                  for (int32 X = MinCellX; X <= MaxCellX; X++)
+                  {
+					  const int32 CellId = OutLayout.CoordToId(X, Y, Z);
+					   
+					  FVector CellMin(
+						  OutLayout.GridOrigin.X + X * OutLayout.CellSize.X,
+						  OutLayout.GridOrigin.Y + Y * OutLayout.CellSize.Y,
+						  OutLayout.GridOrigin.Z + Z * OutLayout.CellSize.Z
+					  );
+					  FVector CellMax = CellMin + OutLayout.CellSize;
 
-                FVector CellMin(
-                    OutLayout.GridOrigin.X + X * OutLayout.CellSize.X,
-                    OutLayout.GridOrigin.Y + Y * OutLayout.CellSize.Y,
-                    OutLayout.GridOrigin.Z + Z * OutLayout.CellSize.Z
-                );
-                FVector CellMax = CellMin + OutLayout.CellSize;
+					  if (!OutLayout.GetCellExists(CellId))
+					  {
+						  if (TriangleIntersectsAABB(V0, V1, V2, CellMin, CellMax))
+						  {
+							  OutLayout.SetCellExists(CellId, true);
+							  OutLayout.RegisterValidCell(CellId);
 
-                if (!OutLayout.GetCellExists(CellId))
-                {
-                    if (TriangleIntersectsAABB(V0, V1, V2, CellMin, CellMax))
-                    {
-                        OutLayout.SetCellExists(CellId, true);
-                        OutLayout.RegisterValidCell(CellId);
-
-                        if (OutSubCellStates)
-                        {
-                            FSubCell& SubCellState = OutSubCellStates->FindOrAdd(CellId);
-                            SubCellState.Bits = 0x00;
-                            MarkIntersectingSubCellsAlive(V0, V1, V2, CellMin, OutLayout.CellSize, SubCellState);
-                        }
-                    }
-                }
+							  if (OutSubCellStates)
+							  { 
+								  FSubCell& SubCellState = OutSubCellStates->FindOrAdd(CellId);
+								  SubCellState.Bits = 0x00;
+								  MarkIntersectingSubCellsAlive(V0, V1, V2, CellMin, OutLayout.CellSize, SubCellState);
+							  }
+						  }
+					  }
                 // Cell이 이미 존재하는 경우
-                else if (OutSubCellStates)
-                {
-                    FSubCell* SubCellState = OutSubCellStates->Find(CellId);
-                    // 아직 모든 subcell이 alive가 아니면, 한 번 더 체크
-                    if (SubCellState && SubCellState->Bits != 0xFF)
-                    {
-                        if (TriangleIntersectsAABB(V0, V1, V2, CellMin, CellMax))
-                        {
-                            MarkIntersectingSubCellsAlive(V0, V1, V2, CellMin, OutLayout.CellSize, *SubCellState);
-                        }
-                    }
-                }
+					  else if (OutSubCellStates)
+					  {
+						  FSubCell* SubCellState = OutSubCellStates->Find(CellId);
+						  // 아직 모든 subcell이 alive가 아니면, 한 번 더 체크
+						  if (SubCellState && SubCellState->Bits != 0xFF)
+						  {
+							  if (TriangleIntersectsAABB(V0, V1, V2, CellMin, CellMax))
+							  {
+								  MarkIntersectingSubCellsAlive(V0, V1, V2, CellMin, OutLayout.CellSize, *SubCellState);
+							  }
+						  }
+					  }
             }
-        }
-    }
+                  }
+              }
 }
 
 void FGridCellBuilder::VoxelizeFromArrays(
@@ -781,10 +782,10 @@ void FGridCellBuilder::VoxelizeFromArrays(
         if (I0 >= NumVertices || I1 >= NumVertices || I2 >= NumVertices)
         {
             continue;
-        }
+          }
 
         VoxelizeTriangle(Vertices[I0], Vertices[I1], Vertices[I2], OutLayout, OutSubCellStates);
-    }
+      }
 
     UE_LOG(LogTemp, Log, TEXT("VoxelizeFromArrays: Valid cells = %d"), OutLayout.GetValidCellCount());
 }

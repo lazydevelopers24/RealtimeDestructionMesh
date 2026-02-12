@@ -20,13 +20,130 @@
 #include "AnchorMode/AnchorActionObejct.h"
 #include "AnchorMode/AnchorEditModeToolkit.h"
 #include "Toolkits/ToolkitManager.h"
+#include "DrawDebugHelpers.h"
 
 class FDynamicColoredMaterialRenderProxy;
 const FEditorModeID UAnchorEditMode::EM_AnchorEditModeId = FName("AnchorEditMode");
 
+void FCellDebugSnapshot::Initialize(URealtimeDestructibleMeshComponent* InComponent)
+{
+	Reset();
+
+	if (!IsValid(InComponent))
+	{
+		return;
+	}
+	
+	Component = InComponent;
+	Owner = InComponent ?  InComponent->GetOwner() : nullptr;
+
+	const FGridCellLayout& Layout = Component->GetGridCellLayout();
+
+	Scale = InComponent->GetComponentTransform().GetScale3D();
+	GridSize = Layout.GridSize;
+	CellSize = Layout.CellSize;
+
+	CellBits = Layout.CellExistsBits;
+	AnchorBits = Layout.CellIsAnchorBits;
+
+	TotalCells = Layout.GetTotalCellCount();
+	TotalAnchors = Layout.GetAnchorCount();
+}
+
+void FCellDebugSnapshot::Reset()
+{
+	Owner.Reset();
+	Component.Reset();
+	Scale = FVector::OneVector;
+	GridSize = FIntVector::ZeroValue;
+	CellSize = FVector::ZeroVector;
+	CellBits.Empty();
+	AnchorBits.Empty();
+	TotalCells = 0;
+	TotalAnchors = 0;
+}
+
+bool FCellDebugSnapshot::IsRedraw(const FGridCellLayout& Layout)
+{
+	if (!Layout.IsValid() || Layout.GetTotalCellCount() <= 0)
+	{
+		return false;
+	}
+
+	if (TotalCells != Layout.GetTotalCellCount())
+	{
+		return true;
+	}
+
+	if (TotalAnchors != Layout.GetAnchorCount())
+	{
+		return true;
+	}
+
+	if (CellBits.Num() != Layout.CellExistsBits.Num())
+	{
+		return true;
+	}
+
+	if (AnchorBits.Num() != Layout.CellIsAnchorBits.Num())
+	{
+		return true;
+	}
+
+	for (int32 i = 0; i < CellBits.Num(); i++)
+	{
+		if (CellBits[i] != Layout.CellExistsBits[i])
+		{
+			return true;
+		}
+	}
+
+	for (int32 i = 0; i < AnchorBits.Num(); i++)
+	{
+		if (AnchorBits[i] != Layout.CellIsAnchorBits[i])
+		{
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+bool FCellDebugSnapshot::IsFlush(URealtimeDestructibleMeshComponent* InComponent, const FGridCellLayout& Layout)
+{
+	if (!IsValid(InComponent))
+	{
+		return true;
+	}
+
+	if (!Component.IsValid() || Component.Get() != InComponent)
+	{
+		return true;
+	}
+
+	const FVector CurrentScale = InComponent->GetComponentTransform().GetScale3D();
+	if (!Scale.Equals(CurrentScale, 1.e-4f))
+	{
+		return true;
+	}
+
+	return (GridSize != Layout.GridSize)
+			|| !CellSize.Equals(Layout.CellSize, 1.e-4f);
+}
+
 UAnchorEditMode::UAnchorEditMode()
 {
 	Info = FEditorModeInfo(EM_AnchorEditModeId, FText::FromString("Anchor Editor"), FSlateIcon(), true);
+}
+
+void UAnchorEditMode::Tick(FEditorViewportClient* ViewportClient, float DeltaTime)
+{
+	Super::Tick(ViewportClient, DeltaTime);
+
+	if (ActionObject && ActionObject->bShowGridCell)
+	{
+		DrawSelectedGridCells();
+	}
 }
 
 void UAnchorEditMode::Enter()
@@ -40,6 +157,7 @@ void UAnchorEditMode::Enter()
 
 	if (ActionObject)
 	{
+		ActionObject->EnsureEditorDelegatesBound();
 		ActionObject->CollectionExistingAnchorActors(GetWorld());
 	}
 	
@@ -56,6 +174,7 @@ void UAnchorEditMode::Exit()
 	{
 		ActionObject->RemoveAllAnchorPlanes();
 		ActionObject->RemoveAllAnchorVolumes();
+		ActionObject->UnBindEditorDelgates();
 	}
 	
 	if(Toolkit.IsValid())
@@ -111,7 +230,50 @@ void UAnchorEditMode::Render(const FSceneView* View, FViewport* Viewport, FPrimi
 	{
 		return;
 	}
+	
+	DrawPlaneEdge(View, PDI);
+}
 
+void UAnchorEditMode::OnEditorSelectionChanged(UObject* NewSelection)
+{
+	SelectedComp = nullptr;
+
+	if (ActionObject)
+	{
+		ActionObject->UpdateSelectionFromEditor(GetWorld());
+		SelectedComp = ActionObject->TargetComp;
+
+	}
+
+	if (Toolkit.IsValid())
+	{
+		TSharedPtr<FAnchorEditModeToolkit> AnchorToolkit = StaticCastSharedPtr<FAnchorEditModeToolkit>(Toolkit);
+		if (AnchorToolkit.IsValid())
+		{
+			AnchorToolkit->ForceRefreshDetails();
+		}
+	}
+}
+
+void UAnchorEditMode::ActorSelectionChangeNotify()
+{
+	Super::ActorSelectionChangeNotify();
+	OnEditorSelectionChanged(nullptr);
+}
+
+TSharedRef<FLegacyEdModeWidgetHelper> UAnchorEditMode::CreateWidgetHelper()
+{
+	return MakeShared<FLegacyEdModeWidgetHelper>();
+}
+
+void UAnchorEditMode::DrawPlaneEdge(const FSceneView* View, FPrimitiveDrawInterface* PDI)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	
 	const float InflateWorldCm = 2.0f;
 	const float LineThickness = 2.5f;
 
@@ -178,36 +340,42 @@ void UAnchorEditMode::Render(const FSceneView* View, FViewport* Viewport, FPrimi
 		PDI->DrawLine(B, C, Color, SDPG_Foreground, LineThickness);
 		PDI->DrawLine(C, D, Color, SDPG_Foreground, LineThickness);
 		PDI->DrawLine(D, A, Color, SDPG_Foreground, LineThickness);
-	}	
-}
-
-void UAnchorEditMode::OnEditorSelectionChanged(UObject* NewSelection)
-{
-	SelectedComp = nullptr;
-
-	if (ActionObject)
-	{
-		ActionObject->UpdateSelectionFromEditor(GetWorld());
-		SelectedComp = ActionObject->TargetComp;
-	}
-
-	if (Toolkit.IsValid())
-	{
-		TSharedPtr<FAnchorEditModeToolkit> AnchorToolkit = StaticCastSharedPtr<FAnchorEditModeToolkit>(Toolkit);
-		if (AnchorToolkit.IsValid())
-		{
-			AnchorToolkit->ForceRefreshDetails();
-		}
 	}
 }
 
-void UAnchorEditMode::ActorSelectionChangeNotify()
+void UAnchorEditMode::DrawSelectedGridCells()
 {
-	Super::ActorSelectionChangeNotify();
-	OnEditorSelectionChanged(nullptr);
-}
+	if (!IsValid(SelectedComp))
+	{
+		return;
+	}
+	
+	UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld() || SelectedComp->GetWorld() != World)
+	{
+		return;
+	}
 
-TSharedRef<FLegacyEdModeWidgetHelper> UAnchorEditMode::CreateWidgetHelper()
-{
-	return MakeShared<FLegacyEdModeWidgetHelper>();
+	const FGridCellLayout& Layout = SelectedComp->GetGridCellLayout();
+	if (!Layout.IsValid() ||
+		!Layout.MeshScale.Equals(SelectedComp->GetComponentTransform().GetScale3D(), 1.e-4f) ||
+		!Layout.HasValidSparseData())
+	{
+		return;
+	}
+	
+	const FTransform& ComponentTransform = SelectedComp->GetComponentTransform();
+	const float PointSize = 5.0f;
+
+	for (int32 CellId : Layout.GetValidCellIds())
+	{
+		const bool bIsAnchor = Layout.GetCellIsAnchor(CellId);
+		// const FLinearColor CellColor = bIsAnchor ? FLinearColor::Green : FLinearColor(FColor::Cyan);
+		const FColor CellColor = bIsAnchor ? FColor::Green : FColor::Cyan;
+
+		const FVector LocalCenter = Layout.IdToLocalCenter(CellId);
+		const FVector WorldCenter = ComponentTransform.TransformPosition(LocalCenter);	
+
+		DrawDebugPoint(World, WorldCenter, PointSize, CellColor, false, 0.0f, SDPG_Foreground);
+	}
 }

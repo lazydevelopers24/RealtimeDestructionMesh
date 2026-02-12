@@ -11,11 +11,12 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
-#include "UObject/NoExportTypes.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 #include "AnchorActionObejct.generated.h"
 
 class URealtimeDestructibleMeshComponent;
 class AAnchorActor;
+class AActor;
 
 UCLASS(ClassGroup = (RealtimeDestructionEditor))
 class REALTIMEDESTRUCTIONEDITOR_API UAnchorActionObejct : public UObject
@@ -23,6 +24,8 @@ class REALTIMEDESTRUCTIONEDITOR_API UAnchorActionObejct : public UObject
 	GENERATED_BODY()
 	
 public:
+	virtual void BeginDestroy() override;
+	
 	UFUNCTION(CallInEditor, Category = "1. Spawn", meta = (DisplayPriority = "1"))
 	void SpawnAnchorPlane();
 	
@@ -47,20 +50,26 @@ public:
 	UFUNCTION(CallInEditor, Category = "4. Selection", meta = (DisplayPriority = "2"))
 	void RemoveAnchors();	
 
-	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "3"))
+	UFUNCTION(CallInEditor, Category = "4. Selection", meta = (DisplayPriority = "3"))
+	void BuildGridCellsForSelection();
+
+	UFUNCTION(CallInEditor, Category = "4. Selection", meta = (DisplayPriority = "4"))
+	void ClearAllCells();
+	
+	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "5"))
 	FString SelectedComponentName = "None";
 
-	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "4"))
+	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "6"))
 	int32 TotalCellCount = 0;
 
-	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "5"))
+	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "7"))
 	int32 ValidCellCount = 0;
 
-	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "6"))
+	UPROPERTY(VisibleAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "8"))
 	int32 AnchorCellCount = 0;
 
-	UFUNCTION(CallInEditor, Category = "4. Selection")
-	void BuildGridCellsForSelection();
+	UPROPERTY(EditAnywhere, Category = "4. Selection",  meta = (DisplayPriority = "9"))
+	bool bShowGridCell = false;
 
 	void UpdateSelectionFromEditor(UWorld* World);
 
@@ -72,7 +81,42 @@ public:
 
 	void CollectionExistingAnchorActors(UWorld* World);
 	
+	void EnsureEditorDelegatesBound();
+
+	void UnBindEditorDelgates();
+
+	bool ResolveTargetComponent(UWorld* World);
+
+	void RefreshTargetFromEditorSelection(UWorld* World);
+
+	void OnEditorSelectionChanged(UObject* NewSeletion);
+
+	void OnEditorSelectObject(UObject* Object);
+
+	void OnLevelActorAdded(AActor* InActor);
+
+	void OnLevelActorDeleted(AActor* InActor);
+
+	UPROPERTY(Transient)
+	TWeakObjectPtr<AActor> TargetOwner;
+	
+	UPROPERTY(Transient)
+	FName  TargetCompName = NAME_None;
+	
 	TObjectPtr<URealtimeDestructibleMeshComponent> TargetComp = nullptr;
 
 	TArray<TWeakObjectPtr<AAnchorActor>> AnchorActors;
+
+	bool bAnchorActorsDirty = true;
+
+	FDelegateHandle OnLevelActorAddedHandle;
+	FDelegateHandle OnLevelActorDeletedHandle;
+
+	bool bEditorDelegatesBound = false;
+
+	FDelegateHandle OnObjectsReplacedHandle;
+	FDelegateHandle OnSelectionChangedHandle_Actors;
+	FDelegateHandle OnSelectionChangedHandle_Components;
+	FDelegateHandle OnSelectObjectHandle_Actors;
+	FDelegateHandle OnSelectObjectHandle_Components;
 };

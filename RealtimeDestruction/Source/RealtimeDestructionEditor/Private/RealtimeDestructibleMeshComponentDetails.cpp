@@ -104,14 +104,43 @@ FReply FRealtimeDestructibleMeshComponentDetails::OnGenerateChunksClicked()
 {
 	for (TWeakObjectPtr<URealtimeDestructibleMeshComponent>& WeakComp : SelectedComponents)
 	{
-		if (URealtimeDestructibleMeshComponent * Comp = WeakComp.Get())
+		URealtimeDestructibleMeshComponent* Comp = WeakComp.Get();
+		if (!Comp)
 		{
-			Comp->GenerateDestructibleChunks();
+			continue;
+		}
 
-			if (UBlueprint* Blueprint = GetBlueprintFromComponent(Comp))
+		UBlueprint* Blueprint = GetBlueprintFromComponent(Comp);
+
+		if (Blueprint)
+		{
+			// Blueprint 컨텍스트: CDO 템플릿이 아닌 Preview Actor의 컴포넌트에서 실행
+			AActor* PreviewActor = Blueprint->SimpleConstructionScript
+				? Blueprint->SimpleConstructionScript->GetComponentEditorActorInstance()
+				: nullptr;
+
+			if (PreviewActor)
 			{
-				ForceCompileBlueprint(Blueprint);
+				TArray<URealtimeDestructibleMeshComponent*> PreviewComps;
+				PreviewActor->GetComponents<URealtimeDestructibleMeshComponent>(PreviewComps);
+
+				for (URealtimeDestructibleMeshComponent* PreviewComp : PreviewComps)
+				{
+					PreviewComp->GenerateDestructibleChunks();
+
+					// Preview Actor의 결과를 SCS 템플릿(Comp)에 전파
+					// → ForceCompileBlueprint 시 CDO에 반영 → Level 배치 시 OnRegister에서 재생성
+					Comp->Modify();
+					Comp->CachedGeometryCollection = PreviewComp->CachedGeometryCollection;
+				}
 			}
+
+			ForceCompileBlueprint(Blueprint);
+		}
+		else
+		{
+			// Level 인스턴스: 기존대로 직접 호출
+			Comp->GenerateDestructibleChunks();
 		}
 	}
 

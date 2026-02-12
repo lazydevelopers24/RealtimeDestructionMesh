@@ -662,21 +662,8 @@ void URealtimeDestructibleMeshComponent::DisconnectedCellStateLogic(const TArray
 	// Phase 2: DFS로 앵커에서 분리된 셀 찾기
 	// 통합 API 사용: bEnableSupercell, bEnableSubcell 플래그에 따라 자동 선택
 	// Multiplayer: SubCell 상태는 Client에 동기화되지 않으므로 Standalone에서만 사용
-	//======================================================== 
-	  
-	//[depricated]
-	//TSet<int32> DisconnectedCells;
-	//{
-	//	TRACE_CPUPROFILER_EVENT_SCOPE(CellStructure_FindDisconnectedCells);
-	//	const ENetMode NetMode = GetWorld()->GetNetMode();
-	//	DisconnectedCells = FCellDestructionSystem::FindDisconnectedCells(
-	//		GridCellLayout,
-	//		SupercellState,
-	//		CellState,
-	//		bEnableSupercell && SupercellState.IsValid(),
-	//		bEnableSubcell && (NetMode == NM_Standalone),
-	//		CellContext); // subcell 동기화 안 하므로 subcell은 standalone에서만 허용
-	//}
+	//======================================================== 	  
+
 	// Standalon용 BFS 성능 LOG
 	//double BFSEndTime = FPlatformTime::Seconds();
 	//UE_LOG(LogTemp, Warning, TEXT("[BFS #%d] FindDisconnectedCells END - took %.3f ms, found %d disconnected"),
@@ -4955,6 +4942,7 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 
 		// 불일치 여부 확인 (오차 허용)
 		const float Tolerance = 0.1f;
+
 		const bool bCellSizeMismatch =
 			!FMath::IsNearlyEqual(ExpectedLocalCellSize.X, GridCellLayout.CellSize.X, Tolerance) ||
 			!FMath::IsNearlyEqual(ExpectedLocalCellSize.Y, GridCellLayout.CellSize.Y, Tolerance) ||
@@ -4967,7 +4955,7 @@ void URealtimeDestructibleMeshComponent::OnRegister()
 				SavedMeshScale.X, SavedMeshScale.Y, SavedMeshScale.Z,
 				ExpectedLocalCellSize.X, ExpectedLocalCellSize.Y, ExpectedLocalCellSize.Z,
 				GridCellLayout.CellSize.X, GridCellLayout.CellSize.Y, GridCellLayout.CellSize.Z);
-			BuildGridCells();
+			// BuildGridCells();
 		}
 	}
 #endif
@@ -5046,37 +5034,15 @@ void URealtimeDestructibleMeshComponent::BeginPlay()
 	ChunkBusyBits.Init(0ULL, NumBits);
 	ChunkSubtractBusyBits.Init(0ULL, NumBits);
 
+	FVector CurrentScale = GetComponentTransform().GetScale3D();
+	const bool bIsLayoutValid = GridCellLayout.IsValid();
+	const bool bScaleMisMatch = bIsLayoutValid ? !GridCellLayout.MeshScale.Equals(CurrentScale, 1.e-4f) : true;	
 	// 런타임 시작 시 GridCellLayout가 유효하지 않으면 구축
-	if ( ( SourceStaticMesh && !GridCellLayout.IsValid()) || CachedRDMScale != GetComponentTransform().GetScale3D())
+	if (SourceStaticMesh && (!bIsLayoutValid || bScaleMisMatch))
 	{
 		BuildGridCells();
 	}
-	// 런타임에서도 GridCellSize와 GridCellLayout.CellSize 불일치 검증 (서버/클라이언트 공통)
-	else if (SourceStaticMesh && GridCellLayout.IsValid())
-	{
-		const FVector& SavedMeshScale = GridCellLayout.MeshScale;
-		// 0으로 나누기 방지
-		const FVector SafeScale(
-			FMath::Max(SavedMeshScale.X, KINDA_SMALL_NUMBER),
-			FMath::Max(SavedMeshScale.Y, KINDA_SMALL_NUMBER),
-			FMath::Max(SavedMeshScale.Z, KINDA_SMALL_NUMBER)
-		);
-		const FVector ExpectedLocalCellSize = GridCellSize / SafeScale;
 
-		const float Tolerance = 0.1f;
-		const bool bCellSizeMismatch =
-			!FMath::IsNearlyEqual(ExpectedLocalCellSize.X, GridCellLayout.CellSize.X, Tolerance) ||
-			!FMath::IsNearlyEqual(ExpectedLocalCellSize.Y, GridCellLayout.CellSize.Y, Tolerance) ||
-			!FMath::IsNearlyEqual(ExpectedLocalCellSize.Z, GridCellLayout.CellSize.Z, Tolerance);
-
-		if (bCellSizeMismatch)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("BeginPlay: GridCellSize/CellSize mismatch detected. Expected(%.2f,%.2f,%.2f) != Saved(%.2f,%.2f,%.2f). Rebuilding GridCellLayout..."),
-				ExpectedLocalCellSize.X, ExpectedLocalCellSize.Y, ExpectedLocalCellSize.Z,
-				GridCellLayout.CellSize.X, GridCellLayout.CellSize.Y, GridCellLayout.CellSize.Z);
-			BuildGridCells();
-		}
-	}
 	if (bIsInitialized && !BooleanProcessor.IsValid())
 	{
 		BooleanProcessor = MakeShared<FRealtimeBooleanProcessor>();
@@ -6012,9 +5978,6 @@ int32 URealtimeDestructibleMeshComponent::BuildChunksFromGC(UGeometryCollection*
 		// GridToChunkMap 구축 (그리드 인덱스 -> ChunkId 매핑)
 		BuildGridToChunkMap();
 
-		// GridCellLayout 초기화
-		BuildGridCells();
-
 #if WITH_EDITOR
 		// 에디터 뷰포트 및 Details 패널 갱신
 		if (AActor* Owner = GetOwner())
@@ -6129,6 +6092,26 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		return false;
 	}
 
+#if WITH_EDITOR
+	const bool bIsEditorWorld = (GetWorld() && !GetWorld()->IsGameWorld());
+	if (bIsEditorWorld)
+	{
+		Modify();
+		if (AActor* Owner = GetOwner())
+		{
+			Owner->Modify();
+			Owner->MarkPackageDirty();
+		}
+		else
+		{
+			if (UPackage* Package = GetPackage())
+			{
+				Package->SetDirtyFlag(true);
+			}
+		}
+	}
+#endif
+
 	// 2. 컴포넌트 스케일 가져오기
 	//const FVector WorldScale = GetComponentScale();
 	const FVector WorldScale = GetComponentTransform().GetScale3D();
@@ -6138,11 +6121,16 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 	// - WorldScale: 컴포넌트 스케일 (빌더 내부에서 로컬 변환에 사용)
 	// - FloorHeightThreshold: 앵커 판정용 (빌더 내부가 로컬 스페이스이므로 변환 필요)
 
-	// 앵커 에디터에서 설정한 앵커 데이터 백업 (Reset 전에 저장)
+	// 앵커 복원을 위해서 리셋하기 전에 이전 값 저장
+	// 스케일, 그리드 사이즈, 셀 사이즈 3가지 모두가 같아야함
+	const FVector SavedMeshScale = GridCellLayout.MeshScale;
 	const FIntVector SavedGridSize = GridCellLayout.GridSize;
+	const FVector SavedCellSize= GridCellLayout.CellSize;
 	const TArray<uint32> SavedAnchorBits = GridCellLayout.CellIsAnchorBits;
-	const bool bHadSavedAnchors = SavedAnchorBits.Num() > 0
-		&& SavedGridSize.X > 0 && SavedGridSize.Y > 0 && SavedGridSize.Z > 0;
+	const bool bHadSavedAnchors = !SavedAnchorBits.IsEmpty()
+			&& SavedGridSize.X > 0
+			&& SavedGridSize.Y > 0
+			&& SavedGridSize.Z > 0;
 
 	GridCellLayout.Reset();
 	CellState.Reset();
@@ -6164,21 +6152,30 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 		return false;
 	}
 
-	// 앵커 에디터에서 설정한 앵커 데이터 복원
-	// 그리드 크기가 동일하고 비트필드 크기가 일치하면 에디터에서 설정한 앵커를 복원
-	if (bHadSavedAnchors
-		&& GridCellLayout.GridSize == SavedGridSize
-		&& SavedAnchorBits.Num() == GridCellLayout.CellIsAnchorBits.Num())
+	// 4. 캐시된 정보 저장
+	// CachedMeshBounds = SourceStaticMesh->GetBoundingBox();
+	CachedCellSize = GridCellLayout.CellSize;  // 빌더가 저장한 로컬 스페이스 셀 크기
+	GridCellLayout.MeshScale = WorldScale;
+	const int32 TotalCells = GridCellLayout.GetTotalCellCount();
+	const int32 ExpectedWords = (TotalCells + 31) >> 5;
+
+	const bool bScaleMatch = WorldScale.Equals(SavedMeshScale, 1.e-4f);
+	const bool bCellSizeMatch = GridCellLayout.CellSize.Equals(SavedCellSize, 1.e-4f);
+	const bool bGridSizeMatch = GridCellLayout.GridSize == SavedGridSize;
+	const bool bAnchorBitsSizeMatch = (SavedAnchorBits.Num() == ExpectedWords) && (GridCellLayout.CellIsAnchorBits.Num() == ExpectedWords);
+	/*
+	 * 1. 앵커 존재
+	 * 2. 스케일 동일
+	 * 3. 셀 사이즈 동일
+	 * 4. 그리드 사이즈 동일
+	 * 위 조건 만족 시 기존 앵커 복원
+	 */
+	if (bHadSavedAnchors && bScaleMatch && bCellSizeMatch && bGridSizeMatch && bAnchorBitsSizeMatch)
 	{
 		GridCellLayout.CellIsAnchorBits = SavedAnchorBits;
 		UE_LOG(LogTemp, Log, TEXT("BuildGridCells: Restored saved anchor data from Anchor Editor (Anchors: %d)"),
 			GridCellLayout.GetAnchorCount());
 	}
-
-	// 4. 캐시된 정보 저장
-	// CachedMeshBounds = SourceStaticMesh->GetBoundingBox();
-	CachedCellSize = GridCellLayout.CellSize;  // 빌더가 저장한 로컬 스페이스 셀 크기
-	CachedRDMScale = GetComponentTransform().GetScale3D();
 
 	UE_LOG(LogTemp, Log, TEXT("BuildGridCells: WorldCellSize=(%.1f, %.1f, %.1f), Scale=(%.2f, %.2f, %.2f), LocalCellSize=(%.2f, %.2f, %.2f), Grid %dx%dx%d, Valid cells: %d, Anchors: %d"),
 		GridCellSize.X, GridCellSize.Y, GridCellSize.Z,
@@ -6190,6 +6187,13 @@ bool URealtimeDestructibleMeshComponent::BuildGridCells()
 	
 	// 5. SuperCell 상태 빌드 (BFS 최적화용)
 	SupercellState.BuildFromGridLayout(GridCellLayout);
+
+#if WITH_EDITOR
+	if (GetWorld() && !GetWorld()->IsGameWorld())
+	{
+		PostEditChange();
+	}
+#endif	
 
 	return true;
 }
@@ -6373,6 +6377,23 @@ void URealtimeDestructibleMeshComponent::PostEditChangeProperty(FPropertyChanged
 			UE_LOG(LogTemp, Log, TEXT("PostEditChangeProperty: GridCellSize changed to (%.1f, %.1f, %.1f), GridCellLayout rebuilt"),
 				GridCellSize.X, GridCellSize.Y, GridCellSize.Z);
 		}
+	}
+}
+
+void URealtimeDestructibleMeshComponent::OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags,
+	ETeleportType Teleport)
+{
+	Super::OnUpdateTransform(UpdateTransformFlags, Teleport);
+
+	UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld())
+	{
+		return;
+	}
+
+	if (HasAnyFlags(RF_ClassDefaultObject) || IsTemplate())
+	{
+		return;
 	}
 }
 
@@ -6587,6 +6608,7 @@ void URealtimeDestructibleMeshComponent::GenerateDestructibleChunks()
 	}
 
 	int32 CellCount = BuildChunksFromGC(GC);
+	CachedGeometryCollection = GC;
 
 	if (AActor* Owner = GetOwner())
 	{
@@ -6804,6 +6826,9 @@ FRealtimeDestructibleMeshComponentInstanceData::FRealtimeDestructibleMeshCompone
 		SavedSliceCount = SourceComponent->SliceCount;
 		bSavedShowGridCellDebug = SourceComponent->bShowGridCellDebug;
 
+		SavedGridCellLayout = SourceComponent->GridCellLayout;
+		bSavedGridCellLayoutValid = SourceComponent->GridCellLayout.IsValid();
+
 		// 포인터 대신 컴포넌트 이름을 저장 (PIE 복제 시 이름으로 찾기 위함)
 		SavedChunkComponentNames.Empty();
 		SavedChunkComponentNames.Reserve(SourceComponent->ChunkMeshComponents.Num());
@@ -6819,16 +6844,8 @@ FRealtimeDestructibleMeshComponentInstanceData::FRealtimeDestructibleMeshCompone
 			}
 		}
 
-		// GridCellLayout 보존 (Blueprint 재구성 시 앵커 데이터 유실 방지)
-		SavedGridCellLayout = SourceComponent->GridCellLayout;
-
-		// CachedRDMScale 보존 (Blueprint 재구성 후 BeginPlay에서 불필요한 BuildGridCells 방지)
-		SavedCachedRDMScale = SourceComponent->CachedRDMScale;
-
-		UE_LOG(LogTemp, Warning, TEXT("InstanceData Constructor: bCellMeshesValid=%d, CellMeshComponents.Num=%d, SavedNames.Num=%d, GridValid=%d, Anchors=%d, CachedScale=(%.2f,%.2f,%.2f)"),
-			bSavedChunkMeshesValid, SourceComponent->ChunkMeshComponents.Num(), SavedChunkComponentNames.Num(),
-			SavedGridCellLayout.IsValid() ? 1 : 0, SavedGridCellLayout.GetAnchorCount(),
-			SavedCachedRDMScale.X, SavedCachedRDMScale.Y, SavedCachedRDMScale.Z);
+		UE_LOG(LogTemp, Warning, TEXT("InstanceData Constructor: bCellMeshesValid=%d, CellMeshComponents.Num=%d, SavedNames.Num=%d"),
+			bSavedChunkMeshesValid, SourceComponent->ChunkMeshComponents.Num(), SavedChunkComponentNames.Num());
 	}
 }
 
@@ -6841,6 +6858,11 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 
 	Super::ApplyToComponent(Component, CacheApplyPhase);
 
+	if (CacheApplyPhase != ECacheApplyPhase::PostUserConstructionScript)
+	{
+		return;
+	}
+
 	if (URealtimeDestructibleMeshComponent* DestructComp = Cast<URealtimeDestructibleMeshComponent>(Component))
 	{
 		// BP 기본값 대신 저장된 인스턴스 값으로 복원
@@ -6848,20 +6870,16 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 		DestructComp->SliceCount = SavedSliceCount;
 		DestructComp->bShowGridCellDebug = bSavedShowGridCellDebug;
 
-		// Cell 모드 상태 복원
-		DestructComp->bChunkMeshesValid = bSavedChunkMeshesValid;
-		DestructComp->bIsInitialized = bSavedIsInitialized;
-
-		// GridCellLayout 복원 (Blueprint 재구성 시 앵커 데이터 유실 방지)
-		if (SavedGridCellLayout.IsValid())
+		if (bSavedGridCellLayoutValid)
 		{
 			DestructComp->GridCellLayout = SavedGridCellLayout;
-			UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: Restored GridCellLayout from InstanceData (ValidCells=%d, Anchors=%d)"),
-				DestructComp->GridCellLayout.GetValidCellCount(), DestructComp->GridCellLayout.GetAnchorCount());
+
+			DestructComp->CachedCellSize = DestructComp->GridCellLayout.CellSize;
+			DestructComp->SupercellState.BuildFromGridLayout(DestructComp->GridCellLayout);
 		}
 
-		// CachedRDMScale 복원 (BeginPlay에서 스케일 불일치로 인한 불필요한 BuildGridCells 호출 방지)
-		DestructComp->CachedRDMScale = SavedCachedRDMScale;
+		// Cell 모드 상태 복원
+		DestructComp->bChunkMeshesValid = bSavedChunkMeshesValid;
 
 		// PIE에서는 포인터가 유효하지 않으므로 이름으로 복제된 컴포넌트를 찾음
 		if (AActor* Owner = DestructComp->GetOwner())
@@ -6916,15 +6934,10 @@ void FRealtimeDestructibleMeshComponentInstanceData::ApplyToComponent(
 
 		// Cell 모드가 활성화 되어 있고, 유효하면
 		if (bSavedChunkMeshesValid)
-		{
-			// GridToChunkMap은 저장되지 않으므로 재구축
-			DestructComp->BuildGridToChunkMap();
-
-			// GridCellLayout는 저장되므로, 유효하지 않을 때만 재구축
+		{			
 			if (!DestructComp->GridCellLayout.IsValid())
 			{
 				UE_LOG(LogTemp, Log, TEXT("ApplyToComponent: GridCellLayout is invalid, rebuilding..."));
-			DestructComp->BuildGridCells();
 			}
 			else
 			{

@@ -51,4 +51,25 @@ February 9, 2026
 **UI Category Changes**
 - Smoothing-related properties moved from "StructuralIntegrity" to "Advanced|Debris"
 
+--- 
+
+February 9, 2026 (Patch)
+
+### New Features
+
+**Cell Visualization in Anchor Editor Mode**
+- Added the ability to visualize cells while in Anchor Editor Mode for better placement accuracy.
+
+### Bug Fixes
+**Grid Cell Layout Serialization**
+- Fixed an issue where FGridCellLayout data was not being serialized correctly.
+
+**Anchor Actor Duplication Support**
+- Fixed a bug to ensure Anchor creation/removal functions correctly for Anchor Actors duplicated via Alt + Drag.
+
+### Contents
+**New Demo Scene**
+- Added a new demo scene to showcase the updated features.
+
 ---
+

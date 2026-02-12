@@ -15,13 +15,35 @@
 
 class UAnchorActionObejct;
 class URealtimeDestructibleMeshComponent;
+struct FGridCellLayout;
 
-enum class EAnchorToolType
+struct FCellDebugSnapshot
 {
-	None,
-	Plane,
-	Volume,
-	Paint
+	TWeakObjectPtr<AActor> Owner = nullptr;
+	
+	TWeakObjectPtr<URealtimeDestructibleMeshComponent> Component = nullptr;
+
+	FVector Scale = FVector::OneVector;
+
+	FIntVector GridSize = FIntVector::ZeroValue;
+
+	FVector CellSize = FVector::ZeroVector;
+
+	TArray<uint32> CellBits = {};
+
+	TArray<uint32> AnchorBits = {};
+
+	int32 TotalCells = 0;
+
+	int32 TotalAnchors = 0;
+
+	void Initialize(URealtimeDestructibleMeshComponent* InComponent);
+
+	void Reset();
+
+	bool IsRedraw(const FGridCellLayout& Layout);
+
+	bool IsFlush(URealtimeDestructibleMeshComponent* InComponent, const FGridCellLayout& Layout);
 };
 
 UCLASS(ClassGroup = (RealtimeDestructionEditor))
@@ -34,6 +56,8 @@ public:
 	~UAnchorEditMode() = default;
 	
 	const static FEditorModeID EM_AnchorEditModeId;
+
+	virtual void Tick(FEditorViewportClient* ViewportClient, float DeltaTime) override;
 	
 	virtual void Enter() override;
 	virtual void Exit() override;
@@ -46,7 +70,7 @@ public:
 
 	void OnEditorSelectionChanged(UObject* NewSelection);
 
-	void ActorSelectionChangeNotify();
+	virtual void ActorSelectionChangeNotify() override;
 	
 	UPROPERTY()
 	TObjectPtr<UAnchorActionObejct> ActionObject;
@@ -56,4 +80,10 @@ public:
 
 protected:
 	virtual TSharedRef<FLegacyEdModeWidgetHelper> CreateWidgetHelper() override;
+
+private:
+	void DrawPlaneEdge(const FSceneView* View, FPrimitiveDrawInterface* PDI);
+
+	void DrawSelectedGridCells();
+
 };

@@ -237,13 +237,11 @@ public:
 	UPROPERTY()
 	TArray<FString> SavedChunkComponentNames;
 
-	// GridCellLayout 보존 (Blueprint 재구성 시 앵커 데이터 유실 방지)
 	UPROPERTY()
 	FGridCellLayout SavedGridCellLayout;
 
-	// CachedRDMScale 보존 (Blueprint 재구성 후 BeginPlay에서 불필요한 BuildGridCells 방지)
 	UPROPERTY()
-	FVector SavedCachedRDMScale = FVector(1.0f, 1.0f, 1.0f);
+	bool bSavedGridCellLayoutValid = false;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -713,7 +711,7 @@ protected:
 	bool bChunkMeshesValid = false;
 
 	/** Grid cell cache (created in editor, no runtime changes) */
-	UPROPERTY()
+	UPROPERTY(EditInstanceOnly, Category = "RealtimeDestructibleMesh|GridCell");
 	FGridCellLayout GridCellLayout;
 
 	/** Runtime cell state */
@@ -833,6 +831,8 @@ public:
 
 	/** Get CellState (read-only) */
 	const FCellState& GetCellState() const { return CellState; }
+	
+	FCellState& GetCellState() { return CellState; }
 
 	/**
 	 * Update cell state affected by destruction request
@@ -976,9 +976,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RealtimeDestructibleMesh|GridCell", meta = (ClampMin = "0.0"))
 	float FloorHeightThreshold = 10.0f;
 
-	UPROPERTY()
-	FVector CachedRDMScale = FVector(1.0f, 1.0f, 1.0f);
-
 	//////////////////////////////////////////////////////////////////////////
 	// Detached Cell Smoothing (Staircase Artifact Reduction)
 	//////////////////////////////////////////////////////////////////////////
@@ -1116,6 +1113,8 @@ protected:
 protected:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	
+	virtual void OnUpdateTransform(EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport) override;
 
 	void TryAutoSetupFromParentStaticMesh();
 
